@@ -49,3 +49,25 @@ find_std_cc() {
   inc=$(echo | "$1" -std=c++26 -xc++ -E -v - 2>&1 | grep -E '^ /.*/c\+\+/[0-9]+$' | head -1 | tr -d ' ')
   [ -n "$inc" ] && [ -f "$inc/bits/std.cc" ] && echo "$inc/bits/std.cc"
 }
+
+# U++ heap fix (docs/findings/upp_heap_tls_misaligned.md): U++ keeps each thread's heap
+# in a byte array that may be misaligned; gcc -O3 programs then crash at start.
+#   upp_heap_fixed [UPPSRC]   true if fixed (or no U++ yet: nothing to fix)
+#   upp_fix_heap   [UPPSRC]   adds alignas(Heap); keeps the original as sheap.cpp.orig
+upp_sheap() {
+  local s="${1:-}"
+  [ -n "$s" ] || s=$(find_upp | cut -d' ' -f2)
+  [ -n "$s" ] && echo "$s/Core/sheap.cpp"
+}
+upp_heap_fixed() {
+  local f; f=$(upp_sheap "${1:-}")
+  [ -z "$f" ] || ! grep -qE '^[[:space:]]*static thread_local byte sHeap__\[sizeof\(Heap\)\]' "$f"
+}
+upp_fix_heap() {
+  local f; f=$(upp_sheap "${1:-}")
+  [ -n "$f" ] || return 0
+  upp_heap_fixed "${1:-}" && return 0
+  cp -n "$f" "$f.orig" &&
+  sed -i -E 's/^([[:space:]]*)static thread_local byte sHeap__\[sizeof\(Heap\)\]/\1alignas(Heap) static thread_local byte sHeap__[sizeof(Heap)]/' "$f" &&
+  upp_heap_fixed "${1:-}"
+}

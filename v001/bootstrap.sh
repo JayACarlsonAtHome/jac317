@@ -142,7 +142,7 @@ if [ -n "$missing" ]; then
       for n in $missing; do
         cmd=$(field "$n" "$family"); [ -n "$cmd" ] || continue
         echo; echo "== $n: $cmd"
-        t0=$(date +%s); bash -c "$cmd"; rc=$?
+        t0=$(date +%s); bash -c ". '$HERE/tools.sh'; $cmd"; rc=$?   # recipes may use tools.sh
         if eval "$(field "$n" check)" >/dev/null 2>&1; then st=Good; else st=Failed; fi
         record "$t0" "$(date +%s)" "Install $n" $rc "$st"
       done
@@ -188,6 +188,7 @@ else
     rm -rf "$work"
     export UPP_DIR="$UPP_TARGET"
     read -r UMK UPPSRC <<< "$(find_upp)"
+    [ -n "${UPPSRC:-}" ] && upp_fix_heap "$UPPSRC"   # the release has the heap bug too
   fi
   if [ -n "${UMK:-}" ]; then
     record "$t0" "$(date +%s)" "Fetch and build U++" 0 "Good" "$(basename "$url") -> $UPP_TARGET"
