@@ -75,7 +75,7 @@ bool HashCache::Lookup(const Entry& e, String& hash)
 	find.Text(1, root).Text(2, e.rel);
 	if(!find.Step())
 		return false;
-	int64 tolerance = flags.fat_file_times ? 2000000000LL : 0;
+	int64 tolerance = flags.fat_file_times ? FAT_TOLERANCE_NS : 0;
 	int64 dt = abs(find.Int(3) - e.mtime_ns);
 	bool time_ok = dt <= tolerance || (flags.dst_tolerance && abs(dt - 3600000000000LL) <= tolerance);
 	bool ok = find.Int(2) == e.size && time_ok &&

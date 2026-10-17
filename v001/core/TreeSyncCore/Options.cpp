@@ -16,10 +16,11 @@ const char *DISCLAIMER =
 const BoolOption BOOL_OPTIONS[] = {
 	{ "dry-run", &SyncFlags::dry_run, "/L", "Dry run: report only, change nothing",
 	  "Shows what a sync would do without changing anything. In the GUI, use Sync > Dry run instead." },
-	{ "fat-file-times", &SyncFlags::fat_file_times, "/FFT", "FAT file times: 2-second tolerance",
-	  "Treats file times less than 2 seconds apart as equal. Turn it on when either side is a FAT or "
-	  "exFAT disk (USB sticks, SD cards) or some network shares: they keep times only to 2 seconds, so "
-	  "without this every file there looks changed." },
+	{ "fat-file-times", &SyncFlags::fat_file_times, "/FFT", "FAT file times: 3-second tolerance",
+	  "Treats file times up to 3 seconds apart as equal. Turn it on when either side is a FAT or "
+	  "exFAT disk (USB sticks, SD cards) or some network shares: they keep times only in 2-second "
+	  "steps, and the two sides may round differently, so without this every file there looks "
+	  "changed. (robocopy's /FFT allows 2 seconds; TreeSync allows one more for safety.)" },
 	{ "dst-tolerance", &SyncFlags::dst_tolerance, "/DST", "Allow exact 1-hour (DST) time shifts",
 	  "Treats file times exactly one hour apart as equal. For FAT disks and Windows shares whose times "
 	  "jump by an hour when daylight saving time starts or ends." },

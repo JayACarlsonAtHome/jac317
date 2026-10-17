@@ -42,7 +42,7 @@ enum class SyncMode { Copy, Mirror, Merge };
 struct SyncFlags {
 	SyncMode mode = SyncMode::Mirror;
 	bool   dry_run = true;
-	bool   fat_file_times = false;   // 2-second time tolerance
+	bool   fat_file_times = false;   // FAT_TOLERANCE_NS time tolerance
 	bool   dst_tolerance = false;    // allow exact 1-hour shifts
 	bool   follow_links = false;     // write out what symlinks point to
 	bool   hard_links = true;        // relink hard-linked files instead of writing each out
@@ -66,6 +66,10 @@ struct SyncFlags {
 	int    chunk_mib = 64;           // chunk size for big files
 	int    bwlimit_kib = 0;          // KiB/s over the network (local: writes); 0 = no limit
 };
+
+// --fat-file-times: times this close count as equal. FAT keeps times in 2-second
+// steps, and the two sides may round differently, so a second of margin on top.
+constexpr int64 FAT_TOLERANCE_NS = 3000000000LL;
 
 struct BoolOption {
 	const char *name;                // --name / --no-name

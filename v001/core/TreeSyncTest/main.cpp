@@ -205,6 +205,19 @@ static void TestOptions()
 	String err;
 	EXPECT(ParseCommandLine(Vector<String>{ "--help" }, s, err) == PARSE_HELP, "--help");
 
+	// --fat-file-times: up to 3 seconds apart counts as the same time.
+	SyncFlags ff;
+	ff.fat_file_times = true;
+	ff.skip_changed = true;   // "same time" decides the skip, so TimeSkip shows the tolerance
+	Entry a, b;
+	b.mtime_ns = 1000000000000LL;
+	a.mtime_ns = b.mtime_ns + 2500000000LL;
+	EXPECT(TimeSkip(ff, a, b), "2.5 s apart: same time with --fat-file-times");
+	a.mtime_ns = b.mtime_ns + 3000000000LL;
+	EXPECT(TimeSkip(ff, a, b), "3.0 s apart: still the same time");
+	a.mtime_ns = b.mtime_ns + 3500000000LL;
+	EXPECT(!TimeSkip(ff, a, b), "3.5 s apart: different times");
+
 	// Owners are one choice: --numeric-ids switches owner copying on, and switching
 	// it off leaves no numbers.
 	SyncSetup o1;
