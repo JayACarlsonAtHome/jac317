@@ -166,7 +166,7 @@ const char *KindName(ActionKind k);
 
 // Mirror/Copy need only the scans; Merge also uses the hashes both sides had after
 // the last sync (rel -> hash) to tell which side changed.
-// The time switches (--skip-older, --skip-newer, --skip-changed, with --fat-file-times
+// The time switches (--skip-older, --skip-newer, --skip-changed, with --time-tolerance
 // and --dst-tolerance): true when s (source) should not replace d (target).
 bool TimeSkip(const SyncFlags& flags, const Entry& s, const Entry& d);
 

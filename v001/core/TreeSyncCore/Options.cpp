@@ -16,14 +16,9 @@ const char *DISCLAIMER =
 const BoolOption BOOL_OPTIONS[] = {
 	{ "dry-run", &SyncFlags::dry_run, "/L", "Dry run: report only, change nothing",
 	  "Shows what a sync would do without changing anything. In the GUI, use Sync > Dry run instead." },
-	{ "fat-file-times", &SyncFlags::fat_file_times, "/FFT", "FAT file times: 3-second tolerance",
-	  "Treats file times up to 3 seconds apart as equal. Turn it on when either side is a FAT or "
-	  "exFAT disk (USB sticks, SD cards) or some network shares: they keep times only in 2-second "
-	  "steps, and the two sides may round differently, so without this every file there looks "
-	  "changed. (robocopy's /FFT allows 2 seconds; TreeSync allows one more for safety.)" },
 	{ "dst-tolerance", &SyncFlags::dst_tolerance, "/DST", "Allow 1-hour (DST) time shifts",
-	  "Treats file times one hour apart, give or take 3 seconds, as equal. For FAT disks and Windows "
-	  "shares whose times jump by an hour when daylight saving time starts or ends." },
+	  "Treats file times one hour apart, give or take the time tolerance, as equal. For FAT disks "
+	  "and Windows shares whose times jump by an hour when daylight saving time starts or ends." },
 	{ "follow-links", &SyncFlags::follow_links, "", "Copy what symlinks point to, not the links",
 	  "A symlink (symbolic or soft link) is a tiny file that holds only a path to another file or "
 	  "folder, like a shortcut.\n"
@@ -92,6 +87,12 @@ const IntOption INT_OPTIONS[] = {
 	{ "chunk-mib", &SyncFlags::chunk_mib, "", "Chunk size (MiB)", 1, 1024,
 	  "The size of each recorded piece of a big file, in MiB. Smaller pieces lose less when stopped "
 	  "but are recorded more often." },
+	{ "time-tolerance", &SyncFlags::time_tolerance, "/FFT", "Time tolerance (seconds)", 0, 3600,
+	  "File times on the two sides this many seconds apart, or less, count as the same time. Clocks "
+	  "and file times differ slightly between machines and filesystems: network shares, clocks that "
+	  "drift, and FAT or exFAT disks, which keep times only in 2-second steps. 0 compares times "
+	  "exactly. Used by the skip-older, skip-newer and skip-changed switches and by the DST "
+	  "tolerance. (Like robocopy's /FFT, but for every system.)" },
 	{ "bwlimit", &SyncFlags::bwlimit_kib, "/IPG:n", "Bandwidth limit (KiB/s)", 0, 10485760,
 	  "Caps the speed in KiB per second (1024 is 1 MiB/s), leaving room for other work. 0 means no "
 	  "limit. Counts network traffic; for a local copy it limits the writes." },

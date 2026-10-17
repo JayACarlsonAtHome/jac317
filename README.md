@@ -104,7 +104,7 @@ The GUI itself never runs as root, so it stays an ordinary Wayland client. Sync 
 TreeSync is Linux-only for now. Options are GNU-style long options: `--name`, `--name=value` or `--name value`, and `--no-name` to turn off a switch that is on by default. The GUI opens with these settings, and its status bar shows the current settings as a command line you can copy. Run `treesync --help` for the full list.
 
 ```bash
-treesync --source=/data --target=/mnt/backup --mirror --fat-file-times --no-dry-run
+treesync --source=/data --target=/mnt/backup --mirror --threads=8 --no-dry-run
 treesync --source="$HOME/my dir" --target=/backup --target-host=nas --target-user=jay --merge
 ```
 
@@ -116,8 +116,7 @@ The switches are modelled on robocopy. TreeSync adds `--merge`, which copies cha
 | `--mirror` | Make target match source, deleting extras (default) | `/MIR` |
 | `--merge` | Copy both ways; changed on both sides = conflict | — |
 | `--dry-run` | Report only, change nothing (default on) | `/L` |
-| `--fat-file-times` | 3-second time tolerance (FAT, many network shares; robocopy allows 2) | `/FFT` |
-| `--dst-tolerance` | Allow 1-hour (DST) time shifts, give or take 3 seconds | `/DST` |
+| `--dst-tolerance` | Allow 1-hour (DST) time shifts, give or take the time tolerance | `/DST` |
 | `--hard-links` | Hard-linked files are copied once and relinked at the target (default on); `--no-hard-links` writes each name out as its own copy | |
 | `--follow-links` | Write out what symlinks point to (files and folders); off by default, so symlinks are copied as symlinks | off = `/SL` |
 | `--include-same` | Include same files (rehash / recopy) | `/IS` |
@@ -130,6 +129,7 @@ The switches are modelled on robocopy. TreeSync adds `--merge`, which copies cha
 | `--exclude-dir=GLOB` | Skip matching folders (repeatable) | `/XD` |
 | `--retries=N` | Retries on a failed copy (default 3) | `/R:n` |
 | `--retry-wait=N` | Seconds between retries (default 5) | `/W:n` |
+| `--time-tolerance=N` | Times of the two sides N seconds apart or less count as equal (default 3; 0 = exact). Clocks and file times differ between machines, network shares and FAT disks | `/FFT` (for all systems) |
 | `--threads=N` | Files copied at the same time (default 4); each thread has its own SSH connection to a remote side | `/MT:n` |
 | `--big-file-mib=N` | Files this big or bigger are copied in resumable chunks (default 1024) | |
 | `--chunk-mib=N` | Chunk size for big files (default 64) | |
@@ -148,7 +148,7 @@ The switches are modelled on robocopy. TreeSync adds `--merge`, which copies cha
 
 There is no password login: remote sides use SSH keys only, so passwordless SSH must be set up beforehand (`ssh-copy-id user@host`, then check that `ssh user@host` does not ask for a password).
 
-Content is compared by SHA-256. File size and time decide whether a cached hash can be reused and, in Merge mode, which side is newer, so `--fat-file-times` and `--dst-tolerance` still matter.
+Content is compared by SHA-256. File size and time decide whether a cached hash can be reused and, in Merge mode, which side is newer, so `--time-tolerance` and `--dst-tolerance` still matter. The hash cache itself compares exact times (a file with its own earlier times), apart from DST shifts.
 
 ## Status
 

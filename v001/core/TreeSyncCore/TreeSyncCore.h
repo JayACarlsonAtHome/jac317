@@ -42,8 +42,7 @@ enum class SyncMode { Copy, Mirror, Merge };
 struct SyncFlags {
 	SyncMode mode = SyncMode::Mirror;
 	bool   dry_run = true;
-	bool   fat_file_times = false;   // FAT_TOLERANCE_NS time tolerance
-	bool   dst_tolerance = false;    // allow 1-hour shifts, give or take FAT_TOLERANCE_NS
+	bool   dst_tolerance = false;    // allow 1-hour shifts, give or take time_tolerance
 	bool   follow_links = false;     // write out what symlinks point to
 	bool   hard_links = true;        // relink hard-linked files instead of writing each out
 	bool   compress = false;         // zlib on SSH connections
@@ -65,11 +64,13 @@ struct SyncFlags {
 	int    big_file_mib = 1024;      // files this big or bigger are copied in chunks
 	int    chunk_mib = 64;           // chunk size for big files
 	int    bwlimit_kib = 0;          // KiB/s over the network (local: writes); 0 = no limit
+	int    time_tolerance = 3;       // seconds: times of the two sides this close count as equal
 };
 
-// --fat-file-times: times this close count as equal. FAT keeps times in 2-second
-// steps, and the two sides may round differently, so a second of margin on top.
-constexpr int64 FAT_TOLERANCE_NS = 3000000000LL;
+// --time-tolerance in nanoseconds. Clocks and file times differ slightly between
+// machines and filesystems (network shares, drift, FAT's 2-second steps), so times
+// from the two sides are compared with this much slack.
+inline int64 ToleranceNs(const SyncFlags& f) { return (int64)f.time_tolerance * 1000000000; }
 
 struct BoolOption {
 	const char *name;                // --name / --no-name
@@ -94,8 +95,8 @@ extern const char *HELP_EXCLUDE_FILES;
 extern const char *HELP_EXCLUDE_DIRS;
 extern const char *HELP_OWNERS;           // the Owners choice: off, by name, by number
 
-constexpr int BOOL_OPTION_COUNT = 16;
-constexpr int INT_OPTION_COUNT = 6;
+constexpr int BOOL_OPTION_COUNT = 15;
+constexpr int INT_OPTION_COUNT = 7;
 extern const BoolOption BOOL_OPTIONS[];
 extern const IntOption  INT_OPTIONS[];
 

@@ -170,7 +170,7 @@ static Vector<String> ShellSplit(const String& args)
 static void TestOptions()
 {
 	Vector<Vector<String>> lines = {
-		{ "--source=/home/jay/my dir", "--target=/mnt/it's here", "--merge", "--fat-file-times",
+		{ "--source=/home/jay/my dir", "--target=/mnt/it's here", "--merge", "--time-tolerance=5",
 		  "--no-dry-run", "--threads", "16", "--exclude-file", "*.tmp", "--exclude-file",
 		  "Thumbs db", "--exclude-dir=.git" },
 		{ "--source=/data", "--target-host=nas.local", "--target-user=jay", "--target-port=2222",
@@ -205,20 +205,22 @@ static void TestOptions()
 	String err;
 	EXPECT(ParseCommandLine(Vector<String>{ "--help" }, s, err) == PARSE_HELP, "--help");
 
-	// --fat-file-times: up to 3 seconds apart counts as the same time.
+	// --time-tolerance (default 3 s): times of the two sides this close are the same time.
 	SyncFlags ff;
-	ff.fat_file_times = true;
 	ff.skip_changed = true;   // "same time" decides the skip, so TimeSkip shows the tolerance
 	Entry a, b;
 	b.mtime_ns = 1000000000000LL;
 	a.mtime_ns = b.mtime_ns + 2500000000LL;
-	EXPECT(TimeSkip(ff, a, b), "2.5 s apart: same time with --fat-file-times");
+	EXPECT(TimeSkip(ff, a, b), "2.5 s apart: same time (default tolerance 3 s)");
 	a.mtime_ns = b.mtime_ns + 3000000000LL;
 	EXPECT(TimeSkip(ff, a, b), "3.0 s apart: still the same time");
 	a.mtime_ns = b.mtime_ns + 3500000000LL;
 	EXPECT(!TimeSkip(ff, a, b), "3.5 s apart: different times");
+	ff.time_tolerance = 0;
+	a.mtime_ns = b.mtime_ns + 1;
+	EXPECT(!TimeSkip(ff, a, b), "--time-tolerance=0: 1 ns apart is different");
 
-	// --dst-tolerance: one hour apart, give or take 3 seconds, without --fat-file-times too.
+	// --dst-tolerance: one hour apart, give or take the tolerance.
 	SyncFlags dst;
 	dst.dst_tolerance = true;
 	dst.skip_changed = true;
@@ -228,8 +230,11 @@ static void TestOptions()
 	EXPECT(TimeSkip(dst, a, b), "-1 h + 1 s: same time");
 	a.mtime_ns = b.mtime_ns + 3600000000000LL + 3500000000LL;
 	EXPECT(!TimeSkip(dst, a, b), "1 h + 3.5 s: different");
-	a.mtime_ns = b.mtime_ns + 2000000000LL;
-	EXPECT(!TimeSkip(dst, a, b), "2 s apart without --fat-file-times: different");
+	dst.time_tolerance = 0;
+	a.mtime_ns = b.mtime_ns + 3600000000000LL;
+	EXPECT(TimeSkip(dst, a, b), "--time-tolerance=0: exactly 1 h is still a DST shift");
+	a.mtime_ns = b.mtime_ns + 3601000000000LL;
+	EXPECT(!TimeSkip(dst, a, b), "--time-tolerance=0: 1 h + 1 s is different");
 
 	// Owners are one choice: --numeric-ids switches owner copying on, and switching
 	// it off leaves no numbers.

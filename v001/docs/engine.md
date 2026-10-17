@@ -60,7 +60,7 @@ Two kinds, each doing one job:
 
 ## Inodes
 
-**Identity.** A file counts as unchanged since it was last hashed when `st_dev`, `st_ino`, size, mtime and ctime all match. Then the cached hash is reused and the file is not read. The inode is never used alone, because Linux reuses inode numbers after a file is deleted. On filesystems whose inode numbers are not stable (FAT, some FUSE and network filesystems), only size and times are used, and with `--fat-file-times` the time match has a 3-second tolerance.
+**Identity.** A file counts as unchanged since it was last hashed when `st_dev`, `st_ino`, size, mtime and ctime all match. Then the cached hash is reused and the file is not read. The inode is never used alone, because Linux reuses inode numbers after a file is deleted. On filesystems whose inode numbers are not stable (FAT, some FUSE and network filesystems), only size and times are used, and the time must match exactly (with `--dst-tolerance` a one-hour shift, give or take `--time-tolerance`, also matches).
 
 **Hard links.** Files with the same `st_dev` and `st_ino` and `st_nlink > 1` are one file with several names. It is copied once and the other names are recreated as hard links at the target, not copied again.
 
@@ -79,4 +79,4 @@ Stop (button or Ctrl+C) finishes the current chunk or small file, commits it, ma
 
 ## Future: GST time (10 ps)
 
-Times will later be stored as GST (Galactic Standard Time), which resolves to 10 picoseconds. Today file times are nanoseconds (what Linux `stat` gives, `int64`) and run times are whole UTC seconds. A 64-bit count of 10 ps steps only spans about ±2.9 years, so GST times need two fields: whole seconds (`int64`) plus a fraction in 10 ps units (0 to 99,999,999,999), or a 128-bit value. SQLite integers are 64-bit, so that means two columns per time. Comparisons that use time tolerances (`--fat-file-times`, `--dst-tolerance`) then work on the pair.
+Times will later be stored as GST (Galactic Standard Time), which resolves to 10 picoseconds. Today file times are nanoseconds (what Linux `stat` gives, `int64`) and run times are whole UTC seconds. A 64-bit count of 10 ps steps only spans about ±2.9 years, so GST times need two fields: whole seconds (`int64`) plus a fraction in 10 ps units (0 to 99,999,999,999), or a 128-bit value. SQLite integers are 64-bit, so that means two columns per time. Comparisons that use time tolerances (`--time-tolerance`, `--dst-tolerance`) then work on the pair.
