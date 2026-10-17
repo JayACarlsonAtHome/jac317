@@ -111,7 +111,15 @@ bool RunSync(const SyncSetup& setup, SyncReport& report, SyncResult& result, Str
 
 	SyncFlags key_flags = flags;
 	key_flags.dry_run = false;
-	key_flags.network_wait = SyncFlags().network_wait;   // how long to wait is not part of what the run does
+	// How fast and how patiently a run works is not part of what it does: changing
+	// these between a stop and a restart still resumes the same run.
+	const SyncFlags def;
+	key_flags.network_wait = def.network_wait;
+	key_flags.threads = def.threads;
+	key_flags.bwlimit_kib = def.bwlimit_kib;
+	key_flags.low_priority = def.low_priority;
+	key_flags.retries = def.retries;
+	key_flags.retry_wait = def.retry_wait;
 	String key = Join(FlagArgs(key_flags), " ");
 
 	Runner r(db, report, result, setup);

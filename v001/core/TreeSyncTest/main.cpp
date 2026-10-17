@@ -659,17 +659,21 @@ static void TestThreads(const String& root)
 	});
 	EXPECT(r1.stopped && r1.done < r1.planned, Format("8 threads stopped part-way (%d of %d done)", r1.done, r1.planned));
 
+	// A different thread count (and bandwidth limit) still resumes the same run.
 	stop = false;
 	SyncResult r2;
 	Vector<String> lines;
-	Sync(s, r2, &lines, &stop);
-	EXPECT(r2.resumed && r2.failed == 0 && r2.done == r2.planned,
-	       Format("resumed with 8 threads: %d of %d done, %d failed", r2.done, r2.planned, r2.failed));
+	SyncSetup s3 = s;
+	s3.flags.threads = 3;
+	s3.flags.bwlimit_kib = 1048576;
+	Sync(s3, r2, &lines, &stop);
+	EXPECT(r2.resumed && r2.run == r1.run && r2.failed == 0 && r2.done == r2.planned,
+	       Format("resumed with 3 threads instead of 8: %d of %d done, %d failed", r2.done, r2.planned, r2.failed));
 	bool said = false;
 	for(const String& l : lines)
-		said = said || l.Find("copy (8 threads)") >= 0;
-	EXPECT(said, "reports 8 copy threads");
-	EXPECT(TreeHash(src, check) == TreeHash(dst, check), "8 threads: target tree hash equals source");
+		said = said || l.Find("copy (3 threads)") >= 0;
+	EXPECT(said, "reports 3 copy threads");
+	EXPECT(TreeHash(src, check) == TreeHash(dst, check), "threads: target tree hash equals source");
 
 	// --threads=1 gives the same result.
 	String dst1 = root + "/th-dst1";
