@@ -6,7 +6,10 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/resource.h>
+#include <sys/syscall.h>
 #include <unistd.h>
+#include <chrono>
 #include <climits>
 #include <cstdio>
 #include <cstring>
@@ -546,6 +549,37 @@ static void TestEngineMerge(const String& root)
 	       "merge: replaced versions on both sides kept in their .old folders");
 }
 
+static void TestBandwidthAndPriority(const String& root)
+{
+	String src = root + "/bw-src", db = root + "/sync.db";
+	Put(src + "/three mib.bin", Big(3 * 1024 * 1024, 3));
+	auto timed = [&](const String& dst, int limit) {
+		SyncSetup s = Setup(src, dst, db);
+		s.flags.big_file_mib = 1024;   // a small file: without a limit it goes through cp
+		s.flags.bwlimit_kib = limit;
+		SyncResult r;
+		auto t0 = std::chrono::steady_clock::now();
+		Sync(s, r);
+		EXPECT(r.failed == 0 && LoadFile(dst + "/three mib.bin").GetCount() == 3 * 1024 * 1024,
+		       Format("copy with --bwlimit=%d arrived whole", limit));
+		return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+	};
+	double fast = timed(root + "/bw-fast", 0);
+	double slow = timed(root + "/bw-slow", 1024);
+	EXPECT(slow >= 1.6 && slow < 6, Format("--bwlimit=1024 KiB/s: 3 MiB took %.2f s (about 2 s expected)", slow));
+	EXPECT(fast < slow, Format("no limit is faster (%.2f s)", fast));
+
+	SyncSetup s = Setup(src, root + "/bw-prio", db);
+	s.flags.low_priority = true;
+	SyncResult r;
+	Sync(s, r);
+	errno = 0;
+	int nice = getpriority(PRIO_PROCESS, 0);
+	long io = syscall(SYS_ioprio_get, 1, 0);
+	EXPECT(nice == 19, Format("--low-priority sets nice 19 (%d)", nice));
+	EXPECT(io == ((2 << 13) | 7), Format("--low-priority sets I/O best-effort 7 (0x%x)", (int)io));
+}
+
 static void TestEngineRefusals(const String& root)
 {
 	SyncReport report;
@@ -582,6 +616,7 @@ CONSOLE_APP_MAIN
 	TestEngineResume(eroot);
 	TestEngineMerge(eroot);
 	TestEngineRefusals(eroot);
+	TestBandwidthAndPriority(eroot);   // last: it lowers this process's priority
 	int efd = open(GetFileFolder(eroot), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
 	RemoveAt(efd, GetFileName(eroot));
 	close(efd);

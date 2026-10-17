@@ -82,7 +82,7 @@ SetupDlg::FlagsPane::FlagsPane()
 		int col = i < half ? 0 : 1;
 		int row = i < half ? i : i - half;
 		Add(opt[i].SetLabel(o.text).LeftPosZ(8 + col * 240, 236).TopPosZ(36 + row * 24, 19));
-		opt[i].Tip(String("--") + o.name + "   (robocopy " + o.robocopy + ")");
+		opt[i].Tip(String("--") + o.name + (*o.robocopy ? String("   (robocopy ") + o.robocopy + ")" : String()));
 	}
 
 	int y = 36 + half * 24 + 4;
@@ -94,11 +94,13 @@ SetupDlg::FlagsPane::FlagsPane()
 	y += 26;
 	for(int i = 0; i < INT_OPTION_COUNT; i++) {
 		const IntOption& o = INT_OPTIONS[i];
-		Add(lbl_int[i].SetLabel(o.text).LeftPosZ(8 + i * 160, 96).TopPosZ(y, 19));
-		Add(num[i].LeftPosZ(104 + i * 160, 50).TopPosZ(y, 19));
-		num[i].MinMax(o.min, o.max).Tip(String("--") + o.name + "=N   (robocopy " + o.robocopy + ")");
+		int col = i % 3, row = i / 3;   // three per row
+		Add(lbl_int[i].SetLabel(o.text).LeftPosZ(8 + col * 165, 108).TopPosZ(y + row * 26, 19));
+		Add(num[i].LeftPosZ(118 + col * 165, 50).TopPosZ(y + row * 26, 19));
+		num[i].MinMax(o.min, o.max).Tip(String("--") + o.name + "=N" +
+		                                (*o.robocopy ? String("   (robocopy ") + o.robocopy + ")" : String()));
 	}
-	y += 30;
+	y += ((INT_OPTION_COUNT + 2) / 3) * 26 + 4;
 	Add(preview.HSizePosZ(8, 8).TopPosZ(y, 38));
 	preview.SetAlign(ALIGN_TOP);
 
@@ -148,7 +150,7 @@ SyncFlags SetupDlg::FlagsPane::Get() const
 SetupDlg::SetupDlg()
 {
 	Title("TreeSync - Setup");
-	SetRect(0, 0, Zx(520), Zy(440));
+	SetRect(0, 0, Zx(520), Zy(560));
 
 	tabs.Add(source.SizePos(), "Source tree");
 	tabs.Add(target.SizePos(), "Target tree");

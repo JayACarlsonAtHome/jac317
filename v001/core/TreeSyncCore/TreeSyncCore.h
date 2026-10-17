@@ -50,6 +50,7 @@ struct SyncFlags {
 	bool   preserve_owner = true;    // copy owner and group, by name (where we may)
 	bool   numeric_ids = false;      // ...by number instead
 	bool   safe_delete = true;       // move deleted and replaced files to <target>.old
+	bool   low_priority = false;     // nice 19, ionice best-effort 7
 	bool   include_same = false;
 	bool   skip_older = false;
 	bool   skip_newer = false;
@@ -63,6 +64,7 @@ struct SyncFlags {
 	int    threads = 8;
 	int    big_file_mib = 1024;      // files this big or bigger are copied in chunks
 	int    chunk_mib = 64;           // chunk size for big files
+	int    bwlimit_kib = 0;          // KiB/s over the network (local: writes); 0 = no limit
 };
 
 struct BoolOption {
@@ -80,8 +82,8 @@ struct IntOption {
 	int min, max;
 };
 
-constexpr int BOOL_OPTION_COUNT = 15;
-constexpr int INT_OPTION_COUNT = 5;
+constexpr int BOOL_OPTION_COUNT = 16;
+constexpr int INT_OPTION_COUNT = 6;
 extern const BoolOption BOOL_OPTIONS[];
 extern const IntOption  INT_OPTIONS[];
 

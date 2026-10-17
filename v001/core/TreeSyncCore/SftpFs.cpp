@@ -88,7 +88,8 @@ struct SftpFs::Impl {
 		return n > 0 ? String(buf, n) : String();
 	}
 
-	bool HashPath(const String& path, String& hash, String& error, const std::atomic<bool> *stop, int64 *bytes)
+	bool HashPath(const String& path, String& hash, String& error, const std::atomic<bool> *stop, int64 *bytes,
+	              Throttle *throttle = nullptr)
 	{
 		LIBSSH2_SFTP_HANDLE *h = libssh2_sftp_open_ex(sftp, path, path.GetCount(), LIBSSH2_FXF_READ, 0,
 		                                              LIBSSH2_SFTP_OPENFILE);
@@ -113,6 +114,8 @@ struct SftpFs::Impl {
 			}
 			if(n == 0)
 				break;
+			if(throttle)
+				throttle->Account(n);
 			sha.Put(buf, (int)n);
 			total += n;
 		}
@@ -455,7 +458,7 @@ struct RemoteScanner {
 				else {
 					String error;
 					int64 bytes = 0;
-					if(!m.HashPath(p, e.hash, error, report.stop, &bytes)) {
+					if(!m.HashPath(p, e.hash, error, report.stop, &bytes, report.throttle)) {
 						if(report.Stopping())
 							return Null;
 						Warn(error);

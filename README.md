@@ -132,6 +132,8 @@ The switches are modelled on robocopy. TreeSync adds `--merge`, which copies cha
 | `--safe-delete-dir=PATH` | Where `--safe-delete` moves target-side files (default `<target>.old`; must be on the same disk, outside both trees) | |
 | `--preserve-owner` | Copy owner and group, matched by **name** (default on; needs root on the side being written) | `/COPY:O` |
 | `--numeric-ids` | Copy owners by number instead of name | |
+| `--bwlimit=N` | Bandwidth limit in KiB/s (0 = none): network traffic, or writes for a local copy; at most one second of burst | `/IPG:n` |
+| `--low-priority` | Run at low CPU and disk priority (`nice 19`, `ionice -c2 -n7`) so other work comes first | |
 | `--compress` | Compress SSH traffic with zlib; the other end decompresses on its own. Helps text on slow links, not media | |
 | `--fresh` | Start over instead of resuming an unfinished run | |
 | `--known-hosts=FILE` | SSH known_hosts file (default `~/.ssh/known_hosts`) | |
@@ -146,6 +148,13 @@ Content is compared by SHA-256. File size and time decide whether a cached hash 
 ## Status
 
 Working for local trees and over SFTP, with `treesync-cli` and the GUI: scan with a hash cache, Copy / Mirror / Merge, verified copies, hard links, symlinks, resumable runs and big files. Tested against a Fedora 44 server in both directions. Not yet: browsing remote trees in the GUI, password login from the GUI, copying with several threads, and live per-chunk progress in the GUI log.
+
+## Sharing the machine
+
+When a lot of other copying is going on, TreeSync can step back:
+
+- `--bwlimit=N` caps the transfer at N KiB/s. It counts what crosses the network (remote reads and writes, including the read-back that verifies each copy, and the hashing of remote files during the scan); for a local copy it counts the writes. With a limit set, local copies use TreeSync's chunked copy instead of `cp`, which cannot be throttled.
+- `--low-priority` runs TreeSync and the `cp` processes it starts at `nice 19` and the lowest normal disk priority (`ionice -c2 -n7`). It deliberately does not use the idle disk class, which could stall the sync completely while other copies run. It cannot change the remote server's own priority (SFTP has no way to ask); use `--bwlimit` to ease the load there.
 
 ## Safe delete
 

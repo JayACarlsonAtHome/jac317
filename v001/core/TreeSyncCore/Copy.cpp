@@ -14,6 +14,7 @@
 #include <unistd.h>
 #include <cerrno>
 #include <cstring>
+#include <thread>
 
 extern char **environ;
 
@@ -57,7 +58,8 @@ bool HashAt(int dirfd, const String& name, String& hash, String& error,
 
 // Reads the open file from the start and hashes it: used to verify a copy through
 // the handle it was written with (one less open and close, which counts over SFTP).
-bool TreeFile::Hash(int64 size, String& hash, String& error, const std::atomic<bool> *stop)
+bool TreeFile::Hash(int64 size, String& hash, String& error, const std::atomic<bool> *stop,
+                    Throttle *throttle)
 {
 	Sha256Stream sha;
 	Buffer<byte> buf(1 << 20);
@@ -69,10 +71,34 @@ bool TreeFile::Hash(int64 size, String& hash, String& error, const std::atomic<b
 		int64 len = min<int64>(1 << 20, size - off);
 		if(!ReadAt(off, buf, len, error))
 			return false;
+		if(throttle)
+			throttle->Account(len);
 		sha.Put(buf, (int)len);
 	}
 	hash = sha.FinishString();
 	return true;
+}
+
+Throttle::Throttle(int64 bytes_per_second, const std::atomic<bool> *stop)
+:	rate(bytes_per_second), tokens((double)bytes_per_second), last(std::chrono::steady_clock::now()), stop(stop)
+{}
+
+void Throttle::Account(int64 bytes)
+{
+	if(rate <= 0)
+		return;
+	auto now = std::chrono::steady_clock::now();
+	tokens = min((double)rate, tokens + std::chrono::duration<double>(now - last).count() * rate);
+	last = now;
+	tokens -= (double)bytes;
+	// In debt: wait until the bucket is back to zero, in steps of 100 ms.
+	while(tokens < 0 && !(stop && *stop)) {
+		double wait = min(-tokens / rate, 0.1);
+		std::this_thread::sleep_for(std::chrono::duration<double>(wait));
+		auto t = std::chrono::steady_clock::now();
+		tokens += std::chrono::duration<double>(t - last).count() * rate;
+		last = t;
+	}
 }
 
 bool CopySmall(int src_dir, const String& name, int dst_dir, const String& part, String& error)

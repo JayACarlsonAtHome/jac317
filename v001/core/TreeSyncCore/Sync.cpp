@@ -9,6 +9,8 @@
 // remote copies resume part-way through a file just like big local ones.
 #include "TreeSyncCore.h"
 
+#include <sys/resource.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 #include <chrono>
 #include <thread>
@@ -201,14 +203,34 @@ struct Runner {
 			report.WhenLine(Format("resuming %s at chunk %d of %d", rel, next + 1, count));
 		}
 
+		// --bwlimit counts what crosses the network; local to local it counts writes.
+		bool count_read = !from.IsLocal();
+		bool count_write = !to.IsLocal() || from.IsLocal();
+		const int64 SLICE = 1 << 20;
 		for(int64 idx = next; idx < count; idx++) {
 			if(report.Stopping()) {
 				error = "stopped";
 				return false;
 			}
 			int64 off = idx * chunk, len = min(chunk, size - off);
-			if(!in->ReadAt(off, buf, len, error) || !out->WriteAt(off, buf, len, error))
+			for(int64 k = 0; k < len; k += SLICE) {   // in slices, so the limit stays smooth
+				int64 n = min(SLICE, len - k);
+				if(!in->ReadAt(off + k, buf + k, n, error))
+					return false;
+				if(count_read)
+					report.Count(n);
+			}
+			for(int64 k = 0; k < len; k += SLICE) {
+				int64 n = min(SLICE, len - k);
+				if(!out->WriteAt(off + k, buf + k, n, error))
+					return false;
+				if(count_write)
+					report.Count(n);
+			}
+			if(report.Stopping()) {
+				error = "stopped";
 				return false;
+			}
 			// A recorded chunk must really be on disk. A one-chunk file needs no flush:
 			// if it is cut short it is copied again, and a later scan catches a copy
 			// lost in a crash after its rename.
@@ -277,7 +299,7 @@ struct Runner {
 		p.size = now.size;
 		Clock::time_point t0 = Clock::now();
 		bool big = now.size >= ((int64)flags.big_file_mib << 20);
-		bool fast = from.IsLocal() && to.IsLocal() && !big;
+		bool fast = from.IsLocal() && to.IsLocal() && !big && !flags.bwlimit_kib;   // cp cannot be throttled
 		bool ok = false;
 		One<TreeFile> out;
 		for(int attempt = 0; attempt <= flags.retries; attempt++) {
@@ -311,7 +333,7 @@ struct Runner {
 		// reads it through the handle it wrote with, and sets the attributes there too.
 		String got;
 		if(fast ? !to.Hash(part, false, got, error, report.stop)
-		        : !out->Hash(now.size, got, error, report.stop))
+		        : !out->Hash(now.size, got, error, report.stop, to.IsLocal() ? nullptr : report.throttle))
 			return false;
 		if(got != expect) {
 			error = "verify failed: copy of " + e.rel + " has a different SHA-256; kept as " + part;
@@ -524,6 +546,23 @@ bool RunSync(const SyncSetup& setup, SyncReport& report, SyncResult& result, Str
 			return false;
 		}
 	}
+	// --low-priority: CPU nice 19 and I/O best-effort level 7 for this process and
+	// the cp processes it starts. Not the idle I/O class: with other copying going on
+	// that could starve the sync completely. The remote server's priority is its own.
+	if(flags.low_priority) {
+		setpriority(PRIO_PROCESS, 0, 19);
+		const int IOPRIO_CLASS_BE = 2, IOPRIO_WHO_PROCESS = 1, IOPRIO_CLASS_SHIFT = 13;
+		syscall(SYS_ioprio_set, IOPRIO_WHO_PROCESS, 0, (IOPRIO_CLASS_BE << IOPRIO_CLASS_SHIFT) | 7);
+		report.WhenLine("running at low priority (nice 19, I/O best-effort 7)");
+	}
+	// --bwlimit: the throttle lives for this run only.
+	Throttle throttle((int64)flags.bwlimit_kib * 1024, report.stop);
+	struct Unset { SyncReport& r; ~Unset() { r.throttle = nullptr; } } unset{ report };
+	if(flags.bwlimit_kib) {
+		report.throttle = &throttle;
+		report.WhenLine(Format("bandwidth limit %s/s", FormatBytes((int64)flags.bwlimit_kib * 1024)));
+	}
+
 	One<TreeFs> side[2];
 	side[0] = MakeSide(setup.source, setup, report, error);
 	if(!side[0])

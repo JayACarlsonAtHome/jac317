@@ -4,6 +4,7 @@
 #define TREESYNC_ENGINE_H
 
 #include <atomic>
+#include <chrono>
 
 struct sqlite3;
 struct sqlite3_stmt;
@@ -72,14 +73,31 @@ struct ScanStats {
 
 // Engine.cpp/Sync.cpp --------------------------------------------------------
 
+// --bwlimit: a token bucket with at most one second of burst. Waits in short
+// steps so Stop still works.
+class Throttle {
+	int64  rate = 0;          // bytes per second, 0 = no limit
+	double tokens = 0;
+	std::chrono::steady_clock::time_point last;
+	const std::atomic<bool> *stop = nullptr;
+
+public:
+	void Account(int64 bytes);
+	bool Limited() const      { return rate > 0; }
+
+	Throttle(int64 bytes_per_second, const std::atomic<bool> *stop);
+};
+
 // What the engine tells the terminal or the GUI as it works.
 struct SyncReport {
 	Event<const String&>       WhenLine;      // a finished line: keep it
 	Event<const String&>       WhenStatus;    // a passing status: may overwrite
 	Event<const CopyProgress&> WhenProgress;  // copy progress; done == size when a file finishes
 	const std::atomic<bool>   *stop = nullptr;
+	Throttle                  *throttle = nullptr;   // set by RunSync for --bwlimit
 
 	bool Stopping() const      { return stop && *stop; }
+	void Count(int64 bytes)    { if(throttle) throttle->Account(bytes); }
 };
 
 bool ScanTree(Db& db, const String& root, const SyncFlags& flags, SyncReport& report,
@@ -172,7 +190,8 @@ struct TreeFile {
 	virtual bool Truncate(int64 size, String& error) = 0;
 	virtual void Flush() = 0;
 	virtual bool SetAttrs(const FileAttrs& a, String& error) = 0;
-	bool         Hash(int64 size, String& hash, String& error, const std::atomic<bool> *stop);
+	bool         Hash(int64 size, String& hash, String& error, const std::atomic<bool> *stop,
+	                  Throttle *throttle = nullptr);
 	virtual ~TreeFile() {}
 };
 

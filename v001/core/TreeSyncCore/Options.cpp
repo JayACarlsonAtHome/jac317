@@ -23,6 +23,7 @@ const BoolOption BOOL_OPTIONS[] = {
 	{ "preserve-owner",   &SyncFlags::preserve_owner,   "/COPY:O", "Copy owner and group (by name; needs root)" },
 	{ "numeric-ids",      &SyncFlags::numeric_ids,      "",     "Copy owners by number, not by name" },
 	{ "safe-delete",      &SyncFlags::safe_delete,      "",     "Move deleted/replaced files to <target>.old" },
+	{ "low-priority",     &SyncFlags::low_priority,     "",     "Low CPU and disk priority (nice, ionice)" },
 	{ "include-same",     &SyncFlags::include_same,     "/IS",  "Include same files (rehash / recopy)" },
 	{ "skip-older",       &SyncFlags::skip_older,       "/XO",  "Skip if source is older than target" },
 	{ "skip-newer",       &SyncFlags::skip_newer,       "/XN",  "Skip if source is newer than target" },
@@ -38,6 +39,7 @@ const IntOption INT_OPTIONS[] = {
 	{ "threads",    &SyncFlags::threads,    "/MT:n", "Copy threads",              1, 128 },
 	{ "big-file-mib", &SyncFlags::big_file_mib, "",  "Chunked copy from (MiB)",   1, 1048576 },
 	{ "chunk-mib",  &SyncFlags::chunk_mib,  "",      "Chunk size (MiB)",          1, 1024 },
+	{ "bwlimit",    &SyncFlags::bwlimit_kib, "/IPG:n", "Bandwidth limit (KiB/s)", 0, 10485760 },
 };
 static_assert(std::size(INT_OPTIONS) == INT_OPTION_COUNT);
 
