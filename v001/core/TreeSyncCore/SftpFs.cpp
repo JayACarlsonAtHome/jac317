@@ -593,31 +593,50 @@ struct RemoteFile : TreeFile {
 	SftpFs::Impl        *m = nullptr;
 	LIBSSH2_SFTP_HANDLE *h = nullptr;
 	String               path;
+	int64                pos = -1;   // where the handle is; -1 unknown
+	bool                 reading = false;
+
+	// Seek only to move, or to change between reading and writing (the seek clears
+	// the read-ahead still on the way, which a write must not run into). libssh2
+	// reads ahead about 4 times the size asked for and a seek throws that away, so
+	// seeking before every slice made each read cost about 4 times its size in
+	// network traffic.
+	void MoveTo(int64 off, bool read)
+	{
+		if(off != pos || read != reading)
+			libssh2_sftp_seek64(h, off);
+		pos = off;
+		reading = read;
+	}
 
 	bool ReadAt(int64 off, void *buf, int64 len, String& error) override
 	{
-		libssh2_sftp_seek64(h, off);
+		MoveTo(off, true);
 		for(int64 got = 0; got < len;) {
 			ssize_t n = libssh2_sftp_read(h, (char *)buf + got, (size_t)min<int64>(len - got, 1 << 20));
 			if(n <= 0) {
+				pos = -1;
 				error = n < 0 ? m->Err("cannot read " + path) : String("unexpected end of file " + path);
 				return false;
 			}
 			got += n;
+			pos += n;
 		}
 		return true;
 	}
 
 	bool WriteAt(int64 off, const void *buf, int64 len, String& error) override
 	{
-		libssh2_sftp_seek64(h, off);
+		MoveTo(off, false);
 		for(int64 put = 0; put < len;) {
 			ssize_t n = libssh2_sftp_write(h, (const char *)buf + put, (size_t)min<int64>(len - put, 1 << 20));
 			if(n <= 0) {
+				pos = -1;
 				error = m->Err("cannot write " + path);
 				return false;
 			}
 			put += n;
+			pos += n;
 		}
 		return true;
 	}
