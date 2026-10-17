@@ -103,6 +103,9 @@ Vector<String> WithoutDryRun(Vector<String> args);
 void   ShowHistory(const String& db_path);
 void   HistoryScreenshot(const String& db_path, const String& png);
 void   ShowLogFile(const String& path);
+void   ShowBuild();                                // Build.cpp: build and test, like jac313's runner
+void   BuildScreenshots(const String& folder);
+void   BuildRun();
 String LatestLog(const String& db_path);
 
 // Messages.cpp: core messages shown in a dialog and printed to the terminal.

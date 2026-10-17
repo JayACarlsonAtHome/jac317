@@ -76,6 +76,8 @@ void TreeSyncWindow::MainMenu(Bar& bar)
 void TreeSyncWindow::FileMenu(Bar& bar)
 {
 	bar.Add("Setup..", [this] { EditSetup(); });
+	bar.Add("Build and test..", [] { ShowBuild(); })
+	   .Help("Compile TreeSync with gcc, clang or both and run the tests (v001/build.sh)");
 	bar.Separator();
 	bar.Add("About..", [this] {
 		String qtf = "[* TreeSync]&&Sync two directory trees by SHA-256.&&[*@6 Use at your own risk.]&";
@@ -206,6 +208,10 @@ GUI_APP_MAIN
 			shots = args[i].Mid(13);
 			args.Remove(i);
 		}
+		else if(args[i] == "--build-run") {   // a developer aid: Build and test, started at once
+			BuildRun();
+			return;
+		}
 		else if(args[i].StartsWith("--bench-log=")) {
 			bench = ScanInt(args[i].Mid(12));
 			args.Remove(i);
@@ -241,6 +247,7 @@ GUI_APP_MAIN
 			SetupDlg dlg;
 			dlg.Set(setup);
 			dlg.Screenshots(shots);
+			BuildScreenshots(shots);
 			if(setup.db.GetCount())
 				HistoryScreenshot(setup.db, AppendFileName(shots, "history.png"));
 		}

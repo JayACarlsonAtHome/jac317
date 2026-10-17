@@ -13,6 +13,7 @@ file
 	Messages.cpp,
 	SyncRun.cpp,
 	History.cpp,
+	Build.cpp,
 	main.cpp;
 
 mainconfig

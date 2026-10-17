@@ -63,6 +63,8 @@ cd v001
 
 Output goes to `v001/out/<compiler>/treesync` (and `treesync-test`). U++'s stock build methods pass `-std=c++17` after any package options, so TreeSync ships its own build methods in `v001/bm/` that pass `-std=c++26`. A `static_assert` stops the build if C++26 is not in effect.
 
+**In the GUI**: File > Build and test.. does the same from a window, like jac313's Jac313Runner: choose gcc, clang or both, Debug or Release, the tests and ThreadSanitizer; it runs `build.sh` once per step, streams the output, and ends with start : stop : duration per step (kept in `Build-Results.txt` in the logs folder). `treesync --build-run` does a build with the saved choices without clicking (a developer aid).
+
 `treesync --screenshot=DIR` (a developer aid) draws the main window and each Setup tab into PNG files without showing anything, so the layout can be checked without a screen.
 
 The tests build a scratch tree under `$TMPDIR` with awkward names and a folder chain deeper than `PATH_MAX`. They also check option round trips (including shell quoting through a real `sh`), the home-only limit, and the progress-line layout. The scratch tree is removed afterwards.
