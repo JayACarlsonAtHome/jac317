@@ -84,7 +84,7 @@ double TreeSyncWindow::BenchLog(int n)
 			case 0: line = Format("[%5d/%d] some/folder/file %d.txt                       100%% |  12.0 MiB/s |  1.0 KiB |  00m00s", i, n, i); break;
 			case 1: line = Format("@file\t%d\t512\t1024\t0.10\t%d\t%d\tsome/folder/file %d.txt", i, i, n, i); break;
 			case 2: line = Format("@stage\t0\t%d\t%d\t0\tsome/folder", i, n); break;
-			default: line = Format("@overall\t%d\t%d", i * 1024, n * 1024); break;
+			default: line = Format("@overall\t%lld\t%lld", i * 1024LL, n * 1024LL); break;   // %d would cut an int64 to int
 			}
 			std::lock_guard<std::mutex> l(inbox_m);
 			inbox.Add(line);

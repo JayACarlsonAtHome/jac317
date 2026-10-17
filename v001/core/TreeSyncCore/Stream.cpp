@@ -275,8 +275,8 @@ struct Streamer {
 				last_stage = std::chrono::steady_clock::now();
 				Stage(0, entries, estimate, crel);
 				Lock l(r.mx);
-				r.report.WhenStatus(Format("Pre-scan: %d entries%s  %s", (int64)entries,
-				                           estimate ? Format(" of ~%d", estimate) : String(), crel));
+				r.report.WhenStatus(Format("Pre-scan: %lld entries%s  %s", (int64)entries,   // %d cuts int64 to int
+				                           estimate ? Format(" of ~%lld", estimate) : String(), crel));
 			}
 			// --follow-links: a symlink stands for what it points to (file or folder).
 			if(f.is_link && flags.follow_links) {
