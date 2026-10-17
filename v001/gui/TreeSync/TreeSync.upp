@@ -12,6 +12,7 @@ file
 	PathPicker.cpp,
 	Messages.cpp,
 	SyncRun.cpp,
+	History.cpp,
 	main.cpp;
 
 mainconfig

@@ -95,6 +95,12 @@ public:
 // GUI the Sync menu decides between a real run and a dry run.
 Vector<String> WithoutDryRun(Vector<String> args);
 
+// History.cpp: the runs in the database, what each did, and log files.
+void   ShowHistory(const String& db_path);
+void   HistoryScreenshot(const String& db_path, const String& png);
+void   ShowLogFile(const String& path);
+String LatestLog(const String& db_path);
+
 // Messages.cpp: core messages shown in a dialog and printed to the terminal.
 void   WarnNotRoot();
 void   RefusePath(const String& p);

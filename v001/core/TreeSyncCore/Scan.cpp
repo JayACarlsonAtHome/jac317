@@ -65,7 +65,7 @@ HashCache::HashCache(Db& db, const String& root, const SyncFlags& flags, bool un
 	find(db, "SELECT dev, ino, size, mtime_ns, ctime_ns, sha256 FROM files WHERE root = ? AND rel = ?"),
 	store(db, "INSERT OR REPLACE INTO files VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
 {
-	stamp = GetUTCSeconds(GetSysTime()) * 1000 + Random(1000);
+	stamp = (int64)time(nullptr) * 1000 + Random(1000);
 	db.Exec("BEGIN");
 }
 

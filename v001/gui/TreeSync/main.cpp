@@ -100,6 +100,11 @@ void TreeSyncWindow::ViewMenu(Bar& bar)
 		source_panel.tree.CollapseAll();
 		target_panel.tree.CollapseAll();
 	});
+	bar.Separator();
+	bar.Add("History...", [this] { ShowHistory(Nvl(setup.db, DefaultDbPath())); }).Key(K_CTRL_H)
+	   .Help("Past runs, what each did, failures first (from the database)");
+	bar.Add("Show log file", [this] { ShowLogFile(LatestLog(setup.db)); }).Key(K_CTRL_L)
+	   .Help("The newest run's log file");
 }
 
 void TreeSyncWindow::SyncMenu(Bar& bar)
@@ -215,6 +220,8 @@ GUI_APP_MAIN
 			SetupDlg dlg;
 			dlg.Set(setup);
 			dlg.Screenshots(shots);
+			if(setup.db.GetCount())
+				HistoryScreenshot(setup.db, AppendFileName(shots, "history.png"));
 		}
 		DirTree::WaitForWorkers(10);   // a remote tree may still be connecting
 		Cout() << "screenshots in " << shots << "\n";

@@ -154,6 +154,23 @@ Content is compared by SHA-256. File size and time decide whether a cached hash 
 
 Working for local trees and over SFTP, with `treesync-cli` and the GUI: scan with a hash cache, Copy / Mirror / Merge, verified copies, hard links, symlinks, resumable runs and big files. Tested against a Fedora 44 server in both directions.
 
+## History and logs
+
+Every `treesync-cli` run (including those the GUI starts) writes its output to a log file, `logs/YYYY-MM-DD_HHMMSS.log` next to the database, and the run's row in the database records it. In the GUI, **View > History** (Ctrl+H) lists past runs with what each did (failed runs and actions in red, failures first) and opens a run's log; **View > Show log file** (Ctrl+L) opens the newest one.
+
+The database has views for looking at it directly, for example with `sqlite3 ~/.local/share/treesync/treesync.db`:
+
+| View | One row per |
+|---|---|
+| `run_summary` | run: started, finished, state, source, target, folders, copied, linked, deleted, failed, conflicts, bytes, log file |
+| `run_actions` | action of a run: kind, path, state, size, error |
+| `failures` | failed action, with its error |
+
+```sql
+SELECT run, started, state, copied, failed FROM run_summary ORDER BY run DESC LIMIT 10;
+SELECT * FROM failures WHERE run = 42;
+```
+
 ## Sharing the machine
 
 When a lot of other copying is going on, TreeSync can step back:

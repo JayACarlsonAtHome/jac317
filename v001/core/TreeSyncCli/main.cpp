@@ -30,6 +30,7 @@ static void OnSignal(int)
 
 static bool tty = isatty(1);
 static bool status_shown;
+static FileAppend run_log;   // every printed line, in the run's log file
 
 static void Print(const String& line)
 {
@@ -38,6 +39,10 @@ static void Print(const String& line)
 	status_shown = false;
 	Cout() << line << "\n";
 	Cout().Flush();
+	if(run_log.IsOpen()) {
+		run_log << line << "\n";
+		run_log.Flush();
+	}
 }
 
 static void Status(const String& s)
@@ -141,9 +146,25 @@ CONSOLE_APP_MAIN
 		return;
 	}
 
+	// The run's log file: logs/YYYY-MM-DD_HHMMSS.log next to the database.
+	String log_path;
+	{
+		Time t = GetSysTime();
+		String folder = LogFolder(setup.db);
+		RealizeDirectory(folder);
+		log_path = AppendFileName(folder, Format("%04d-%02d-%02d_%02d%02d%02d.log",
+		                                         (int)t.year, (int)t.month, (int)t.day,
+		                                         (int)t.hour, (int)t.minute, (int)t.second));
+		for(int n = 1; FileExists(log_path); n++)   // two runs in the same second
+			log_path = log_path.Left(log_path.GetCount() - 4) + "." + AsString(n) + ".log";
+		run_log.Open(log_path);
+	}
 	Print(CommandLineText(ToArgs(setup)));
+	Print("log: " + log_path);
 	SyncResult result;
-	if(!RunSync(setup, report, result, error)) {
+	bool ok = RunSync(setup, report, result, error);
+	SetRunLog(setup.db, result.run, log_path);
+	if(!ok) {
 		Print("treesync-cli: " + error);
 		SetExitCode(2);
 		return;

@@ -231,7 +231,7 @@ bool RunSync(const SyncSetup& setup, SyncReport& report, SyncResult& result, Str
 	// Record the whole plan before doing any of it.
 	db.Exec("BEGIN");
 	Stmt(db, "INSERT INTO runs (started, source, target, args, state) VALUES (?, ?, ?, ?, 'running')")
-		.Int(1, GetUTCSeconds(GetSysTime())).Text(2, src).Text(3, dst).Text(4, key).Run();
+		.Int(1, (int64)time(nullptr)).Text(2, src).Text(3, dst).Text(4, key).Run();
 	r.run = result.run = db.LastId();
 	Stmt ins(db, "INSERT INTO actions (run, seq, kind, dir, rel, type, link, link_to, size, sha256, dev, ino, "
 	             "mtime_ns, ctime_ns, mode, note, state, bytes, error, replaces) "

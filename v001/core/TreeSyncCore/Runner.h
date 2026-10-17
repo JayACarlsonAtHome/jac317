@@ -720,7 +720,7 @@ struct Runner {
 
 		Stmt(db, "UPDATE runs SET state = ?, finished = ? WHERE id = ?")
 			.Text(1, result.stopped ? "stopped" : result.failed ? "failed" : "done")
-			.Int(2, GetUTCSeconds(GetSysTime())).Int(3, run).Run();
+			.Int(2, (int64)time(nullptr)).Int(3, run).Run();
 
 		if(copy_count == 0)
 			report.WhenLine("nothing to copy");

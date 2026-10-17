@@ -606,7 +606,7 @@ bool RunStreaming(Runner& r, TreeFs *side[2], const String& key, bool fresh, Str
 		}
 		if(!result.resumed) {
 			Stmt(db, "INSERT INTO runs (started, source, target, args, state) VALUES (?, ?, ?, ?, 'running')")
-				.Int(1, GetUTCSeconds(GetSysTime())).Text(2, src).Text(3, dst).Text(4, key).Run();
+				.Int(1, (int64)time(nullptr)).Text(2, src).Text(3, dst).Text(4, key).Run();
 			r.run = result.run = db.LastId();
 			report.WhenLine(Format("run %d", r.run));
 		}
@@ -701,7 +701,7 @@ bool RunStreaming(Runner& r, TreeFs *side[2], const String& key, bool fresh, Str
 	}
 	Stmt(db, "UPDATE runs SET state = ?, finished = ? WHERE id = ?")
 		.Text(1, stopped ? "stopped" : result.failed ? "failed" : "done")
-		.Int(2, GetUTCSeconds(GetSysTime())).Int(3, r.run).Run();
+		.Int(2, (int64)time(nullptr)).Int(3, r.run).Run();
 	report.WhenOverall(r.overall_total, r.overall_total);
 	if(r.copy_count == 0)
 		report.WhenLine("nothing to copy");

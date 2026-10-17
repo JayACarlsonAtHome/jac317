@@ -47,6 +47,8 @@ public:
 };
 
 String DefaultDbPath();         // $XDG_DATA_HOME/treesync/treesync.db
+String LogFolder(const String& db_path);   // "logs" next to the database
+void   SetRunLog(const String& db_path, int64 run, const String& log);
 
 // Scan.cpp -------------------------------------------------------------------
 
