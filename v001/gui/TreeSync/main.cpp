@@ -274,7 +274,10 @@ GUI_APP_MAIN
 	ApplyDisplayChoice();   // Wayland or X11, as chosen on the options page
 	// First screen: compiler and test options (like jac313's runner); then the sync
 	// window. If this program was rebuilt there, start the new build in its place.
-	String use = from_start_page || !BuildPageAtStart() ? String() : BuildStartPage();
+	bool page = !from_start_page && BuildPageAtStart();
+	String use = page ? BuildStartPage() : String();
+	if(page && use.IsEmpty())   // Exit on the options page
+		return;
 	if(use.GetCount()) {   // the chosen compiler's build, newest, without the page again
 		Vector<String> pass = clone(CommandLine());
 		pass.Add("--from-start-page");

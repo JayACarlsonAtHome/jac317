@@ -126,6 +126,7 @@ class BuildWindow : public TopWindow {
 	LineEdit  results;
 	Button    back, close3;
 	Button    use_gcc1, use_clang1, use_gcc3, use_clang3;   // startup: continue with that build
+	Button    exit1, exit3;                                  // startup: quit TreeSync
 
 	Vector<BuildStep> steps;
 	int               step = -1;
@@ -241,6 +242,12 @@ BuildWindow::BuildWindow()
 		b->SetLabel(gcc ? "Continue to TreeSync using GCC exe" : "Continue to TreeSync using Clang exe");
 		*b << [this, gcc] { continue_with = gcc ? "gcc" : "clang"; Close(); };
 		(b == &use_gcc1 || b == &use_clang1 ? s1 : s3).Add(b->RightPosZ(gcc ? 266 : 8, 250).BottomPosZ(8, 28));
+		b->Hide();
+	}
+	for(Button *b : { &exit1, &exit3 }) {
+		b->SetLabel("Exit").Tip("Quit TreeSync without going on");
+		*b << [this] { continue_with.Clear(); Close(); };
+		(b == &exit1 ? s1 : s3).Add(b->RightPosZ(8, 80).BottomPosZ(8, 28));
 		b->Hide();
 	}
 
@@ -639,7 +646,11 @@ void BuildWindow::Startup()
 {
 	startup = true;
 	Title("TreeSync - compiler and test options");
-	start.SetLabel("Build and test").RightPosZ(524, 140);
+	SetRect(0, 0, Zx(1000), Zy(640));
+	// Bottom row, right to left: Exit, Continue (Clang), Continue (GCC), Build and test.
+	start.SetLabel("Build and test").RightPosZ(612, 140);
+	exit1.Show();
+	exit3.Show();
 	at_start.SetLabel("Show this page at start").LeftPosZ(8, 220);
 	close1.Hide();
 	close3.Hide();
@@ -655,6 +666,7 @@ void BuildWindow::UseButtons()
 		String c = b == &use_gcc1 || b == &use_gcc3 ? "gcc" : "clang";
 		bool built = FileExists(TreeSyncExe(c));
 		b->Show();
+		b->RightPosZ(c == "gcc" ? 354 : 96, 250);
 		b->Enable(built);
 		b->Tip(built ? "Starts " + TreeSyncExe(c) : "Not built yet: Build and test with " + c + " first");
 	}
@@ -676,8 +688,8 @@ bool BuildPageAtStart()
 }
 
 // The first screen: compiler and test options, Build and test, then Continue with the
-// gcc or the clang build. Returns which ("gcc" or "clang"); empty if the window was
-// just closed (carry on in this program).
+// gcc or the clang build. Returns which ("gcc" or "clang"); empty for Exit (or the
+// window's close box): quit TreeSync.
 String BuildStartPage()
 {
 	BuildWindow w;
