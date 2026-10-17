@@ -129,6 +129,27 @@ SetupDlg::FlagsPane::FlagsPane()
 	need.cx = max(need.cx, m + 2 * span);
 	y += ((INT_OPTION_COUNT + 1) / 2) * Zy(26) + Zy(6);
 
+	// Reset to defaults, per mode: every switch, number and exclude list.
+	int rw = W("Reset to defaults") + Zx(12), bw = 0;
+	const char *reset_name[3] = { "Copy", "Mirror", "Merge (both ways)" };
+	for(const char *n : reset_name)
+		bw = max(bw, W(n) + Zx(24));
+	Add(lbl_reset.SetLabel("Reset to defaults").LeftPos(m, rw).TopPos(y + Zy(2), h));
+	for(int i = 0; i < 3; i++) {
+		SyncMode md = i == 0 ? SyncMode::Copy : i == 1 ? SyncMode::Mirror : SyncMode::Merge;
+		Add(reset[i].SetLabel(reset_name[i]).LeftPos(m + rw + i * (bw + Zx(8)), bw).TopPos(y, Zy(24)));
+		reset[i].Tip("Every switch, number and exclude list back to its default, mode " + String(reset_name[i]));
+		reset[i] << [this, md, i] {
+			SyncFlags f;
+			f.mode = md;
+			Set(f);
+			ShowHelp("Reset to defaults", HELP_MODE[i] + String("\nAll switches, numbers and exclude lists are "
+			         "back to their defaults. Nothing is saved until OK; Cancel undoes it."));
+		};
+	}
+	need.cx = max(need.cx, m + rw + 3 * (bw + Zx(8)) + m);
+	y += Zy(32);
+
 	Add(preview.HSizePos(m, m).TopPos(y, h));
 	y += row + Zy(4);
 

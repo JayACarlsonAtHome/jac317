@@ -66,6 +66,8 @@ class SetupDlg : public TopWindow {
 		Label        lbl_mode, lbl_owners, lbl_xf, lbl_xd, preview;
 		Switch       mode;
 		Switch       owners;        // off / by name / by number: one choice, not two boxes
+		Label        lbl_reset;
+		Button       reset[3];      // defaults for Copy, Mirror, Merge
 		Option       opt[BOOL_OPTION_COUNT];
 		Label        lbl_int[INT_OPTION_COUNT];
 		EditInt      num[INT_OPTION_COUNT];
