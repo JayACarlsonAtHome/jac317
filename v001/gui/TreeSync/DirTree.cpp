@@ -37,16 +37,21 @@ void DirTree::LoadChildren(int id)
 	Vector<String> dirs, links, files;
 	std::error_code ec;
 	for(const fs::directory_entry& e :
-	    fs::directory_iterator(dir.ToStd(), fs::directory_options::skip_permission_denied, ec)) {
+	    fs::directory_iterator(dir.ToStd(), fs::directory_options::none, ec)) {
 		String name = e.path().filename().string();
 		std::error_code ec2;
 		bool is_dir = e.is_directory(ec2);   // follows symlinks
-		if(is_dir && e.is_symlink(ec2) && !follow_links)
-			links.Add(name);   // /XJ: shown, never descended into
+		bool is_link = e.is_symlink(ec2);
+		if(is_dir && is_link && (!follow_links || !PathAllowed(e.path().string())))
+			links.Add(name);   // /XJ, or a link leaving home without root: never descended into
 		else if(is_dir)
 			dirs.Add(name);
 		else
 			files.Add(name);
+	}
+	if(ec) {
+		Add(id, Null, Null, "(" + String(ec.message()) + ")");
+		return;
 	}
 	Upp::Sort(dirs);
 	Upp::Sort(links);

@@ -11,7 +11,7 @@ TreePanel::TreePanel()
 
 TreeSyncWindow::TreeSyncWindow()
 {
-	Title("TreeSync");
+	Title(IsRoot() ? "TreeSync [" + RootName() + "]" : String("TreeSync"));
 	AddFrame(menu);
 	AddFrame(status);
 	menu.Set([this](Bar& bar) { MainMenu(bar); });
@@ -30,7 +30,8 @@ TreeSyncWindow::TreeSyncWindow()
 	};
 
 	LoadTrees();
-	status = TS_CONTRACTS_NATIVE ? "Ready (native contracts)" : "Ready";
+	status = String(IsRoot() ? "Ready" : "Not running as " + RootName() + ": limited to " + HomeDir()) +
+	         (TS_CONTRACTS_NATIVE ? " (native contracts)" : "");
 	Sizeable().Zoomable();
 	SetRect(0, 0, Zx(1000), Zy(620));
 }
@@ -88,7 +89,13 @@ void TreeSyncWindow::EditSetup()
 	dlg.Set(setup);
 	if(dlg.Execute() != IDOK)
 		return;
-	setup = dlg.Get();
+	SyncSetup s = dlg.Get();
+	for(TreeEndpoint *e : { &s.source, &s.target })
+		if(!e->remote && !PathAllowed(e->path)) {
+			RefusePath(e->path);
+			e->path.Clear();
+		}
+	setup = s;
 	TS_POST(setup.source.port > 0 && setup.target.port > 0);
 	TS_POST(setup.flags.threads >= 1);
 	LoadTrees();
@@ -97,5 +104,6 @@ void TreeSyncWindow::EditSetup()
 
 GUI_APP_MAIN
 {
+	WarnNotRoot();
 	TreeSyncWindow().Run();
 }

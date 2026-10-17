@@ -86,7 +86,10 @@ class PathPicker : public ParentCtrl {
 	EditString path;
 	Button     browse;
 	Vector<MountInfo> mounts;
+	String     committed;   // last accepted path, restored when a path is refused
+	bool       remote = false;
 
+	bool Accept(const String& p);
 	void FillMounts();
 	void PickMount();
 	void Browse();
@@ -146,6 +149,13 @@ public:
 	void      Set(const SyncSetup& s);
 	SyncSetup Get() const;
 };
+
+bool   IsRoot();
+String RootName();
+String HomeDir();
+bool   PathAllowed(const String& p);   // always true as root; else only inside HomeDir()
+void   WarnNotRoot();
+void   RefusePath(const String& p);
 
 // Browsable view of one tree, with [+]/[-] expanders and +/- keys.
 class DirTree : public TreeCtrl {

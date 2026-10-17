@@ -30,8 +30,28 @@ void PathPicker::LoadDisks()
 	mounts = ListMounts();
 	disk.ClearList();
 	disk.Add(Null, "All disks");
+
+	// Without root only the home directory is offered, on the disk that holds it.
+	String home_disk;
+	if(!IsRoot()) {
+		String home = HomeDir();
+		int best = -1;
+		for(int i = 0; i < mounts.GetCount(); i++)
+			if(IsUnder(home, mounts[i].dir) &&
+			   (best < 0 || mounts[i].dir.GetCount() > mounts[best].dir.GetCount()))
+				best = i;
+		MountInfo h;
+		h.dir = home;
+		h.disk = best >= 0 ? mounts[best].disk : String();
+		h.label = home + "  (home, not root)";
+		home_disk = h.disk;
+		mounts.Clear();
+		mounts.Add(h);
+	}
+
 	for(const DiskInfo& d : ListDisks())
-		disk.Add(d.id, d.label);
+		if(IsRoot() || d.id == home_disk)
+			disk.Add(d.id, d.label);
 	for(const MountInfo& m : mounts)
 		if(m.disk == DISK_NETWORK) {
 			disk.Add(DISK_NETWORK, "Network shares");
@@ -68,7 +88,7 @@ void PathPicker::Browse()
 	String start = ~path;
 	std::error_code ec;
 	fs.ActiveDir(std::filesystem::is_directory(start.ToStd(), ec) ? start : String(~mount));
-	if(!fs.ExecuteSelectDir("Tree root"))
+	if(!fs.ExecuteSelectDir("Tree root") || !Accept(~fs))
 		return;
 	Set(~fs);
 	WhenPath();
@@ -76,14 +96,27 @@ void PathPicker::Browse()
 
 void PathPicker::Commit()
 {
+	if(!Accept(~path)) {
+		path <<= committed;
+		return;
+	}
 	Set(~path);
 	WhenPath();
+}
+
+bool PathPicker::Accept(const String& p)
+{
+	if(remote || PathAllowed(p))   // the home limit is for local trees only
+		return true;
+	RefusePath(p);
+	return false;
 }
 
 // Select the disk and mount that hold p: the mount with the longest matching prefix.
 void PathPicker::Set(const String& p)
 {
 	path <<= p;
+	committed = p;
 	int best = -1;
 	for(int i = 0; i < mounts.GetCount(); i++) {
 		const String& d = mounts[i].dir;
@@ -107,6 +140,7 @@ String PathPicker::Get() const
 // A remote tree has no local disks; only the path field stays editable.
 void PathPicker::Remote(bool r)
 {
+	remote = r;
 	disk.Enable(!r);
 	mount.Enable(!r);
 	browse.Enable(!r);

@@ -10,6 +10,7 @@ file
 	DirTree.cpp,
 	Disks.cpp,
 	PathPicker.cpp,
+	Root.cpp,
 	main.cpp;
 
 mainconfig

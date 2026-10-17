@@ -40,6 +40,10 @@ cd v001/gui
 
 Output goes to `v001/gui/out/<compiler>/TreeSync`. U++'s stock build methods pass `-std=c++17` after any package options, so TreeSync ships its own build methods in `v001/gui/bm/` that pass `-std=c++26`. A `static_assert` stops the build if C++26 is not in effect.
 
+## Running as root
+
+TreeSync is meant to run as root (Administrator on Windows), because a sync often meets files the current user cannot read or replace. Without root it still runs, after a warning, but local trees are limited to your home directory. Paths are resolved before they are checked, so `..` and symlinks cannot step outside home. Remote trees are not limited this way; what they can reach depends on the remote login.
+
 ## Sync flags
 
 The flags follow robocopy's switches: `/E` (Copy), `/MIR` (Mirror), `/L`, `/FFT`, `/DST`, `/XO`, `/XN`, `/XC`, `/XX`, `/XL`, `/XJ`, `/IS`, `/XF`, `/XD`, `/R:n`, `/W:n`, `/MT:n`. TreeSync adds a **Merge** mode, which copies changes both ways and reports a conflict when the same file changed on both sides. Content is compared by SHA-256. File size and time decide whether a cached hash can be reused and, in Merge mode, which side is newer, so `/FFT` (2-second time tolerance for FAT and many network shares) and `/DST` still matter.
