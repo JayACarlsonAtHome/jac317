@@ -172,7 +172,7 @@ static void TestOptions()
 		  "Thumbs db", "--exclude-dir=.git" },
 		{ "--source=/data", "--target-host=nas.local", "--target-user=jay", "--target-port=2222",
 		  "--target-key=/home/jay/.ssh/id ed25519", "--target=/backup", "--copy", "--retries=0" },
-		{ "--mirror", "--no-skip-links", "--skip-older", "--skip-newer", "--keep-extra",
+		{ "--mirror", "--follow-links", "--no-hard-links", "--skip-older", "--skip-newer", "--keep-extra",
 		  "--skip-source-only", "--include-same", "--dst-tolerance", "--skip-changed",
 		  "--retry-wait", "60" },
 		{},
@@ -250,6 +250,256 @@ static void TestProgress()
 	Cout() << "\n";
 }
 
+// ---- engine ------------------------------------------------------------------
+
+static void Put(const String& path, const String& data)
+{
+	std::error_code ec;
+	std::filesystem::create_directories(ToFs(GetFileFolder(path)), ec);
+	SaveFile(path, data);
+}
+
+static String Big(int64 bytes, int seed)
+{
+	String s;
+	s.Reserve((int)bytes);
+	for(int64 i = 0; i < bytes; i++)
+		s.Cat((char)((i * 31 + seed) % 251));
+	return s;
+}
+
+// Folder hash of a whole tree, from a scan with its own database.
+static String TreeHash(const String& root, const String& db_path, bool follow_links = false)
+{
+	Db db;
+	String err, hash;
+	if(!db.Open(db_path, err))
+		return "db: " + err;
+	SyncFlags f;
+	f.follow_links = follow_links;
+	SyncReport r;
+	Vector<Entry> e;
+	ScanStats st;
+	return ScanTree(db, root, f, r, e, hash, st, err) ? hash : "scan: " + err;
+}
+
+static String Sha256Sum(const String& path)
+{
+	FILE *f = popen("sha256sum -- '" + path + "'", "r");
+	char buf[65] = {};
+	if(f) {
+		if(fread(buf, 1, 64, f) != 64)
+			buf[0] = 0;
+		pclose(f);
+	}
+	return buf;
+}
+
+static SyncSetup Setup(const String& src, const String& dst, const String& db)
+{
+	SyncSetup s;
+	s.source.path = src;
+	s.target.path = dst;
+	s.db = db;
+	s.flags.dry_run = false;
+	s.flags.big_file_mib = 1;   // so a 3.5 MiB file is "big" and copied in 1 MiB chunks
+	s.flags.chunk_mib = 1;
+	s.flags.retries = 0;
+	return s;
+}
+
+static bool Sync(const SyncSetup& s, SyncResult& r, Vector<String>* lines = nullptr,
+                 std::atomic<bool> *stop = nullptr, Event<const CopyProgress&> on_progress = Null)
+{
+	SyncReport report;
+	report.stop = stop;
+	report.WhenLine = [&](const String& l) { if(lines) lines->Add(l); };
+	report.WhenProgress = [&](const CopyProgress& p) { if(on_progress) on_progress(p); };
+	String err;
+	bool ok = RunSync(s, report, r, err);
+	EXPECT(ok, "RunSync: " + err);
+	return ok;
+}
+
+static void TestEngineMirror(const String& root)
+{
+	String src = root + "/src", dst = root + "/dst", db = root + "/sync.db", check = root + "/check.db";
+	Put(src + "/a b.txt", "hello\n");
+	Put(src + "/dir with spaces/x y.txt", "x\n");
+	Put(src + "/ leading/trailing ", "spaces at both ends\n");
+	Put(src + "/café ✓/naïve.txt", "utf-8\n");
+	Put(src + "/big.bin", Big(3 * 1024 * 1024 + 512 * 1024, 1));
+	Put(src + "/hard 1", "hard-linked\n");
+	link(src + "/hard 1", src + "/hard 2");
+	symlink("a b.txt", src + "/link to a");
+	// A folder chain deeper than PATH_MAX, with a file at the bottom.
+	{
+		mkdir(src + "/deep", 0755);
+		int fd = open(src + "/deep", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+		for(int i = 0; i < 20 && fd >= 0; i++) {
+			String n = String('d', 240) + " " + AsString(i);
+			mkdirat(fd, n, 0755);
+			int next = openat(fd, n, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+			close(fd);
+			fd = next;
+		}
+		int f = fd >= 0 ? openat(fd, "bottom.txt", O_CREAT | O_WRONLY | O_CLOEXEC, 0644) : -1;
+		if(f >= 0) {
+			if(write(f, "deep\n", 5) != 5)
+				EXPECT(false, "write deep file");
+			close(f);
+		}
+		if(fd >= 0)
+			close(fd);
+	}
+
+	// Dry run: plans, changes nothing.
+	SyncSetup s = Setup(src, dst, db);
+	s.flags.dry_run = true;
+	SyncResult r;
+	Sync(s, r);
+	EXPECT(r.plan.GetCount() > 10 && !DirectoryExists(dst), Format("dry run plans %d actions, creates nothing", r.plan.GetCount()));
+
+	// Real run.
+	s.flags.dry_run = false;
+	Vector<String> lines;
+	Sync(s, r, &lines);
+	EXPECT(r.failed == 0 && r.conflicts == 0, Format("mirror: %d failed, %d conflicts", r.failed, r.conflicts));
+	EXPECT(TreeHash(src, check) == TreeHash(dst, check), "mirror: target tree hash equals source");
+	struct stat a, b;
+	EXPECT(stat(dst + "/hard 1", &a) == 0 && stat(dst + "/hard 2", &b) == 0 && a.st_ino == b.st_ino,
+	       "hard links relinked at target");
+	char buf[64] = {};
+	EXPECT(readlink(dst + "/link to a", buf, 63) > 0 && String(buf) == "a b.txt", "symlink copied as a link");
+	EXPECT(Sha256Sum(src + "/big.bin") == Sha256Sum(dst + "/big.bin"), "big file: sha256sum matches");
+	String h;
+	String err;
+	int sfd = OpenDir(src);
+	EXPECT(HashAt(sfd, "big.bin", h, err) && h == Sha256Sum(src + "/big.bin"), "HashAt equals sha256sum");
+	close(sfd);
+
+	// Second run: nothing to do, nothing re-hashed.
+	Sync(s, r);
+	EXPECT(r.planned == 0, Format("second run plans nothing (%d)", r.planned));
+	EXPECT(r.source.hashed == 0 && r.source.reused > 0, Format("second run re-hashes no source file (%d hashed)", r.source.hashed));
+	EXPECT(r.target.hashed == 0, Format("verified copies are cached: no target file re-hashed (%d)", r.target.hashed));
+
+	// Extra file at target: mirror deletes it; --keep-extra and --copy keep it.
+	Put(dst + "/extra.txt", "extra\n");
+	s.flags.keep_extra = true;
+	Sync(s, r);
+	EXPECT(FileExists(dst + "/extra.txt"), "--keep-extra keeps extra target file");
+	s.flags.keep_extra = false;
+	s.flags.mode = SyncMode::Copy;
+	Sync(s, r);
+	EXPECT(FileExists(dst + "/extra.txt"), "--copy keeps extra target file");
+	s.flags.mode = SyncMode::Mirror;
+	Sync(s, r);
+	EXPECT(!FileExists(dst + "/extra.txt"), "--mirror deletes extra target file");
+
+	// A changed file is copied again.
+	Put(src + "/a b.txt", "changed\n");
+	Sync(s, r);
+	EXPECT(LoadFile(dst + "/a b.txt") == "changed\n", "changed file copied");
+
+	// --no-hard-links writes each name out as its own file.
+	String dst2 = root + "/dst-no-links";
+	SyncSetup s2 = Setup(src, dst2, db);
+	s2.flags.hard_links = false;
+	Sync(s2, r);
+	EXPECT(stat(dst2 + "/hard 1", &a) == 0 && stat(dst2 + "/hard 2", &b) == 0 && a.st_ino != b.st_ino,
+	       "--no-hard-links writes separate copies");
+
+	// --follow-links writes out the file a symlink points to.
+	String dst3 = root + "/dst-follow";
+	SyncSetup s3 = Setup(src, dst3, db);
+	s3.flags.follow_links = true;
+	Sync(s3, r);
+	struct stat l;
+	EXPECT(lstat(dst3 + "/link to a", &l) == 0 && S_ISREG(l.st_mode) && LoadFile(dst3 + "/link to a") == "changed\n",
+	       "--follow-links writes out the symlink target");
+}
+
+static void TestEngineResume(const String& root)
+{
+	String src = root + "/rsrc", dst = root + "/rdst", db = root + "/sync.db", check = root + "/check.db";
+	int64 size = 3 * 1024 * 1024 + 512 * 1024;
+	Put(src + "/a big.bin", Big(size, 7));
+	Put(src + "/z small 1.txt", "one\n");
+	Put(src + "/z small 2.txt", "two\n");
+
+	// Stop as soon as the first chunk of the big file is written.
+	SyncSetup s = Setup(src, dst, db);
+	std::atomic<bool> stop = false;
+	SyncResult r1;
+	Sync(s, r1, nullptr, &stop, [&](const CopyProgress& p) { if(p.done > 0) stop = true; });
+	EXPECT(r1.stopped, "first run stopped");
+	EXPECT(!FileExists(dst + "/a big.bin") && FileExists(dst + "/a big.bin.treesync-part"),
+	       "stopped mid-file: only the .treesync-part exists");
+
+	// Second run resumes the same run and copies only what is left.
+	stop = false;
+	SyncResult r2;
+	Vector<String> lines;
+	Sync(s, r2, &lines, &stop);
+	EXPECT(r2.resumed && r2.run == r1.run, Format("resumed run %d (first was %d)", r2.run, r1.run));
+	EXPECT(r2.bytes < size, Format("resume copied %s, less than the %s file", FormatBytes(r2.bytes), FormatBytes(size)));
+	bool said = false;
+	for(const String& l : lines)
+		said = said || l.StartsWith("resuming a big.bin at chunk 2");
+	EXPECT(said, "reports resuming at chunk 2");
+	EXPECT(TreeHash(src, check) == TreeHash(dst, check), "resumed copy: target equals source");
+	EXPECT(!FileExists(dst + "/a big.bin.treesync-part"), "no .treesync-part left");
+
+	// --fresh ignores an unfinished run.
+	SyncResult r3;
+	Put(src + "/new.txt", "new\n");
+	s.fresh = true;
+	Sync(s, r3);
+	EXPECT(!r3.resumed && r3.run != r1.run, "--fresh starts a new run");
+}
+
+static void TestEngineMerge(const String& root)
+{
+	String a = root + "/ma", b = root + "/mb", db = root + "/sync.db";
+	Put(a + "/same.txt", "same\n");
+	Put(b + "/same.txt", "same\n");
+	Put(a + "/only a.txt", "a\n");
+	Put(b + "/only b/x.txt", "b\n");
+	SyncSetup s = Setup(a, b, db);
+	s.flags.mode = SyncMode::Merge;
+	SyncResult r;
+	Sync(s, r);
+	EXPECT(FileExists(b + "/only a.txt") && FileExists(a + "/only b/x.txt"), "merge copies new files both ways");
+
+	Put(a + "/same.txt", "changed in a\n");
+	Sync(s, r);
+	EXPECT(LoadFile(b + "/same.txt") == "changed in a\n", "merge: change in source goes to target");
+
+	Put(b + "/same.txt", "changed in b\n");
+	Sync(s, r);
+	EXPECT(LoadFile(a + "/same.txt") == "changed in b\n", "merge: change in target goes to source");
+
+	Put(a + "/same.txt", "both 1\n");
+	Put(b + "/same.txt", "both 2\n");
+	Sync(s, r);
+	EXPECT(r.conflicts == 1 && LoadFile(a + "/same.txt") == "both 1\n" && LoadFile(b + "/same.txt") == "both 2\n",
+	       Format("merge: changed on both sides is a conflict, nothing overwritten (%d)", r.conflicts));
+}
+
+static void TestEngineRefusals(const String& root)
+{
+	SyncReport report;
+	SyncResult r;
+	String err;
+	SyncSetup s = Setup(root + "/src", root + "/src/inside", root + "/sync.db");
+	EXPECT(!RunSync(s, report, r, err) && err.Find("overlap") >= 0, "refuses overlapping trees: " + err);
+	if(!IsRoot()) {
+		SyncSetup t = Setup("/etc", root + "/etc-copy", root + "/sync.db");
+		EXPECT(!RunSync(t, report, r, err) && err.Find("outside your home") >= 0, "refuses /etc without root: " + err);
+	}
+}
+
 CONSOLE_APP_MAIN
 {
 	Cout() << ToolchainReport() << "\n";
@@ -263,6 +513,18 @@ CONSOLE_APP_MAIN
 	TestOptions();
 	TestPathAllowed();
 	TestMessages();
+
+	// The engine refuses paths outside home without root, so its tests run there.
+	String eroot = IsRoot() ? root + "-engine"
+	                        : AppendFileName(HomeDir(), Format(".cache/treesync-test-%d", (int)getpid()));
+	RealizeDirectory(eroot);
+	TestEngineMirror(eroot);
+	TestEngineResume(eroot);
+	TestEngineMerge(eroot);
+	TestEngineRefusals(eroot);
+	int efd = open(GetFileFolder(eroot), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+	RemoveAt(efd, GetFileName(eroot));
+	close(efd);
 	TestProgress();
 
 	int fd = open(GetFileFolder(root), O_RDONLY | O_DIRECTORY | O_CLOEXEC);

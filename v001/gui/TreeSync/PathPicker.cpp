@@ -102,7 +102,7 @@ void PathPicker::Commit()
 
 bool PathPicker::Accept(const String& p)
 {
-	if(remote || PathAllowed(p))   // the home limit is for local trees only
+	if(remote || run_as_root || PathAllowed(p))   // the home limit is for local trees run as this user
 		return true;
 	RefusePath(p);
 	return false;

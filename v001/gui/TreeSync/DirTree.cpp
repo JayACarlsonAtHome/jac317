@@ -8,10 +8,10 @@ DirTree::DirTree()
 	WhenOpen = [this](int id) { LoadChildren(id); };
 }
 
-void DirTree::Load(const char *caption, const TreeEndpoint& e, bool skip_links)
+void DirTree::Load(const char *caption, const TreeEndpoint& e, bool follow)
 {
 	Clear();
-	follow_links = !skip_links;
+	follow_links = follow;
 	if(e.path.IsEmpty()) {
 		SetRoot(CtrlImg::Dir(), Null, String(caption) + ": (not set)");
 		return;
@@ -44,7 +44,7 @@ void DirTree::LoadChildren(int id)
 	for(const FolderEntry& e : entries) {
 		String child = AppendFileName(dir, e.name);
 		if(e.is_dir && e.is_link && (!follow_links || !PathAllowed(child)))
-			links.Add(e.name);   // /XJ, or a link leaving home without root: never descended into
+			links.Add(e.name);   // --follow-links off, or a link leaving home without root: never descended into
 		else if(e.is_dir)
 			dirs.Add(e.name);
 		else

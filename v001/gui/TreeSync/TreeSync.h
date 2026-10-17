@@ -5,6 +5,13 @@
 #include <CtrlLib/CtrlLib.h>
 #include <TreeSyncCore/TreeSyncCore.h>
 
+#include <thread>
+#include <sys/types.h>
+
+// Sync > Run as root: treesync-cli runs through pkexec, so local paths outside
+// home are allowed even though the GUI itself is not root.
+extern bool run_as_root;
+
 // Disk -> Mount -> Path, with a browse button.
 class PathPicker : public ParentCtrl {
 	Label      lbl_disk, lbl_mount, lbl_path;
@@ -89,7 +96,7 @@ class DirTree : public TreeCtrl {
 
 public:
 	DirTree();
-	void Load(const char *caption, const TreeEndpoint& e, bool skip_links);
+	void Load(const char *caption, const TreeEndpoint& e, bool follow_links);
 	void CollapseAll();
 	bool Key(dword key, int count) override;
 };
@@ -105,25 +112,36 @@ struct TreePanel : ParentCtrl {
 class TreeSyncWindow : public TopWindow {
 	MenuBar   menu;
 	StatusBar status;
-	Splitter  split;
+	Splitter  split, vsplit;
 	TreePanel source_panel, target_panel;
+	LineEdit  log;
 	SyncSetup setup;
 
+	// SyncRun.cpp: treesync-cli as a child process.
+	pid_t       child = 0;
+	int         child_stdin = -1;
+	bool&       as_root = run_as_root;
+	std::thread reader;
+
+	void Log(const String& line);
+	void StartSync(bool dry_run);
+	void StopSync();
+	void SyncFinished(int code);
+
 	void ShowStatus();
-
-public:
-	void SetSetup(const SyncSetup& s);
-
-private:
-
 	void MainMenu(Bar& bar);
 	void FileMenu(Bar& bar);
 	void ViewMenu(Bar& bar);
+	void SyncMenu(Bar& bar);
 	void EditSetup();
 	void LoadTrees();
 
 public:
+	void SetSetup(const SyncSetup& s);
+	void Close() override;
+
 	TreeSyncWindow();
+	~TreeSyncWindow();
 };
 
 #endif

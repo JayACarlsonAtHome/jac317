@@ -3,6 +3,8 @@
 // SQLite cache, remote transport and sync are not implemented yet.
 #include "TreeSync.h"
 
+bool run_as_root = false;
+
 TreePanel::TreePanel()
 {
 	Add(picker.HSizePosZ(4, 4).TopPosZ(4, PathPicker::Height));
@@ -16,7 +18,11 @@ TreeSyncWindow::TreeSyncWindow()
 	AddFrame(status);
 	menu.Set([this](Bar& bar) { MainMenu(bar); });
 	split.Horz(source_panel, target_panel);
-	Add(split.SizePos());
+	vsplit.Vert(split, log);
+	vsplit.SetPos(7000);
+	log.SetReadOnly();
+	log.SetFont(Monospace());
+	Add(vsplit.SizePos());
 
 	source_panel.picker.WhenPath = [this] {
 		setup.source.path = source_panel.picker.Get();
@@ -40,6 +46,7 @@ void TreeSyncWindow::MainMenu(Bar& bar)
 {
 	bar.Sub("File", [this](Bar& bar) { FileMenu(bar); });
 	bar.Sub("View", [this](Bar& bar) { ViewMenu(bar); });
+	bar.Sub("Sync", [this](Bar& bar) { SyncMenu(bar); });
 }
 
 void TreeSyncWindow::FileMenu(Bar& bar)
@@ -69,14 +76,29 @@ void TreeSyncWindow::ViewMenu(Bar& bar)
 	});
 }
 
+void TreeSyncWindow::SyncMenu(Bar& bar)
+{
+	bool idle = child == 0;
+	bar.Add(idle, "Run", [this] { StartSync(false); }).Key(K_F9)
+	   .Help("Run treesync-cli with the current settings (honours Dry run)");
+	bar.Add(idle, "Dry run", [this] { StartSync(true); }).Key(K_SHIFT_F9)
+	   .Help("Show what would be done, change nothing");
+	bar.Add(!idle, "Stop", [this] { StopSync(); }).Key(K_ESCAPE)
+	   .Help("Stop after the current file or chunk; Run again resumes");
+	bar.Separator();
+	bar.Add(idle, "Run as root (pkexec)", [this] { as_root = !as_root; }).Check(as_root)
+	   .Help("Start treesync-cli through pkexec; the GUI itself stays an ordinary user");
+	bar.Add("Clear log", [this] { log.Clear(); });
+}
+
 void TreeSyncWindow::LoadTrees()
 {
 	source_panel.picker.Set(setup.source.path);
 	source_panel.picker.Remote(setup.source.remote);
-	source_panel.tree.Load("Source", setup.source, setup.flags.skip_links);
+	source_panel.tree.Load("Source", setup.source, setup.flags.follow_links);
 	target_panel.picker.Set(setup.target.path);
 	target_panel.picker.Remote(setup.target.remote);
-	target_panel.tree.Load("Target", setup.target, setup.flags.skip_links);
+	target_panel.tree.Load("Target", setup.target, setup.flags.follow_links);
 }
 
 void TreeSyncWindow::ShowStatus()

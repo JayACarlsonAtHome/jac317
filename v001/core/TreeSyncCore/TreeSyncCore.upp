@@ -1,7 +1,8 @@
 description "TreeSync engine side: settings, options, paths, disks (no GUI)\n";
 
 uses
-	Core;
+	Core,
+	plugin/sqlite3;
 
 file
 	TreeSyncCore.h,
@@ -11,4 +12,10 @@ file
 	Disks.cpp,
 	Root.cpp,
 	Progress.cpp,
-	Toolchain.cpp;
+	Toolchain.cpp,
+	Engine.h,
+	Db.cpp,
+	Scan.cpp,
+	Plan.cpp,
+	Copy.cpp,
+	Sync.cpp;

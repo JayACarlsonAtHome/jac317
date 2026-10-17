@@ -10,6 +10,7 @@ file
 	DirTree.cpp,
 	PathPicker.cpp,
 	Messages.cpp,
+	SyncRun.cpp,
 	main.cpp;
 
 mainconfig

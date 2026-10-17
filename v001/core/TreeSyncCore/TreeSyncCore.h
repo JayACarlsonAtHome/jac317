@@ -44,7 +44,8 @@ struct SyncFlags {
 	bool   dry_run = true;
 	bool   fat_file_times = false;   // 2-second time tolerance
 	bool   dst_tolerance = false;    // allow exact 1-hour shifts
-	bool   skip_links = true;
+	bool   follow_links = false;     // write out what symlinks point to
+	bool   hard_links = true;        // relink hard-linked files instead of writing each out
 	bool   include_same = false;
 	bool   skip_older = false;
 	bool   skip_newer = false;
@@ -56,6 +57,8 @@ struct SyncFlags {
 	int    retries = 3;
 	int    retry_wait = 5;           // seconds
 	int    threads = 8;
+	int    big_file_mib = 1024;      // files this big or bigger are copied in chunks
+	int    chunk_mib = 64;           // chunk size for big files
 };
 
 struct BoolOption {
@@ -73,8 +76,8 @@ struct IntOption {
 	int min, max;
 };
 
-constexpr int BOOL_OPTION_COUNT = 10;
-constexpr int INT_OPTION_COUNT = 3;
+constexpr int BOOL_OPTION_COUNT = 11;
+constexpr int INT_OPTION_COUNT = 5;
 extern const BoolOption BOOL_OPTIONS[];
 extern const IntOption  INT_OPTIONS[];
 
@@ -82,6 +85,8 @@ struct SyncSetup {
 	TreeEndpoint source;
 	TreeEndpoint target;
 	SyncFlags    flags;
+	String       db;              // --db=PATH; empty = DefaultDbPath()
+	bool         fresh = false;   // --fresh: do not resume an unfinished run
 };
 
 // Options.cpp
@@ -119,6 +124,7 @@ struct FolderEntry : Moveable<FolderEntry> {
 	bool   is_link = false;
 };
 
+int                   OpenDir(const String& dir);   // O_RDONLY dir fd, any path length; -1 + errno
 std::filesystem::path ToFs(const String& p);
 String                FromFs(const std::filesystem::path& p);
 bool                  ListFolder(const String& dir, Vector<FolderEntry>& out, String& error);
@@ -144,7 +150,10 @@ String ToolchainReport();
 bool   IsRoot();
 String HomeDir();
 bool   PathAllowed(const String& p);   // always true as root; else only inside HomeDir()
+String CanonicalPath(const String& p);  // symlinks and ".." resolved
 String NotRootMessage();
 String RefusedPathMessage(const String& p);
+
+#include "Engine.h"
 
 #endif

@@ -16,7 +16,7 @@ bool IsRoot()
 // If the path cannot be resolved (e.g. longer than PATH_MAX), ".." is still removed
 // lexically; symlinks in it then go unchecked, which is acceptable because the home
 // limit is a convenience: without root the OS permissions still apply.
-static String Resolved(const String& p)
+String CanonicalPath(const String& p)
 {
 	std::error_code ec;
 	fs::path c = fs::weakly_canonical(ToFs(p), ec);
@@ -25,12 +25,12 @@ static String Resolved(const String& p)
 
 String HomeDir()
 {
-	return Resolved(GetHomeDirectory());
+	return CanonicalPath(GetHomeDirectory());
 }
 
 bool PathAllowed(const String& p)
 {
-	return IsRoot() || p.IsEmpty() || IsUnder(Resolved(p), HomeDir());
+	return IsRoot() || p.IsEmpty() || IsUnder(CanonicalPath(p), HomeDir());
 }
 
 String NotRootMessage()

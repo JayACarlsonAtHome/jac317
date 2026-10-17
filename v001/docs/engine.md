@@ -1,6 +1,12 @@
 # TreeSync engine design
 
-Status: design, not built yet. Everything here goes in `TreeSyncCore`, never the GUI.
+Status: built for local trees (`core/TreeSyncCore`: `Db.cpp`, `Scan.cpp`, `Plan.cpp`, `Copy.cpp`, `Sync.cpp`), run by `treesync-cli` and the GUI, and covered by `TreeSyncTest`. Everything here lives in `TreeSyncCore`, never the GUI.
+
+Differences from the first design, and gaps:
+- **Merge never deletes**: something present on only one side is copied to the other.
+- **Type changes are conflicts**: when a name is a file on one side and a folder on the other, nothing is changed.
+- **Not yet**: remote trees, `--threads` (copies run one at a time), and resuming a scan part-way through hashing one big file (the files hashed before the stop are kept).
+- **Verified copies are cached**: after a copy passes its SHA-256 check, the target file's row goes straight into `files`, so the next scan of the target does not read it again.
 
 ## Principle: SQLite is the record of truth
 

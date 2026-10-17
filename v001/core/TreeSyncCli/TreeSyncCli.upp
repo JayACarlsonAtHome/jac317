@@ -1,0 +1,10 @@
+description "treesync-cli: the TreeSync engine in a terminal, no GUI\n";
+
+uses
+	TreeSyncCore;
+
+file
+	main.cpp;
+
+mainconfig
+	"" = "";

@@ -43,7 +43,8 @@ TreeSync is a GUI on top of working code:
 |---|---|
 | `v001/core/TreeSyncCore` | The engine side: settings, options, paths, disks, privileges, progress lines. U++ Core only, no GUI library, so it can never depend on the GUI. |
 | `v001/gui/TreeSync` | The GUI. It shows what the core is doing and passes settings to it. |
-| `v001/core/TreeSyncTest` | Console tests of the core. |
+| `v001/core/TreeSyncCli` | `treesync-cli`: the engine in a terminal, no GUI. |
+| `v001/core/TreeSyncTest` | Console tests of the core, including real syncs. |
 
 ### Building and testing
 
@@ -73,11 +74,11 @@ The point of the GUI is to see what is going on. So the engine reports each step
   [108/108] Total                                           100% |   14.0 MiB/s |  300.2 MiB |  00m21s
   ```
 
-- **GUI**: the same steps, shown against the trees. Warnings appear in a dialog and are also printed to the terminal.
+- **GUI**: Sync > Run (F9) starts `treesync-cli` and shows its output in a log pane under the trees; Sync > Stop (Esc) stops it after the current file or chunk, and the trees reload when it ends. Warnings appear in a dialog and are also printed to the terminal.
 
-**Restarts** (not built yet): every step is recorded in the SQLite database before the next one starts, so a stopped or crashed run continues where it left off. Big files are copied in chunks, each chunk recorded as it finishes, so a restart continues part-way through the file instead of from the start. Inode numbers identify unchanged files and hard links, and give a quick progress estimate. Details are in [`v001/docs/engine.md`](v001/docs/engine.md).
+**Restarts**: every step is recorded in the SQLite database before the next one starts, so a stopped or crashed run continues where it left off: run the same command again. Big files are copied in chunks, each chunk recorded as it finishes, so a restart continues part-way through the file instead of from the start (for example "resuming big one.bin at chunk 7 of 19"). `--fresh` starts over instead. Inode numbers identify unchanged files, so they are not read again. Details are in [`v001/docs/engine.md`](v001/docs/engine.md).
 
-**Copy plan** (not built yet): the engine copies one file at a time with `cp --preserve=all --reflink=auto --sparse=auto -- SRC DST`, started with `posix_spawn` (an argument list, never a shell, so spaces are safe). It runs `cp` inside the destination folder with short relative names, so deep trees work, and checks the SHA-256 afterwards. Running `cp` per file is what gives per-file progress. Big files use TreeSync's own chunked copy instead, because `cp` cannot resume part-way through a file. `rsync` would also work, but it hides the per-file steps the GUI is meant to show.
+**Copying**: small files are copied one at a time with `/usr/bin/cp --preserve=all --reflink=auto --sparse=auto`, started with `posix_spawn` (an argument list, never a shell, so spaces are safe) inside the target folder, so deep trees work. Big files use TreeSync's own chunked copy, because `cp` cannot resume part-way through a file. Every copy goes to `NAME.treesync-part`, is read back and checked against the source's SHA-256 (the same value `sha256sum` prints), and only then renamed into place. `rsync` would also work, but it hides the per-file steps the GUI is meant to show.
 
 ## Long paths and awkward names
 
@@ -87,7 +88,9 @@ The point of the GUI is to see what is going on. So the engine reports each step
 
 ## Running as root
 
-TreeSync is meant to run as root, because a sync often meets files the current user cannot read or replace. Without root it still runs, after a warning, but local trees are limited to your home directory. Paths are resolved before they are checked, so `..` and symlinks cannot step outside home. Remote trees are not limited this way; what they can reach depends on the remote login.
+TreeSync is meant to run as root, because a sync often meets files the current user cannot read or replace. Without root it still runs, after a warning, but local trees are limited to your home directory.
+
+The GUI itself never runs as root, so it stays an ordinary Wayland client. Sync > Run as root starts `treesync-cli` through `pkexec` instead, and then paths outside home are allowed. In a terminal, run `sudo treesync-cli ...` or `pkexec treesync-cli ...`. Note that root has its own database (`/root/.local/share/treesync/treesync.db`) unless `--db` says otherwise. Paths are resolved before they are checked, so `..` and symlinks cannot step outside home. Remote trees are not limited this way; what they can reach depends on the remote login.
 
 ## Command line
 
@@ -108,7 +111,8 @@ The switches are modelled on robocopy. TreeSync adds `--merge`, which copies cha
 | `--dry-run` | Report only, change nothing (default on) | `/L` |
 | `--fat-file-times` | 2-second time tolerance (FAT, many network shares) | `/FFT` |
 | `--dst-tolerance` | Allow exact 1-hour (DST) time shifts | `/DST` |
-| `--skip-links` | Do not follow symlinked folders (default on) | `/XJ` |
+| `--hard-links` | Hard-linked files are copied once and relinked at the target (default on); `--no-hard-links` writes each name out as its own copy | |
+| `--follow-links` | Write out what symlinks point to (files and folders); off by default, so symlinks are copied as symlinks | off = `/SL` |
 | `--include-same` | Include same files (rehash / recopy) | `/IS` |
 | `--skip-older` | Skip if source is older than target | `/XO` |
 | `--skip-newer` | Skip if source is newer than target | `/XN` |
@@ -119,7 +123,11 @@ The switches are modelled on robocopy. TreeSync adds `--merge`, which copies cha
 | `--exclude-dir=GLOB` | Skip matching folders (repeatable) | `/XD` |
 | `--retries=N` | Retries on a failed copy (default 3) | `/R:n` |
 | `--retry-wait=N` | Seconds between retries (default 5) | `/W:n` |
-| `--threads=N` | Copy threads (default 8) | `/MT:n` |
+| `--threads=N` | Copy threads (default 8; not used yet, copies run one at a time) | `/MT:n` |
+| `--big-file-mib=N` | Files this big or bigger are copied in resumable chunks (default 1024) | |
+| `--chunk-mib=N` | Chunk size for big files (default 64) | |
+| `--fresh` | Start over instead of resuming an unfinished run | |
+| `--db=PATH` | Database file (default `~/.local/share/treesync/treesync.db`) | |
 | `--SIDE=PATH` | Tree root; SIDE is `source` or `target` | |
 | `--SIDE-host`, `-user`, `-port`, `-key` | Remote login for that side | |
 
@@ -129,7 +137,7 @@ Content is compared by SHA-256. File size and time decide whether a cached hash 
 
 ## Status
 
-Early development.
+Working for local trees, with `treesync-cli` and the GUI: scan with a hash cache, Copy / Mirror / Merge, verified copies, hard links, symlinks, resumable runs and big files. Not yet: remote trees (SSH/SFTP), copying with several threads, and live per-chunk progress in the GUI log.
 
 ## License
 

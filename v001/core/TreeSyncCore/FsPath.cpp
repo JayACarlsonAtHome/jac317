@@ -29,7 +29,7 @@ String FromFs(const fs::path& p)
 // Opens dir for reading. Short paths go straight to open(); longer ones are walked
 // one component at a time, O_PATH for the folders on the way (needs only search
 // permission, like the kernel's own path walk) and O_RDONLY for the last one.
-static int OpenDirLong(const String& dir)
+int OpenDir(const String& dir)
 {
 	if(dir.GetCount() < PATH_MAX)
 		return open(dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
@@ -49,7 +49,7 @@ static int OpenDirLong(const String& dir)
 
 bool ListFolder(const String& dir, Vector<FolderEntry>& out, String& error)
 {
-	int fd = OpenDirLong(dir);
+	int fd = OpenDir(dir);
 	DIR *d = fd >= 0 ? fdopendir(fd) : nullptr;
 	if(!d) {
 		error = strerror(errno);

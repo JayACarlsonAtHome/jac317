@@ -10,7 +10,8 @@ const BoolOption BOOL_OPTIONS[] = {
 	{ "dry-run",          &SyncFlags::dry_run,          "/L",   "Dry run: report only, change nothing" },
 	{ "fat-file-times",   &SyncFlags::fat_file_times,   "/FFT", "FAT file times: 2-second tolerance" },
 	{ "dst-tolerance",    &SyncFlags::dst_tolerance,    "/DST", "Allow exact 1-hour (DST) time shifts" },
-	{ "skip-links",       &SyncFlags::skip_links,       "/XJ",  "Do not follow symlinked folders" },
+	{ "follow-links",     &SyncFlags::follow_links,     "",     "Write out symlink targets, not the links" },
+	{ "hard-links",       &SyncFlags::hard_links,       "",     "Relink hard-linked files, not copies" },
 	{ "include-same",     &SyncFlags::include_same,     "/IS",  "Include same files (rehash / recopy)" },
 	{ "skip-older",       &SyncFlags::skip_older,       "/XO",  "Skip if source is older than target" },
 	{ "skip-newer",       &SyncFlags::skip_newer,       "/XN",  "Skip if source is newer than target" },
@@ -24,6 +25,8 @@ const IntOption INT_OPTIONS[] = {
 	{ "retries",    &SyncFlags::retries,    "/R:n",  "Retries on a failed copy",  0, 1000000 },
 	{ "retry-wait", &SyncFlags::retry_wait, "/W:n",  "Seconds between retries",   0, 3600 },
 	{ "threads",    &SyncFlags::threads,    "/MT:n", "Copy threads",              1, 128 },
+	{ "big-file-mib", &SyncFlags::big_file_mib, "",  "Chunked copy from (MiB)",   1, 1048576 },
+	{ "chunk-mib",  &SyncFlags::chunk_mib,  "",      "Chunk size (MiB)",          1, 1024 },
 };
 static_assert(std::size(INT_OPTIONS) == INT_OPTION_COUNT);
 
@@ -100,6 +103,10 @@ Vector<String> ToArgs(const SyncSetup& s)
 	EndpointArgs("source", s.source, args);
 	EndpointArgs("target", s.target, args);
 	args.Append(FlagArgs(s.flags));
+	if(s.db.GetCount())
+		args.Add("--db=" + s.db);
+	if(s.fresh)
+		args.Add("--fresh");
 	return args;
 }
 
@@ -181,6 +188,18 @@ int ParseCommandLine(const Vector<String>& args, SyncSetup& s, String& error)
 				}
 				done = true;
 			}
+		if(name == "fresh") {
+			if(!flag_only())
+				return PARSE_ERROR;
+			s.fresh = true;
+			continue;
+		}
+		if(name == "db") {
+			if(!need())
+				return PARSE_ERROR;
+			s.db = CleanPath(value);
+			continue;
+		}
 		if(name == "exclude-file" || name == "exclude-dir") {
 			if(!need())
 				return PARSE_ERROR;
@@ -249,10 +268,13 @@ String Usage()
 		            def.*o.field ? ", default on" : "");
 	u << "\nValues:\n";
 	for(const IntOption& o : INT_OPTIONS)
-		u << Format("  --%-21s%s, %d-%d, default %d (robocopy %s)\n",
-		            String(o.name) + "=N", o.text, o.min, o.max, def.*o.field, o.robocopy);
+		u << Format("  --%-21s%s, %d-%d, default %d", String(o.name) + "=N", o.text, o.min, o.max, def.*o.field)
+		  << (*o.robocopy ? String(" (robocopy ") + o.robocopy + ")" : String()) << "\n";
 	u << "  --exclude-file=GLOB    Skip matching files, repeatable (robocopy /XF)\n"
 	  << "  --exclude-dir=GLOB     Skip matching folders, repeatable (robocopy /XD)\n\n"
+	  << "Run:\n"
+	  << "  --fresh                Start over instead of resuming an unfinished run\n"
+	  << "  --db=PATH              Database file (default " << DefaultDbPath() << ")\n\n"
 	  << "  -h, --help             Show this help\n";
 	return u;
 }

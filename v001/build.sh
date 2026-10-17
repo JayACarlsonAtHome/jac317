@@ -7,9 +7,9 @@
 #   ./build.sh --compiler gcc --release    # optimized build
 #   ./build.sh --compiler gcc --test       # build and run the core tests instead
 #
-# Packages: core/TreeSyncCore (engine, no GUI), gui/TreeSync (GUI on top),
-# core/TreeSyncTest (console tests of the core).
-# Output: v001/out/<compiler>/treesync or treesync-test (gitignored).
+# Packages: core/TreeSyncCore (engine, no GUI), core/TreeSyncCli (the engine in a
+# terminal), gui/TreeSync (GUI on top), core/TreeSyncTest (tests of the core).
+# Output: v001/out/<compiler>/treesync, treesync-cli, treesync-test (gitignored).
 # Both build methods pass -std=c++26; U++'s stock ones pass -std=c++17.
 set -eu
 
@@ -23,7 +23,7 @@ while [ $# -gt 0 ]; do
     --compiler) COMPILER="${2:-}"; shift 2 ;;
     --release)  MODE=-brsH; shift ;;
     --test)     TEST=1; shift ;;
-    -h|--help)  sed -n '3,13p' "$0"; exit 0 ;;
+    -h|--help)  sed -n '3,14p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -60,6 +60,8 @@ if [ "$TEST" = 1 ]; then
   "$UMK" "$ASSEMBLY" TreeSyncTest "$BM" $MODE "$OUT/treesync-test"
   "$OUT/treesync-test"
 else
+  echo "Building TreeSyncCli with $COMPILER ($BM)"
+  "$UMK" "$ASSEMBLY" TreeSyncCli "$BM" $MODE "$OUT/treesync-cli"
   echo "Building TreeSync with $COMPILER ($BM)"
   "$UMK" "$ASSEMBLY" TreeSync "$BM" $MODE "$OUT/treesync"
 fi
