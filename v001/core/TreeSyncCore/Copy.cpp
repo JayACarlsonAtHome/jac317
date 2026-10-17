@@ -87,17 +87,28 @@ void Throttle::Account(int64 bytes)
 {
 	if(rate <= 0)
 		return;
-	auto now = std::chrono::steady_clock::now();
-	tokens = min((double)rate, tokens + std::chrono::duration<double>(now - last).count() * rate);
-	last = now;
-	tokens -= (double)bytes;
-	// In debt: wait until the bucket is back to zero, in steps of 100 ms.
-	while(tokens < 0 && !(stop && *stop)) {
-		double wait = min(-tokens / rate, 0.1);
+	auto refill = [&] {
+		auto now = std::chrono::steady_clock::now();
+		tokens = min((double)rate, tokens + std::chrono::duration<double>(now - last).count() * rate);
+		last = now;
+	};
+	{
+		std::lock_guard<std::mutex> lock(m);
+		refill();
+		tokens -= (double)bytes;
+	}
+	// In debt: wait (without the lock) until the shared bucket is back to zero,
+	// in steps of 100 ms.
+	while(!(stop && *stop)) {
+		double wait;
+		{
+			std::lock_guard<std::mutex> lock(m);
+			refill();
+			if(tokens >= 0)
+				return;
+			wait = min(-tokens / rate, 0.1);
+		}
 		std::this_thread::sleep_for(std::chrono::duration<double>(wait));
-		auto t = std::chrono::steady_clock::now();
-		tokens += std::chrono::duration<double>(t - last).count() * rate;
-		last = t;
 	}
 }
 

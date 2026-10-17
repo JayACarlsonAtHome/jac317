@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <mutex>
 
 struct sqlite3;
 struct sqlite3_stmt;
@@ -79,6 +80,7 @@ class Throttle {
 	int64  rate = 0;          // bytes per second, 0 = no limit
 	double tokens = 0;
 	std::chrono::steady_clock::time_point last;
+	std::mutex m;             // shared by the copy threads
 	const std::atomic<bool> *stop = nullptr;
 
 public:

@@ -488,11 +488,12 @@ static void TestEngineResume(const String& root)
 	Put(src + "/z small 1.txt", "one\n");
 	Put(src + "/z small 2.txt", "two\n");
 
-	// Stop as soon as the first chunk of the big file is written.
+	// Stop as soon as the first chunk of the big file is written. (With several copy
+	// threads the small files may finish first, so watch the big file itself.)
 	SyncSetup s = Setup(src, dst, db);
 	std::atomic<bool> stop = false;
 	SyncResult r1;
-	Sync(s, r1, nullptr, &stop, [&](const CopyProgress& p) { if(p.done > 0) stop = true; });
+	Sync(s, r1, nullptr, &stop, [&](const CopyProgress& p) { if(p.name == "a big.bin" && p.done > 0) stop = true; });
 	EXPECT(r1.stopped, "first run stopped");
 	EXPECT(!FileExists(dst + "/a big.bin") && FileExists(dst + "/a big.bin.treesync-part"),
 	       "stopped mid-file: only the .treesync-part exists");
@@ -547,6 +548,46 @@ static void TestEngineMerge(const String& root)
 	       Format("merge: changed on both sides is a conflict, nothing overwritten (%d)", r.conflicts));
 	EXPECT(LoadFile(b + ".old/same.txt") == "same\n" && LoadFile(a + ".old/same.txt") == "changed in a\n",
 	       "merge: replaced versions on both sides kept in their .old folders");
+}
+
+static void TestThreads(const String& root)
+{
+	String src = root + "/th-src", dst = root + "/th-dst", db = root + "/sync.db", check = root + "/check.db";
+	for(int i = 0; i < 300; i++)
+		Put(Format("%s/folder %d/sub %d/file %d.txt", src, i % 7, i % 3, i), Big(1000 + i * 37, i));
+	Put(src + "/big one.bin", Big(3 * 1024 * 1024 + 7, 99));   // chunked, alongside the small ones
+
+	// Stop once about 50 files are done: several copies are in flight at that moment.
+	SyncSetup s = Setup(src, dst, db);
+	s.flags.threads = 8;
+	std::atomic<bool> stop = false;
+	std::atomic<int> finished = 0;
+	SyncResult r1;
+	Sync(s, r1, nullptr, &stop, [&](const CopyProgress& p) {
+		if(p.done >= p.size && ++finished >= 50)
+			stop = true;
+	});
+	EXPECT(r1.stopped && r1.done < r1.planned, Format("8 threads stopped part-way (%d of %d done)", r1.done, r1.planned));
+
+	stop = false;
+	SyncResult r2;
+	Vector<String> lines;
+	Sync(s, r2, &lines, &stop);
+	EXPECT(r2.resumed && r2.failed == 0 && r2.done == r2.planned,
+	       Format("resumed with 8 threads: %d of %d done, %d failed", r2.done, r2.planned, r2.failed));
+	bool said = false;
+	for(const String& l : lines)
+		said = said || l == "copying with 8 threads";
+	EXPECT(said, "reports 8 copy threads");
+	EXPECT(TreeHash(src, check) == TreeHash(dst, check), "8 threads: target tree hash equals source");
+
+	// --threads=1 gives the same result.
+	String dst1 = root + "/th-dst1";
+	SyncSetup one = Setup(src, dst1, db);
+	one.flags.threads = 1;
+	SyncResult r3;
+	Sync(one, r3);
+	EXPECT(r3.failed == 0 && TreeHash(src, check) == TreeHash(dst1, check), "1 thread: same result");
 }
 
 static void TestBandwidthAndPriority(const String& root)
@@ -616,6 +657,7 @@ CONSOLE_APP_MAIN
 	TestEngineResume(eroot);
 	TestEngineMerge(eroot);
 	TestEngineRefusals(eroot);
+	TestThreads(eroot);
 	TestBandwidthAndPriority(eroot);   // last: it lowers this process's priority
 	int efd = open(GetFileFolder(eroot), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
 	RemoveAt(efd, GetFileName(eroot));

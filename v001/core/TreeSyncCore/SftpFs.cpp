@@ -783,8 +783,10 @@ bool SftpFs::MoveOut(const String& rel, const String& dest, String& moved_to, St
 	String path;
 	for(const String& p : Split(GetFileFolder(dest), '/')) {
 		path << "/" << p;
+		// Another copy thread may create the same folder at the same moment: check again.
 		if(!(m.Attrs(path, true, a) && LIBSSH2_SFTP_S_ISDIR(a.permissions)) &&
-		   libssh2_sftp_mkdir(m.sftp, path, 0755) != 0) {
+		   libssh2_sftp_mkdir(m.sftp, path, 0755) != 0 &&
+		   !(m.Attrs(path, true, a) && LIBSSH2_SFTP_S_ISDIR(a.permissions))) {
 			error = m.Err("cannot create folder " + path);
 			return false;
 		}

@@ -6,6 +6,7 @@
 #   ./build.sh --compiler gcc              # gcc-toolset-15 g++, bm/GCC15.bm
 #   ./build.sh --compiler gcc --release    # optimized build
 #   ./build.sh --compiler gcc --test       # also build and run the core tests
+#   ./build.sh --compiler clang --tsan     # build and run the tests under ThreadSanitizer
 #
 # Packages: core/TreeSyncCore (engine, no GUI), core/TreeSyncCli (the engine in a
 # terminal), gui/TreeSync (GUI on top), core/TreeSyncTest (tests of the core).
@@ -17,13 +18,15 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 COMPILER=clang
 MODE=-bsH
 TEST=0
+TSAN=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --compiler) COMPILER="${2:-}"; shift 2 ;;
     --release)  MODE=-brsH; shift ;;
     --test)     TEST=1; shift ;;
-    -h|--help)  sed -n '3,14p' "$0"; exit 0 ;;
+    --tsan)     TSAN=1; shift ;;
+    -h|--help)  sed -n '3,15p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -50,6 +53,18 @@ for s in "$GFS/upp/uppsrc" "$HOME/u++/uppsrc"; do
 done
 [ -n "$UMK" ]    || { echo "umk not found" >&2; exit 1; }
 [ -n "$UPPSRC" ] || { echo "uppsrc not found" >&2; exit 1; }
+
+# ThreadSanitizer: clang only; U++'s own allocator replaces operator new, which
+# TSan also intercepts, so USEMALLOC switches U++ to the system allocator.
+if [ "$TSAN" = 1 ]; then
+  [ "$COMPILER" = clang ] || { echo "--tsan needs --compiler clang" >&2; exit 2; }
+  OUT="$HERE/out/clang-tsan"
+  mkdir -p "$OUT"
+  echo "Building TreeSyncTest with clang + ThreadSanitizer (bm/CLANG26-TSAN.bm)"
+  "$UMK" "$HERE/core,$HERE/gui,$UPPSRC" TreeSyncTest "$HERE/bm/CLANG26-TSAN.bm" $MODE +USEMALLOC "$OUT/treesync-test"
+  TSAN_OPTIONS="halt_on_error=1" "$OUT/treesync-test"
+  exit $?
+fi
 
 OUT="$HERE/out/$COMPILER"
 mkdir -p "$OUT"

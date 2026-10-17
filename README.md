@@ -58,6 +58,7 @@ cd v001
 ./build.sh --compiler gcc              # gcc-toolset-15, bm/GCC15.bm
 ./build.sh --compiler gcc --release
 ./build.sh --compiler gcc --test       # build and run the core tests
+./build.sh --compiler clang --tsan     # run the tests under ThreadSanitizer (data races)
 ```
 
 Output goes to `v001/out/<compiler>/treesync` (and `treesync-test`). U++'s stock build methods pass `-std=c++17` after any package options, so TreeSync ships its own build methods in `v001/bm/` that pass `-std=c++26`. A `static_assert` stops the build if C++26 is not in effect.
@@ -125,7 +126,7 @@ The switches are modelled on robocopy. TreeSync adds `--merge`, which copies cha
 | `--exclude-dir=GLOB` | Skip matching folders (repeatable) | `/XD` |
 | `--retries=N` | Retries on a failed copy (default 3) | `/R:n` |
 | `--retry-wait=N` | Seconds between retries (default 5) | `/W:n` |
-| `--threads=N` | Copy threads (default 8; not used yet, copies run one at a time) | `/MT:n` |
+| `--threads=N` | Files copied at the same time (default 4); each thread has its own SSH connection to a remote side | `/MT:n` |
 | `--big-file-mib=N` | Files this big or bigger are copied in resumable chunks (default 1024) | |
 | `--chunk-mib=N` | Chunk size for big files (default 64) | |
 | `--safe-delete` | Files a sync would delete or overwrite are moved to `<target>.old` instead, same folder layout; a name already there gets `.1`, `.2`, ... (default on; `--no-safe-delete` really deletes) | |
@@ -147,7 +148,7 @@ Content is compared by SHA-256. File size and time decide whether a cached hash 
 
 ## Status
 
-Working for local trees and over SFTP, with `treesync-cli` and the GUI: scan with a hash cache, Copy / Mirror / Merge, verified copies, hard links, symlinks, resumable runs and big files. Tested against a Fedora 44 server in both directions. Not yet: copying with several threads, and live per-chunk progress in the GUI log.
+Working for local trees and over SFTP, with `treesync-cli` and the GUI: scan with a hash cache, Copy / Mirror / Merge, verified copies, hard links, symlinks, resumable runs and big files. Tested against a Fedora 44 server in both directions. Not yet: live per-chunk progress in the GUI log.
 
 ## Sharing the machine
 

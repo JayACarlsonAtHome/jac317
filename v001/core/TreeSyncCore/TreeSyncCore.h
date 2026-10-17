@@ -61,7 +61,7 @@ struct SyncFlags {
 	String exclude_dirs;             // globs, ';'-separated
 	int    retries = 3;
 	int    retry_wait = 5;           // seconds
-	int    threads = 8;
+	int    threads = 4;          // copy threads; remote sides get one SSH connection each
 	int    big_file_mib = 1024;      // files this big or bigger are copied in chunks
 	int    chunk_mib = 64;           // chunk size for big files
 	int    bwlimit_kib = 0;          // KiB/s over the network (local: writes); 0 = no limit

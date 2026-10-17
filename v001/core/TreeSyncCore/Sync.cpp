@@ -1,5 +1,5 @@
 // Sync run: resume an unfinished run, or scan, plan and record a new one; then
-// carry out the recorded actions one at a time. Each action is marked in_progress
+// carry out the recorded actions (file copies on up to --threads threads). Each action is marked in_progress
 // before it starts and done (or failed) after, so a stopped run resumes exactly.
 // Every copy goes to a .treesync-part file, is read back and checked against the
 // source's SHA-256, and only then renamed into place.
@@ -13,7 +13,9 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #include <chrono>
+#include <mutex>
 #include <thread>
+#include <vector>
 
 using Clock = std::chrono::steady_clock;
 
@@ -52,27 +54,46 @@ struct Step : Moveable<Step> {
 	String state;
 };
 
-struct Runner {
-	Db&           db;
-	SyncReport&   report;
-	SyncResult&   result;
-	const SyncFlags& flags;
-	TreeFs       *fs[2] = {};   // [0] source, [1] target
-	String        ids[2];
-	int64         run = 0;
-	int           copy_count = 0, copy_index = 0;
-	Clock::time_point started = Clock::now();
-	String        old_roots[2];   // --safe-delete: where each side's deleted/replaced files go
-	IdTable       id_tables[2];
-	bool          ids_loaded = false;
-	bool          owner_note[2] = {};
-	Index<String> unknown_names;
+// What one worker thread works with: both sides. A remote side gets the worker's
+// own SFTP connection (a libssh2 session must not be shared between threads);
+// local sides are shared, they keep no state between calls.
+struct Ctx {
+	TreeFs      *fs[2] = {};
+	One<TreeFs>  own[2];
+};
 
-	Runner(Db& db, SyncReport& report, SyncResult& result, const SyncFlags& flags)
-	:	db(db), report(report), result(result), flags(flags) {}
+struct Runner {
+	Db&               db;
+	SyncReport&       report;
+	SyncResult&       result;
+	const SyncSetup&  setup;
+	const SyncFlags&  flags;
+	Ctx               main;          // the sides RunSync made; the ordered phases use these
+	String            ids[2];
+	int64             run = 0;
+	int               copy_count = 0;
+	std::atomic<int>  copy_index = 0;
+	Clock::time_point started = Clock::now();
+	String            old_roots[2];  // --safe-delete: where each side's deleted/replaced files go
+	IdTable           id_tables[2];
+	bool              ids_loaded = false;
+	bool              owner_note[2] = {};
+	Index<String>     unknown_names;
+
+	// One lock for what the copy threads share: the database, the report (terminal
+	// or GUI), the counters and the owner tables. File data never moves under it.
+	std::recursive_mutex mx;
+	using Lock = std::lock_guard<std::recursive_mutex>;
+
+	Runner(Db& db, SyncReport& report, SyncResult& result, const SyncSetup& setup)
+	:	db(db), report(report), result(result), setup(setup), flags(setup.flags) {}
+
+	void Line(const String& s)              { Lock l(mx); report.WhenLine(s); }
+	void Progress(const CopyProgress& p)    { Lock l(mx); report.WhenProgress(p); }
 
 	void SetState(int seq, const char *state, int64 bytes = 0, const String& error = Null)
 	{
+		Lock l(mx);
 		Stmt(db, "UPDATE actions SET state = ?, bytes = ?, error = ? WHERE run = ? AND seq = ?")
 			.Text(1, state).Int(2, bytes).Text(3, error).Int(4, run).Int(5, seq).Run();
 	}
@@ -87,19 +108,21 @@ struct Runner {
 			e = clone(*known);
 		else if(!to.Stat(rel, false, e, error))
 			return;
+		Lock l(mx);
 		Stmt(db, "INSERT OR REPLACE INTO files VALUES (?, ?, 'f', ?, ?, ?, ?, ?, ?, ?, '', ?, 0)")
 			.Text(1, ids[side]).Text(2, rel).Int(3, e.dev).Int(4, e.ino).Int(5, e.nlink)
 			.Int(6, e.size).Int(7, e.mtime_ns).Int(8, e.ctime_ns).Int(9, e.mode).Text(10, hash).Run();
 	}
 
 	// --preserve-owner, and the side being written can take owners (root there).
-	bool Owners(int side)
+	bool Owners(Ctx& c, int side)
 	{
 		if(!flags.preserve_owner)
 			return false;
-		if(!fs[side]->CanChown()) {
+		Lock l(mx);
+		if(!c.fs[side]->CanChown()) {
 			if(!owner_note[side])
-				report.WhenLine("owners not copied to " + fs[side]->Name() +
+				report.WhenLine("owners not copied to " + c.fs[side]->Name() +
 				                ": that needs root there (--no-preserve-owner hides this note)");
 			owner_note[side] = true;
 			return false;
@@ -107,7 +130,7 @@ struct Runner {
 		if(!ids_loaded && !flags.numeric_ids) {
 			for(int i = 0; i < 2; i++) {
 				String error;
-				if(!fs[i]->LoadIds(id_tables[i], error))
+				if(!c.fs[i]->LoadIds(id_tables[i], error))
 					report.WhenLine("warning: " + error + "; owners copied by number");
 			}
 			ids_loaded = true;
@@ -116,8 +139,9 @@ struct Runner {
 	}
 
 	// Owner and group from side `from`, as the numbers the other side uses for the same names.
-	void MapOwner(int from, int64 uid, int64 gid, FileAttrs& fa)
+	void MapOwner(Ctx& c, int from, int64 uid, int64 gid, FileAttrs& fa)
 	{
+		Lock l(mx);
 		for(int group = 0; group < 2; group++) {
 			String unknown;
 			int64 id = MapId(id_tables[from], id_tables[1 - from], group, group ? gid : uid,
@@ -126,45 +150,46 @@ struct Runner {
 			if(unknown.GetCount() && unknown_names.Find(unknown) < 0) {
 				unknown_names.Add(unknown);
 				report.WhenLine(Format("warning: %s '%s' does not exist on %s; kept its number %d",
-				                       group ? "group" : "user", unknown, fs[1 - from]->Name(), id));
+				                       group ? "group" : "user", unknown, c.fs[1 - from]->Name(), id));
 			}
 		}
 	}
 
 	// Sets the owner of something just created (folder or local symlink) from the source.
-	void CopyOwner(int dir, const String& rel)
+	void CopyOwner(Ctx& c, int dir, const String& rel)
 	{
-		if(!Owners(1 - dir))
+		if(!Owners(c, 1 - dir))
 			return;
 		Entry src;
 		String error;
-		if(!fs[dir]->Stat(rel, false, src, error) || src.uid < 0)
+		if(!c.fs[dir]->Stat(rel, false, src, error) || src.uid < 0)
 			return;
 		FileAttrs fa;
-		MapOwner(dir, src.uid, src.gid, fa);
-		if(!fs[1 - dir]->Chown(rel, fa.uid, fa.gid, error))
-			report.WhenLine("warning: " + error);
+		MapOwner(c, dir, src.uid, src.gid, fa);
+		if(!c.fs[1 - dir]->Chown(rel, fa.uid, fa.gid, error))
+			Line("warning: " + error);
 	}
 
 	// --safe-delete: move what is at rel on side `side` out to its .old tree.
-	bool MoveOut(int side, const String& rel, String& error)
+	bool MoveOut(Ctx& c, int side, const String& rel, String& error)
 	{
 		String moved;
-		if(!fs[side]->MoveOut(rel, old_roots[side] + "/" + rel, moved, error))
+		if(!c.fs[side]->MoveOut(rel, old_roots[side] + "/" + rel, moved, error))
 			return false;
 		if(moved.GetCount())
-			report.WhenLine("moved " + rel + " to " + moved);
+			Line("moved " + rel + " to " + moved);
 		return true;
 	}
 
 	// Makes room at rel for a new version: the old one moves out if --safe-delete.
-	bool MakeRoom(const Action& a, String& error)
+	bool MakeRoom(Ctx& c, const Action& a, String& error)
 	{
-		return !(a.replaces && flags.safe_delete) || MoveOut(1 - a.dir, a.from.rel, error);
+		return !(a.replaces && flags.safe_delete) || MoveOut(c, 1 - a.dir, a.from.rel, error);
 	}
 
 	void Synced(const String& rel, const String& hash)
 	{
+		Lock l(mx);
 		Stmt(db, "INSERT OR REPLACE INTO synced VALUES (?, ?, ?, ?)")
 			.Text(1, ids[0]).Text(2, ids[1]).Text(3, rel).Text(4, hash).Run();
 	}
@@ -186,10 +211,13 @@ struct Runner {
 
 		// Chunks already done in an earlier, stopped attempt.
 		Vector<String> done;
-		Stmt q(db, "SELECT idx, sha256 FROM chunks WHERE run = ? AND seq = ? ORDER BY idx");
-		q.Int(1, run).Int(2, seq);
-		while(q.Step() && q.Int(0) == done.GetCount())
-			done.Add(q.Text(1));
+		{
+			Lock l(mx);
+			Stmt q(db, "SELECT idx, sha256 FROM chunks WHERE run = ? AND seq = ? ORDER BY idx");
+			q.Int(1, run).Int(2, seq);
+			while(q.Step() && q.Int(0) == done.GetCount())
+				done.Add(q.Text(1));
+		}
 		int64 count = (size + chunk - 1) / chunk;
 		int next = done.GetCount();
 		if(next > 0) {
@@ -198,9 +226,12 @@ struct Runner {
 			String ignore;
 			if(!out->ReadAt(off, buf, len, ignore) || SHA256String(~buf, (dword)len) != done.Top())
 				next--;
-			Stmt(db, "DELETE FROM chunks WHERE run = ? AND seq = ? AND idx >= ?")
-				.Int(1, run).Int(2, seq).Int(3, next).Run();
-			report.WhenLine(Format("resuming %s at chunk %d of %d", rel, next + 1, count));
+			{
+				Lock l(mx);
+				Stmt(db, "DELETE FROM chunks WHERE run = ? AND seq = ? AND idx >= ?")
+					.Int(1, run).Int(2, seq).Int(3, next).Run();
+			}
+			Line(Format("resuming %s at chunk %d of %d", rel, next + 1, count));
 		}
 
 		// --bwlimit counts what crosses the network; local to local it counts writes.
@@ -236,47 +267,50 @@ struct Runner {
 			// lost in a crash after its rename.
 			if(count > 1)
 				out->Flush();
-			Stmt(db, "INSERT OR REPLACE INTO chunks VALUES (?, ?, ?, ?, ?, ?)")
-				.Int(1, run).Int(2, seq).Int(3, idx).Int(4, off).Int(5, len)
-				.Text(6, SHA256String(~buf, (dword)len)).Run();
-			result.bytes += len;
+			String sha = SHA256String(~buf, (dword)len);
+			{
+				Lock l(mx);
+				Stmt(db, "INSERT OR REPLACE INTO chunks VALUES (?, ?, ?, ?, ?, ?)")
+					.Int(1, run).Int(2, seq).Int(3, idx).Int(4, off).Int(5, len).Text(6, sha).Run();
+				result.bytes += len;
+			}
 			p.done = off + len;
 			p.seconds = Since(t0);
 			if(p.done < p.size)
-				report.WhenProgress(p);
+				Progress(p);
 		}
 		return out->Truncate(size, error);
 	}
 
 	// Copies (or links, or re-creates a symlink) a.from.rel, verified, into place.
-	bool Copy(const Step& s, String& error)
+	bool Copy(Ctx& c, const Step& s, String& error)
 	{
 		const Action& a = s.a;
 		const Entry& e = a.from;
-		TreeFs& from = *fs[a.dir];
-		TreeFs& to = *fs[1 - a.dir];
+		TreeFs& from = *c.fs[a.dir];
+		TreeFs& to = *c.fs[1 - a.dir];
 		String part = PartRel(e.rel, run, s.seq);
 
 		if(a.kind == ActionKind::Link) {
 			if(to.CanHardLink()) {
-				if(!to.HardLink(a.link_to, part, error) || !MakeRoom(a, error) || !to.Rename(part, e.rel, error))
+				if(!to.HardLink(a.link_to, part, error) || !MakeRoom(c, a, error) || !to.Rename(part, e.rel, error))
 					return false;
 				copy_index++;
-				report.WhenLine("linked " + e.rel + " -> " + a.link_to);
+				Line("linked " + e.rel + " -> " + a.link_to);
 				// A new link changes the inode's ctime: refresh the cache for both names.
 				Cache(to, 1 - a.dir, e.rel, e.hash);
 				Cache(to, 1 - a.dir, a.link_to, e.hash);
 				Synced(e.rel, e.hash);
 				return true;
 			}
-			report.WhenLine("hard link written out as a copy (the target cannot hard-link): " + e.rel);
+			Line("hard link written out as a copy (the target cannot hard-link): " + e.rel);
 		}
 		if(e.type == 'l') {
-			if(!to.Symlink(part, e.link, error) || !MakeRoom(a, error) || !to.Rename(part, e.rel, error))
+			if(!to.Symlink(part, e.link, error) || !MakeRoom(c, a, error) || !to.Rename(part, e.rel, error))
 				return false;
-			report.WhenLine("symlink " + e.rel + " -> " + e.link);
+			Line("symlink " + e.rel + " -> " + e.link);
 			if(to.IsLocal())   // SFTP cannot set a symlink's own owner
-				CopyOwner(a.dir, e.rel);
+				CopyOwner(c, a.dir, e.rel);
 			return true;
 		}
 
@@ -286,14 +320,13 @@ struct Runner {
 			return false;
 		String expect = e.hash;
 		if(now.size != e.size || now.mtime_ns != e.mtime_ns || (from.IsLocal() && now.ino != e.ino)) {
-			report.WhenLine("source changed since planning, hashing again: " + e.rel);
+			Line("source changed since planning, hashing again: " + e.rel);
 			if(!from.Hash(e.rel, flags.follow_links, expect, error, report.stop))
 				return false;
 		}
 
-		copy_index++;
 		CopyProgress p;
-		p.index = copy_index;
+		p.index = ++copy_index;
 		p.count = copy_count;
 		p.name = e.rel;
 		p.size = now.size;
@@ -304,8 +337,8 @@ struct Runner {
 		One<TreeFile> out;
 		for(int attempt = 0; attempt <= flags.retries; attempt++) {
 			if(attempt) {
-				report.WhenLine(Format("retry %d of %d in %d s: %s (%s)", attempt, flags.retries,
-				                       flags.retry_wait, e.rel, error));
+				Line(Format("retry %d of %d in %d s: %s (%s)", attempt, flags.retries,
+				            flags.retry_wait, e.rel, error));
 				std::this_thread::sleep_for(std::chrono::seconds(flags.retry_wait));
 			}
 			error.Clear();
@@ -326,8 +359,10 @@ struct Runner {
 		}
 		if(!ok)
 			return false;
-		if(fast)
+		if(fast) {
+			Lock l(mx);
 			result.bytes += now.size;
+		}
 
 		// Read the copy back: it must have the source's SHA-256. The chunked copy
 		// reads it through the handle it wrote with, and sets the attributes there too.
@@ -343,18 +378,18 @@ struct Runner {
 			FileAttrs fa;
 			fa.mode = now.mode;
 			fa.mtime_ns = now.mtime_ns;
-			if(now.uid >= 0 && Owners(1 - a.dir))
-				MapOwner(a.dir, now.uid, now.gid, fa);
+			if(now.uid >= 0 && Owners(c, 1 - a.dir))
+				MapOwner(c, a.dir, now.uid, now.gid, fa);
 			String warn;
 			if(!out->SetAttrs(fa, warn))
-				report.WhenLine("warning: " + warn);
+				Line("warning: " + warn);
 			out.Clear();   // close before the rename
 		}
-		if(!MakeRoom(a, error) || !to.Rename(part, e.rel, error))
+		if(!MakeRoom(c, a, error) || !to.Rename(part, e.rel, error))
 			return false;
 		p.done = p.size;
 		p.seconds = Since(t0);
-		report.WhenProgress(p);
+		Progress(p);
 		Synced(e.rel, expect);
 		if(to.IsLocal())
 			Cache(to, 1 - a.dir, e.rel, expect);
@@ -369,27 +404,111 @@ struct Runner {
 		return true;
 	}
 
-	bool Mkdir(const Action& a, String& error)
+	bool Mkdir(Ctx& c, const Action& a, String& error)
 	{
-		if(!fs[1 - a.dir]->Mkdir(a.from.rel, a.from.mode, error))
+		if(!c.fs[1 - a.dir]->Mkdir(a.from.rel, a.from.mode, error))
 			return false;
-		report.WhenLine("created folder " + a.from.rel);
-		CopyOwner(a.dir, a.from.rel);
+		Line("created folder " + a.from.rel);
+		CopyOwner(c, a.dir, a.from.rel);
 		return true;
 	}
 
-	bool Delete(const Action& a, String& error)
+	bool Delete(Ctx& c, const Action& a, String& error)
 	{
 		// Folders are emptied first (deletes run deepest first) and then removed;
 		// with --safe-delete their files have already moved out.
 		if(flags.safe_delete && a.from.type != 'd')
-			return MoveOut(1 - a.dir, a.from.rel, error);
-		int r = fs[1 - a.dir]->Remove(a.from.rel, a.from.type == 'd', error);
+			return MoveOut(c, 1 - a.dir, a.from.rel, error);
+		int r = c.fs[1 - a.dir]->Remove(a.from.rel, a.from.type == 'd', error);
 		if(r < 0)
 			return false;
-		report.WhenLine(r ? "kept folder " + a.from.rel + ": it still holds excluded files"
-		                  : "deleted " + a.from.rel);
+		Line(r ? "kept folder " + a.from.rel + ": it still holds excluded files"
+		       : "deleted " + a.from.rel);
 		return true;
+	}
+
+	// Records a step as started, does it, records how it went. False when stopped.
+	bool RunStep(Ctx& c, const Step& s)
+	{
+		if(report.Stopping())
+			return false;
+		SetState(s.seq, "in_progress");
+		String error;
+		bool ok = true;
+		switch(s.a.kind) {
+		case ActionKind::Mkdir:  ok = Mkdir(c, s.a, error); break;
+		case ActionKind::Copy:
+		case ActionKind::Link:   ok = Copy(c, s, error); break;
+		case ActionKind::Delete: ok = Delete(c, s.a, error); break;
+		case ActionKind::Conflict: {
+			Lock l(mx);
+			result.conflicts++;
+			report.WhenLine("CONFLICT " + s.a.from.rel + ": " + s.a.note);
+			break;
+		}
+		}
+		if(!ok && (error == "stopped" || report.Stopping())) {
+			SetState(s.seq, "planned");   // not failed: redo it on resume
+			return false;
+		}
+		SetState(s.seq, ok ? "done" : "failed", 0, ok ? String() : error);
+		Lock l(mx);
+		if(ok)
+			result.done++;
+		else {
+			result.failed++;
+			report.WhenLine("FAILED " + s.a.from.rel + ": " + error);
+		}
+		return true;
+	}
+
+	// A worker's own connections for remote sides; local sides are shared.
+	bool Connect(Ctx& c, String& error)
+	{
+		for(int i = 0; i < 2; i++) {
+			if(main.fs[i]->IsLocal()) {
+				c.fs[i] = main.fs[i];
+				continue;
+			}
+			SftpFs& s = c.own[i].Create<SftpFs>(i ? setup.target : setup.source, setup.known_hosts, flags.compress);
+			if(!s.Connect(error))
+				return false;
+			c.fs[i] = &s;
+		}
+		return true;
+	}
+
+	// File copies, on up to --threads threads. False when stopped.
+	bool CopyInParallel(const Vector<const Step*>& todo)
+	{
+		int n = clamp(flags.threads, 1, max(todo.GetCount(), 1));
+		Array<Ctx> extra;
+		for(int t = 1; t < n; t++) {
+			String error;
+			Ctx& c = extra.Add();
+			if(!Connect(c, error)) {
+				extra.Drop();
+				Line("warning: copying with fewer threads, a connection failed: " + error);
+				break;
+			}
+		}
+		if(extra.GetCount())
+			Line(Format("copying with %d threads", extra.GetCount() + 1));
+
+		std::atomic<int> next = 0;
+		std::atomic<bool> halted = false;
+		auto work = [&](Ctx& c) {
+			for(int i; !halted && (i = next++) < todo.GetCount();)
+				if(!RunStep(c, *todo[i]))
+					halted = true;
+		};
+		std::vector<std::thread> threads;
+		for(Ctx& c : extra)
+			threads.emplace_back(work, std::ref(c));
+		work(main);
+		for(std::thread& t : threads)
+			t.join();
+		return !halted;
 	}
 
 	bool Execute()
@@ -424,51 +543,34 @@ struct Runner {
 			s.a.replaces = q.Int(16);
 		}
 		result.planned = steps.GetCount();
-		// Links count too: on a target that cannot hard-link they are copied.
-		for(const Step& s : steps)
-			if((s.a.kind == ActionKind::Copy || s.a.kind == ActionKind::Link) && s.a.from.type == 'f') {
-				copy_count++;
-				if(s.state == "done")
-					copy_index++;
-			}
 
+		// Four phases, in plan order within each: folders (parents first) and
+		// conflicts; file copies, in parallel; hard links, which need their first
+		// copy; deletes, deepest first.
+		Vector<const Step*> phase[4];
 		for(const Step& s : steps) {
+			// Links count too: on a target that cannot hard-link they are copied.
+			bool counts = (s.a.kind == ActionKind::Copy || s.a.kind == ActionKind::Link) && s.a.from.type == 'f';
+			copy_count += counts;
 			if(s.state == "done") {
 				result.done++;
+				copy_index += counts;
 				continue;
 			}
-			if(report.Stopping()) {
-				result.stopped = true;
-				break;
-			}
-			SetState(s.seq, "in_progress");
-			String error;
-			bool ok = true;
-			switch(s.a.kind) {
-			case ActionKind::Mkdir:  ok = Mkdir(s.a, error); break;
-			case ActionKind::Copy:
-			case ActionKind::Link:   ok = Copy(s, error); break;
-			case ActionKind::Delete: ok = Delete(s.a, error); break;
-			case ActionKind::Conflict:
-				result.conflicts++;
-				report.WhenLine("CONFLICT " + s.a.from.rel + ": " + s.a.note);
-				break;
-			}
-			if(!ok && (error == "stopped" || report.Stopping())) {
-				SetState(s.seq, "planned");   // not failed: redo it on resume
-				result.stopped = true;
-				break;
-			}
-			if(ok) {
-				SetState(s.seq, "done");
-				result.done++;
-			}
-			else {
-				SetState(s.seq, "failed", 0, error);
-				result.failed++;
-				report.WhenLine("FAILED " + s.a.from.rel + ": " + error);
-			}
+			int p = s.a.kind == ActionKind::Copy ? 1 : s.a.kind == ActionKind::Link ? 2
+			      : s.a.kind == ActionKind::Delete ? 3 : 0;
+			phase[p].Add(&s);
 		}
+		bool going = true;
+		for(int p = 0; p < 4 && going; p++)
+			if(p == 1)
+				going = CopyInParallel(phase[1]);
+			else
+				for(const Step *s : phase[p])
+					if(!(going = RunStep(main, *s)))
+						break;
+		result.stopped = !going;
+
 		Stmt(db, "UPDATE runs SET state = ?, finished = ? WHERE id = ?")
 			.Text(1, result.stopped ? "stopped" : result.failed ? "failed" : "done")
 			.Int(2, GetUTCSeconds(GetSysTime())).Int(3, run).Run();
@@ -580,9 +682,9 @@ bool RunSync(const SyncSetup& setup, SyncReport& report, SyncResult& result, Str
 	key_flags.dry_run = false;
 	String key = Join(FlagArgs(key_flags), " ");
 
-	Runner r(db, report, result, flags);
+	Runner r(db, report, result, setup);
 	for(int i = 0; i < 2; i++) {
-		r.fs[i] = ~side[i];
+		r.main.fs[i] = ~side[i];
 		r.ids[i] = side[i]->Id();
 	}
 	const String& src = r.ids[0];
