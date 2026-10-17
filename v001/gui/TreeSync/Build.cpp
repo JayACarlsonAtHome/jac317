@@ -3,7 +3,8 @@
 // builds its command lines, runs them one after another as child processes,
 // streams their output and sums up how each went.
 //
-//   Screen 1  Options + Start   (choices saved to ~/.config/treesync/build)
+//   Screen 1  Options + Start   (choices saved to ~/.config/treesync/build); also the
+//                               first screen when TreeSync starts, unless switched off
 //   Screen 2  Running           (each step's state, elapsed time, live output, Stop)
 //   Screen 3  Results           (start : stop : duration per step, the j5c Results.txt layout;
 //                                with Compare, a table of the compilers side by side)
@@ -54,6 +55,7 @@ class BuildWindow : public TopWindow {
 	LineEdit  toolchain;
 	Label     command;
 	Button    start, close1;
+	Option    at_start;
 
 	// Screen 2
 	ArrayCtrl steps_list;
@@ -65,7 +67,7 @@ class BuildWindow : public TopWindow {
 	Splitter  split3;
 	ArrayCtrl compare_list;
 	LineEdit  results;
-	Button    back, close3;
+	Button    back, close3, restart;
 
 	Vector<BuildStep> steps;
 	int               step = -1;
@@ -91,6 +93,9 @@ class BuildWindow : public TopWindow {
 	String CompareText();
 
 public:
+	bool startup = false;              // the page TreeSync opens on: Continue instead of Close
+	bool restart_wanted = false;       // this program was rebuilt and the user wants the new one
+	void Startup();
 	bool auto_run = false;             // --build-run: start at once, close when done
 	void Run()                         { Start(); }
 	void Snap(const String& folder);   // --screenshot: the three screens as PNGs
@@ -137,6 +142,8 @@ BuildWindow::BuildWindow()
 	s1.Add(command.HSizePosZ(8, 8).BottomPosZ(42, 84));   // up to 5 steps, one line each
 	s1.Add(start.SetLabel("Start").RightPosZ(116, 100).BottomPosZ(8, 28));
 	s1.Add(close1.SetLabel("Close").RightPosZ(8, 100).BottomPosZ(8, 28));
+	at_start.SetLabel("Show this page when TreeSync starts");
+	s1.Add(at_start.LeftPosZ(8, 400).BottomPosZ(10, 24));
 
 	// Screen 2: running
 	steps_list.AddColumn("Step", 40);
@@ -163,6 +170,8 @@ BuildWindow::BuildWindow()
 	s3.Add(split3.HSizePosZ(8, 8).VSizePosZ(8, 44));
 	s3.Add(back.SetLabel("Back").LeftPosZ(8, 100).BottomPosZ(8, 28));
 	s3.Add(close3.SetLabel("Close").RightPosZ(8, 100).BottomPosZ(8, 28));
+	s3.Add(restart.SetLabel("Restart TreeSync (new build)").RightPosZ(116, 220).BottomPosZ(8, 28));
+	restart.Hide();
 
 	compiler << [this] { ShowCommand(); };
 	type << [this] { ShowCommand(); };
@@ -174,6 +183,8 @@ BuildWindow::BuildWindow()
 	close1 << [this] { Close(); };
 	close3 << [this] { Close(); };
 	stop << [this] { Stop(); };
+	restart << [this] { restart_wanted = true; Close(); };
+	at_start << [this] { Save(); };
 	back << [this] { Screen(1); };
 
 	Load();
@@ -252,6 +263,7 @@ void BuildWindow::Load()
 	tsan = false;
 	clean = false;
 	compare = false;
+	at_start = true;
 	for(String line : Split(LoadFile(BuildSettingsPath()), '\n')) {
 		String key = line.Left(max(line.Find('='), 0)), value = line.Mid(line.Find('=') + 1);
 		if(key == "compiler" && (value == "gcc" || value == "clang" || value == "both"))
@@ -266,6 +278,8 @@ void BuildWindow::Load()
 			clean = value == "1";
 		else if(key == "compare")
 			compare = value == "1";
+		else if(key == "at_start")
+			at_start = value == "1";
 	}
 }
 
@@ -275,7 +289,8 @@ void BuildWindow::Save()
 	RealizePath(path);
 	SaveFile(path, "compiler=" + AsString(~compiler) + "\ntype=" + AsString(~type) +
 	               "\ntests=" + AsString((int)tests) + "\ntsan=" + AsString((int)tsan) +
-	               "\nclean=" + AsString((int)clean) + "\ncompare=" + AsString((int)compare) + "\n");
+	               "\nclean=" + AsString((int)clean) + "\ncompare=" + AsString((int)compare) +
+	               "\nat_start=" + AsString((int)at_start) + "\n");
 }
 
 void BuildWindow::Start()
@@ -421,7 +436,9 @@ void BuildWindow::Finish()
 		text << "\n\n" << CompareText();
 	String kept = text;   // for Build-Results.txt: without the note below
 	if(rebuilt_me)
-		text << "\n\nThis program (" << here << ") was rebuilt: close TreeSync and start it again to use the new build.";
+		text << "\n\nThis program (" << here << ") was rebuilt: " <<
+		        (startup ? "Restart TreeSync to use the new build." : "close TreeSync and start it again to use the new build.");
+	restart.Show(rebuilt_me && startup && !auto_run);
 	results <<= text;
 	// Kept: Build-Results.txt in the logs folder, next to the sync runs' Results.txt.
 	String path = AppendFileName(LogFolder(DefaultDbPath()), "Build-Results.txt");
@@ -541,9 +558,40 @@ void BuildWindow::Snap(const String& folder)
 	Screen(1);
 }
 
+void BuildWindow::Startup()
+{
+	startup = true;
+	Title("TreeSync - compiler and test options");
+	start.SetLabel("Build and test");
+	start.RightPosZ(196, 140);
+	close1.SetLabel("Continue to TreeSync").RightPosZ(8, 180);
+	close3.SetLabel("Continue to TreeSync").RightPosZ(8, 180);
+	restart.RightPosZ(196, 220);
+}
+
 void ShowBuild()
 {
 	BuildWindow().Execute();
+}
+
+bool BuildPageAtStart()
+{
+	if(BuildScript().IsEmpty())   // not run from a build tree: nothing to build
+		return false;
+	for(const String& line : Split(LoadFile(BuildSettingsPath()), '\n'))
+		if(line == "at_start=0")
+			return false;
+	return true;
+}
+
+// The first screen: compiler and test options, Build and test or Continue. True when
+// this program was rebuilt and the user chose to restart into the new build.
+bool BuildStartPage()
+{
+	BuildWindow w;
+	w.Startup();
+	w.Execute();
+	return w.restart_wanted;
 }
 
 // --build-run (a developer aid): the saved choices, built and tested for real.
@@ -563,6 +611,11 @@ void BuildRun()
 
 void BuildScreenshots(const String& folder)
 {
-	BuildWindow w;
-	w.Snap(folder);
+	{
+		BuildWindow w;
+		w.Snap(folder);
+	}
+	BuildWindow w;   // as the first screen when TreeSync starts
+	w.Startup();
+	SaveScreenshot(w, AppendFileName(folder, "build-startup.png"));
 }

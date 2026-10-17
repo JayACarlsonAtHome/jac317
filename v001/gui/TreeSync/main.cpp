@@ -265,6 +265,18 @@ GUI_APP_MAIN
 			Exclamation("The saved settings could not be read; starting with the defaults.&&[C " + DeQtf(why) + "]");
 	}
 	save_settings = true;
+	// First screen: compiler and test options (like jac313's runner); then the sync
+	// window. If this program was rebuilt there, start the new build in its place.
+	if(BuildPageAtStart() && BuildStartPage()) {
+		String exe = GetExeFilePath();
+		std::vector<char *> argv;
+		argv.push_back(const_cast<char *>(~exe));
+		for(const String& a : CommandLine())
+			argv.push_back(const_cast<char *>(~a));
+		argv.push_back(nullptr);
+		execv(exe, argv.data());
+		Exclamation("Could not restart " + DeQtf(exe) + ": " + DeQtf(strerror(errno)));
+	}
 	WarnNotRoot();
 	for(TreeEndpoint *e : { &setup.source, &setup.target })
 		if(!e->remote && !PathAllowed(e->path)) {

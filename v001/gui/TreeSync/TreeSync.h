@@ -106,6 +106,8 @@ void   ShowLogFile(const String& path);
 void   ShowBuild();                                // Build.cpp: build and test, like jac313's runner
 void   BuildScreenshots(const String& folder);
 void   BuildRun();
+bool   BuildPageAtStart();                         // the options page is the first screen
+bool   BuildStartPage();                           // shows it; true: restart into a new build
 String LatestLog(const String& db_path);
 
 // Messages.cpp: core messages shown in a dialog and printed to the terminal.
