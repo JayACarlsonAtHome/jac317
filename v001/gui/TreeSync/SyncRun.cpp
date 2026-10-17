@@ -16,8 +16,98 @@ extern char **environ;
 
 void TreeSyncWindow::Log(const String& line)
 {
-	log.Insert(log.GetLength(), line + "\n");
+	LogText(line + "\n");
+}
+
+// The pane only shows what is happening now: the newest 100 lines. Every line is
+// in the run's log file (View > Show log file), so the pane never grows and stays fast.
+static const int LOG_KEEP = 100;
+
+void TreeSyncWindow::LogText(const String& text)
+{
+	log.Insert(log.GetLength(), text);
+	if(log.GetLineCount() > LOG_KEEP + LOG_KEEP / 2)   // trim in steps, not on every line
+		log.Remove(0, log.GetPos(log.GetLineCount() - LOG_KEEP));
 	log.SetCursor(log.GetLength());
+}
+
+// Takes everything waiting in the inbox at once: log lines in one append, and of
+// the progress lines only the newest state of each bar (older ones were never seen).
+void TreeSyncWindow::Drain()
+{
+	Vector<String> lines;
+	{
+		std::lock_guard<std::mutex> l(inbox_m);
+		lines = pick(inbox);
+		inbox_posted = false;
+	}
+	String text;
+	VectorMap<String, String> latest;   // progress key -> its newest line
+	Vector<String> finished;            // @file lines of files that finished: all of them count
+	for(const String& line : lines) {
+		if(line.StartsWith("@file\t")) {
+			Vector<String> f = Split(line, '\t', false);
+			if(f.GetCount() >= 4 && ScanInt64(f[2]) >= ScanInt64(f[3]))
+				finished.Add(line);
+			else if(f.GetCount() >= 2)
+				latest.GetAdd("file " + f[1]) = line;
+		}
+		else if(line.StartsWith("@stage\t")) {
+			Vector<String> f = Split(line, '\t', false);
+			latest.GetAdd("stage " + (f.GetCount() > 1 ? f[1] : String())) = line;
+		}
+		else if(line.StartsWith("@overall\t"))
+			latest.GetAdd("overall") = line;
+		else
+			text << line << "\n";
+	}
+	if(text.GetCount())
+		LogText(text);
+	for(const String& line : latest)
+		ShowProgress(line);
+	for(const String& line : finished)
+		ShowProgress(line);   // after the in-flight updates, so finished rows go
+}
+
+// --bench-log (a developer aid): feeds n lines, shaped like a big run's output, through
+// the same path as treesync-cli's (inbox, Drain, log pane, progress), from a thread,
+// and runs the event loop until they are all shown.
+double TreeSyncWindow::BenchLog(int n)
+{
+	ProgressVisible(true);
+	auto t0 = std::chrono::steady_clock::now();
+	std::atomic<bool> fed = false;
+	std::thread feeder([this, n, &fed] {
+		for(int i = 0; i < n; i++) {
+			String line;
+			switch(i % 4) {
+			case 0: line = Format("[%5d/%d] some/folder/file %d.txt                       100%% |  12.0 MiB/s |  1.0 KiB |  00m00s", i, n, i); break;
+			case 1: line = Format("@file\t%d\t512\t1024\t0.10\t%d\t%d\tsome/folder/file %d.txt", i, i, n, i); break;
+			case 2: line = Format("@stage\t0\t%d\t%d\t0\tsome/folder", i, n); break;
+			default: line = Format("@overall\t%d\t%d", i * 1024, n * 1024); break;
+			}
+			std::lock_guard<std::mutex> l(inbox_m);
+			inbox.Add(line);
+			if(!inbox_posted) {
+				inbox_posted = true;
+				PostCallback([this] { Drain(); });
+			}
+		}
+		fed = true;
+	});
+	for(;;) {
+		Ctrl::ProcessEvents();
+		bool empty;
+		{
+			std::lock_guard<std::mutex> l(inbox_m);
+			empty = inbox.IsEmpty() && !inbox_posted;
+		}
+		if(fed && empty)
+			break;
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+	feeder.join();
+	return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
 }
 
 void TreeSyncWindow::DemoProgress()
@@ -192,10 +282,12 @@ void TreeSyncWindow::StartSync(bool dry_run)
 			while((nl = pending.Find('\n')) >= 0) {
 				String line = pending.Left(nl);
 				pending.Remove(0, nl + 1);
-				if(line.StartsWith("@file\t") || line.StartsWith("@overall\t") || line.StartsWith("@stage\t"))
-					PostCallback([this, line] { ShowProgress(line); });
-				else
-					PostCallback([this, line] { Log(line); });
+				std::lock_guard<std::mutex> l(inbox_m);
+				inbox.Add(line);
+				if(!inbox_posted) {   // one callback for the whole batch
+					inbox_posted = true;
+					PostCallback([this] { Drain(); });
+				}
 			}
 		}
 		close(fd);
@@ -219,6 +311,7 @@ void TreeSyncWindow::StopSync()
 
 void TreeSyncWindow::SyncFinished(int code)
 {
+	Drain();   // whatever is still waiting
 	if(child_stdin >= 0)
 		close(child_stdin);
 	child_stdin = -1;

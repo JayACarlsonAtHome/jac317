@@ -10,6 +10,7 @@
 // so the layout can be checked without a screen.
 void SaveScreenshot(Ctrl& c, const String& path);
 
+#include <mutex>
 #include <thread>
 #include <sys/types.h>
 
@@ -174,6 +175,14 @@ class TreeSyncWindow : public TopWindow {
 	std::thread reader;
 
 	void Log(const String& line);
+	void LogText(const String& text);   // several lines at once; the pane keeps the newest 100
+
+	// Lines from treesync-cli wait here; the GUI takes them in batches (Drain), so
+	// a run with tens of thousands of lines never floods the event queue.
+	std::mutex     inbox_m;
+	Vector<String> inbox;
+	bool           inbox_posted = false;
+	void Drain();
 	void ShowProgress(const String& line);   // an @file or @overall line from treesync-cli
 	void ProgressVisible(bool on);
 	void StartSync(bool dry_run);
@@ -192,6 +201,7 @@ class TreeSyncWindow : public TopWindow {
 public:
 	void SetSetup(const SyncSetup& s);
 	void DemoProgress();   // --screenshot: the progress boxes with sample values
+	double BenchLog(int n);   // --bench-log: seconds to take in n lines of child output
 	void Close() override;
 
 	TreeSyncWindow();

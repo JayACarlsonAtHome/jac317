@@ -192,9 +192,14 @@ GUI_APP_MAIN
 {
 	Vector<String> args = clone(CommandLine());
 	String shots;
+	int bench = 0;
 	for(int i = args.GetCount() - 1; i >= 0; i--)
 		if(args[i].StartsWith("--screenshot=")) {
 			shots = args[i].Mid(13);
+			args.Remove(i);
+		}
+		else if(args[i].StartsWith("--bench-log=")) {
+			bench = ScanInt(args[i].Mid(12));
 			args.Remove(i);
 		}
 
@@ -207,6 +212,14 @@ GUI_APP_MAIN
 	case PARSE_ERROR:
 		Cerr() << ToLower(GetExeTitle()) << ": " << error << "\nTry '--help' for more information.\n";
 		SetExitCode(2);
+		return;
+	}
+	if(bench > 0) {   // a developer aid: how fast the GUI takes in a big run's output
+		TreeSyncWindow w;
+		w.OpenMain();
+		double t = w.BenchLog(bench);
+		Cout() << Format("%d lines taken in %.2f s (%.0f lines/s)\n", bench, t, bench / max(t, 0.001));
+		w.Close();
 		return;
 	}
 	if(shots.GetCount()) {   // draw the windows offscreen into PNGs and quit
