@@ -237,6 +237,64 @@ bool LocalFs::Rename(const String& from, const String& to, String& error)
 	return ok;
 }
 
+// mkdir -p for an absolute path, one component at a time (any length). Returns an
+// O_RDONLY fd of the last folder, or -1.
+static int MakeDirsAt(const String& path, String& error)
+{
+	int fd = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+	for(const String& part : Split(path, '/')) {
+		if(fd < 0)
+			break;
+		if(mkdirat(fd, part, 0755) != 0 && errno != EEXIST) {
+			error = Errno("cannot create folder " + part + " in " + path);
+			close(fd);
+			return -1;
+		}
+		int next = openat(fd, part, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+		close(fd);
+		fd = next;
+	}
+	if(fd < 0 && error.IsEmpty())
+		error = Errno("cannot open " + path);
+	return fd;
+}
+
+bool LocalFs::MoveOut(const String& rel, const String& dest, String& moved_to, String& error)
+{
+	int sp = ParentFd(rel);
+	if(sp < 0) {
+		error = Errno("cannot open the folder of " + rel);
+		return false;
+	}
+	String name = GetFileName(rel);
+	struct stat st;
+	if(fstatat(sp, name, &st, AT_SYMLINK_NOFOLLOW) != 0 && errno == ENOENT) {
+		close(sp);   // already moved (a resumed run)
+		moved_to.Clear();
+		return true;
+	}
+	int dp = MakeDirsAt(GetFileFolder(dest), error);
+	if(dp < 0) {
+		close(sp);
+		return false;
+	}
+	// dest, or dest.1, dest.2, ... whichever is free.
+	String base = GetFileName(dest), cand = base;
+	for(int n = 1; fstatat(dp, cand, &st, AT_SYMLINK_NOFOLLOW) == 0; n++)
+		cand = base + "." + AsString(n);
+	bool ok = renameat(sp, name, dp, cand) == 0;
+	if(!ok)
+		error = errno == EXDEV
+		      ? "cannot move " + rel + " to " + GetFileFolder(dest) + ": it is on a different disk; "
+		        "use --safe-delete-dir on the same disk, or --no-safe-delete"
+		      : Errno("cannot move " + rel + " to " + GetFileFolder(dest));
+	else
+		moved_to = AppendFileName(GetFileFolder(dest), cand);
+	close(sp);
+	close(dp);
+	return ok;
+}
+
 bool LocalFs::Chown(const String& rel, int64 uid, int64 gid, String& error)
 {
 	return AtParent(*this, rel, error, [&](int dp, const String& name) {

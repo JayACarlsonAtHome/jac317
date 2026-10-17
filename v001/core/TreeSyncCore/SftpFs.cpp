@@ -725,6 +725,45 @@ bool SftpFs::LoadIds(IdTable& t, String& error)
 	return true;
 }
 
+String SftpFs::RootPath() const
+{
+	return impl->root;
+}
+
+bool SftpFs::MoveOut(const String& rel, const String& dest, String& moved_to, String& error)
+{
+	Impl& m = *impl;
+	LIBSSH2_SFTP_ATTRIBUTES a;
+	String from = m.P(rel);
+	if(!m.Attrs(from, false, a)) {
+		if(m.Fx() == LIBSSH2_FX_NO_SUCH_FILE) {   // already moved (a resumed run)
+			moved_to.Clear();
+			return true;
+		}
+		error = m.Err("cannot stat " + from);
+		return false;
+	}
+	String path;
+	for(const String& p : Split(GetFileFolder(dest), '/')) {
+		path << "/" << p;
+		if(!(m.Attrs(path, true, a) && LIBSSH2_SFTP_S_ISDIR(a.permissions)) &&
+		   libssh2_sftp_mkdir(m.sftp, path, 0755) != 0) {
+			error = m.Err("cannot create folder " + path);
+			return false;
+		}
+	}
+	String cand = dest;
+	for(int n = 1; m.Attrs(cand, false, a); n++)
+		cand = dest + "." + AsString(n);
+	if(libssh2_sftp_posix_rename(m.sftp, from, cand) != 0) {
+		error = m.Err("cannot move " + from + " to " + cand) +
+		        " (if " + GetFileFolder(dest) + " is on a different disk, use --safe-delete-dir on the same disk, or --no-safe-delete)";
+		return false;
+	}
+	moved_to = cand;
+	return true;
+}
+
 bool SftpFs::CanChown() const
 {
 	return impl->e.user == "root";

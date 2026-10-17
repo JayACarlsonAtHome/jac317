@@ -428,12 +428,36 @@ static void TestEngineMirror(const String& root)
 	EXPECT(FileExists(dst + "/extra.txt"), "--copy keeps extra target file");
 	s.flags.mode = SyncMode::Mirror;
 	Sync(s, r);
-	EXPECT(!FileExists(dst + "/extra.txt"), "--mirror deletes extra target file");
+	EXPECT(!FileExists(dst + "/extra.txt"), "--mirror removes extra target file");
+	EXPECT(LoadFile(dst + ".old/extra.txt") == "extra\n", "--safe-delete moved it to <target>.old");
 
-	// A changed file is copied again.
+	// A changed file is copied again; the version it replaces moves out.
 	Put(src + "/a b.txt", "changed\n");
 	Sync(s, r);
 	EXPECT(LoadFile(dst + "/a b.txt") == "changed\n", "changed file copied");
+	EXPECT(LoadFile(dst + ".old/a b.txt") == "hello\n", "--safe-delete kept the replaced version");
+
+	// The same name again: numbered, nothing overwritten in .old.
+	Put(dst + "/extra.txt", "extra 2\n");
+	Sync(s, r);
+	EXPECT(LoadFile(dst + ".old/extra.txt") == "extra\n" && LoadFile(dst + ".old/extra.txt.1") == "extra 2\n",
+	       "second extra.txt moved to extra.txt.1");
+
+	// --no-safe-delete really deletes.
+	Put(dst + "/extra.txt", "extra 3\n");
+	s.flags.safe_delete = false;
+	Sync(s, r);
+	EXPECT(!FileExists(dst + "/extra.txt") && !FileExists(dst + ".old/extra.txt.2"), "--no-safe-delete deletes");
+	s.flags.safe_delete = true;
+
+	// The .old folder may not be inside either tree.
+	{
+		SyncSetup bad = s;
+		bad.safe_delete_dir = dst + "/old";
+		SyncReport rep;
+		String err;
+		EXPECT(!RunSync(bad, rep, r, err) && err.Find("outside both trees") >= 0, "--safe-delete-dir inside a tree refused: " + err);
+	}
 
 	// --no-hard-links writes each name out as its own file.
 	String dst2 = root + "/dst-no-links";
@@ -518,6 +542,8 @@ static void TestEngineMerge(const String& root)
 	Sync(s, r);
 	EXPECT(r.conflicts == 1 && LoadFile(a + "/same.txt") == "both 1\n" && LoadFile(b + "/same.txt") == "both 2\n",
 	       Format("merge: changed on both sides is a conflict, nothing overwritten (%d)", r.conflicts));
+	EXPECT(LoadFile(b + ".old/same.txt") == "same\n" && LoadFile(a + ".old/same.txt") == "changed in a\n",
+	       "merge: replaced versions on both sides kept in their .old folders");
 }
 
 static void TestEngineRefusals(const String& root)

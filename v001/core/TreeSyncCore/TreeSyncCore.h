@@ -49,6 +49,7 @@ struct SyncFlags {
 	bool   compress = false;         // zlib on SSH connections
 	bool   preserve_owner = true;    // copy owner and group, by name (where we may)
 	bool   numeric_ids = false;      // ...by number instead
+	bool   safe_delete = true;       // move deleted and replaced files to <target>.old
 	bool   include_same = false;
 	bool   skip_older = false;
 	bool   skip_newer = false;
@@ -79,7 +80,7 @@ struct IntOption {
 	int min, max;
 };
 
-constexpr int BOOL_OPTION_COUNT = 14;
+constexpr int BOOL_OPTION_COUNT = 15;
 constexpr int INT_OPTION_COUNT = 5;
 extern const BoolOption BOOL_OPTIONS[];
 extern const IntOption  INT_OPTIONS[];
@@ -90,6 +91,7 @@ struct SyncSetup {
 	SyncFlags    flags;
 	String       db;              // --db=PATH; empty = DefaultDbPath()
 	String       known_hosts;     // --known-hosts=FILE; empty = ~/.ssh/known_hosts
+	String       safe_delete_dir; // --safe-delete-dir=PATH on the target side; empty = <target>.old
 	bool         fresh = false;   // --fresh: do not resume an unfinished run
 };
 

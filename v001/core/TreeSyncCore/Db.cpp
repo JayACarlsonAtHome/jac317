@@ -7,7 +7,7 @@ static const char *SCHEMA = R"(
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
-INSERT OR IGNORE INTO meta VALUES ('schema', '1');
+INSERT OR IGNORE INTO meta VALUES ('schema', '2');
 CREATE TABLE IF NOT EXISTS files (
 	root TEXT, rel TEXT, type TEXT,
 	dev INTEGER, ino INTEGER, nlink INTEGER, size INTEGER,
@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE TABLE IF NOT EXISTS actions (
 	run INTEGER, seq INTEGER, kind TEXT, dir INTEGER, rel TEXT, type TEXT, link TEXT, link_to TEXT,
 	size INTEGER, sha256 TEXT, dev INTEGER, ino INTEGER, mtime_ns INTEGER, ctime_ns INTEGER,
-	mode INTEGER, note TEXT, state TEXT, bytes INTEGER, error TEXT,
+	mode INTEGER, note TEXT, state TEXT, bytes INTEGER, error TEXT, replaces INTEGER DEFAULT 0,
 	PRIMARY KEY (run, seq));
 CREATE TABLE IF NOT EXISTS chunks (
 	run INTEGER, seq INTEGER, idx INTEGER, offset INTEGER, length INTEGER, sha256 TEXT,
@@ -44,6 +44,16 @@ bool Db::Open(const String& path, String& error)
 		error = "cannot create tables in " + path + ": " + Error();
 		Close();
 		return false;
+	}
+	// Schema 2: actions.replaces. Older databases get the column added.
+	bool v1;
+	{
+		Stmt v(*this, "SELECT value FROM meta WHERE key = 'schema'");
+		v1 = v.Step() && v.Text(0) == "1";
+	}   // finalize before altering the schema
+	if(v1) {
+		Exec("ALTER TABLE actions ADD COLUMN replaces INTEGER DEFAULT 0");
+		Exec("UPDATE meta SET value = '2' WHERE key = 'schema'");
 	}
 	return true;
 }

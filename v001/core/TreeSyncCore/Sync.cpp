@@ -60,6 +60,7 @@ struct Runner {
 	int64         run = 0;
 	int           copy_count = 0, copy_index = 0;
 	Clock::time_point started = Clock::now();
+	String        old_roots[2];   // --safe-delete: where each side's deleted/replaced files go
 	IdTable       id_tables[2];
 	bool          ids_loaded = false;
 	bool          owner_note[2] = {};
@@ -143,6 +144,23 @@ struct Runner {
 			report.WhenLine("warning: " + error);
 	}
 
+	// --safe-delete: move what is at rel on side `side` out to its .old tree.
+	bool MoveOut(int side, const String& rel, String& error)
+	{
+		String moved;
+		if(!fs[side]->MoveOut(rel, old_roots[side] + "/" + rel, moved, error))
+			return false;
+		if(moved.GetCount())
+			report.WhenLine("moved " + rel + " to " + moved);
+		return true;
+	}
+
+	// Makes room at rel for a new version: the old one moves out if --safe-delete.
+	bool MakeRoom(const Action& a, String& error)
+	{
+		return !(a.replaces && flags.safe_delete) || MoveOut(1 - a.dir, a.from.rel, error);
+	}
+
 	void Synced(const String& rel, const String& hash)
 	{
 		Stmt(db, "INSERT OR REPLACE INTO synced VALUES (?, ?, ?, ?)")
@@ -219,7 +237,7 @@ struct Runner {
 
 		if(a.kind == ActionKind::Link) {
 			if(to.CanHardLink()) {
-				if(!to.HardLink(a.link_to, part, error) || !to.Rename(part, e.rel, error))
+				if(!to.HardLink(a.link_to, part, error) || !MakeRoom(a, error) || !to.Rename(part, e.rel, error))
 					return false;
 				copy_index++;
 				report.WhenLine("linked " + e.rel + " -> " + a.link_to);
@@ -232,7 +250,7 @@ struct Runner {
 			report.WhenLine("hard link written out as a copy (the target cannot hard-link): " + e.rel);
 		}
 		if(e.type == 'l') {
-			if(!to.Symlink(part, e.link, error) || !to.Rename(part, e.rel, error))
+			if(!to.Symlink(part, e.link, error) || !MakeRoom(a, error) || !to.Rename(part, e.rel, error))
 				return false;
 			report.WhenLine("symlink " + e.rel + " -> " + e.link);
 			if(to.IsLocal())   // SFTP cannot set a symlink's own owner
@@ -310,7 +328,7 @@ struct Runner {
 				report.WhenLine("warning: " + warn);
 			out.Clear();   // close before the rename
 		}
-		if(!to.Rename(part, e.rel, error))
+		if(!MakeRoom(a, error) || !to.Rename(part, e.rel, error))
 			return false;
 		p.done = p.size;
 		p.seconds = Since(t0);
@@ -340,6 +358,10 @@ struct Runner {
 
 	bool Delete(const Action& a, String& error)
 	{
+		// Folders are emptied first (deletes run deepest first) and then removed;
+		// with --safe-delete their files have already moved out.
+		if(flags.safe_delete && a.from.type != 'd')
+			return MoveOut(1 - a.dir, a.from.rel, error);
 		int r = fs[1 - a.dir]->Remove(a.from.rel, a.from.type == 'd', error);
 		if(r < 0)
 			return false;
@@ -352,7 +374,7 @@ struct Runner {
 	{
 		Vector<Step> steps;
 		Stmt q(db, "SELECT seq, kind, dir, rel, type, link, link_to, size, sha256, dev, ino, "
-		           "mtime_ns, ctime_ns, mode, note, state FROM actions WHERE run = ? ORDER BY seq");
+		           "mtime_ns, ctime_ns, mode, note, state, replaces FROM actions WHERE run = ? ORDER BY seq");
 		q.Int(1, run);
 		while(q.Step()) {
 			Step& s = steps.Add();
@@ -377,6 +399,7 @@ struct Runner {
 			e.mode = (int)q.Int(13);
 			s.a.note = q.Text(14);
 			s.state = q.Text(15);
+			s.a.replaces = q.Int(16);
 		}
 		result.planned = steps.GetCount();
 		// Links count too: on a target that cannot hard-link they are copied.
@@ -526,6 +549,29 @@ bool RunSync(const SyncSetup& setup, SyncReport& report, SyncResult& result, Str
 	const String& src = r.ids[0];
 	const String& dst = r.ids[1];
 
+	// --safe-delete: <side>.old next to each tree, or --safe-delete-dir for the target.
+	for(int i = 0; i < 2; i++) {
+		r.old_roots[i] = side[i]->RootPath() + ".old";
+		if(i == 1 && setup.safe_delete_dir.GetCount())
+			r.old_roots[i] = setup.target.remote ? setup.safe_delete_dir : CanonicalPath(setup.safe_delete_dir);
+	}
+	// Each .old folder is on its own side's machine; it can only meet the other
+	// tree when both trees are local.
+	bool both_local = side[0]->IsLocal() && side[1]->IsLocal();
+	if(flags.safe_delete)
+		for(int i = 0; i < 2; i++) {
+			const String& old = r.old_roots[i];
+			for(int t = 0; t < 2; t++)
+				if((t == i || both_local) && (IsUnder(old, side[t]->RootPath()) || IsUnder(side[t]->RootPath(), old))) {
+					error = "--safe-delete folder " + old + " must be outside both trees";
+					return false;
+				}
+			if(side[i]->IsLocal() && !PathAllowed(old)) {
+				error = RefusedPathMessage(old);
+				return false;
+			}
+		}
+
 	// An unfinished run for the same trees and switches: continue it.
 	if(!setup.fresh && !flags.dry_run) {
 		Stmt q(db, "SELECT id FROM runs WHERE source = ? AND target = ? AND args = ? "
@@ -596,6 +642,9 @@ bool RunSync(const SyncSetup& setup, SyncReport& report, SyncResult& result, Str
 			result.plan.Add(line);
 			report.WhenLine("would " + line);
 		}
+		if(flags.safe_delete)
+			report.WhenLine("deleted and replaced files would move to " + r.old_roots[1] +
+			                (flags.mode == SyncMode::Merge ? " and " + r.old_roots[0] : String()));
 		report.WhenLine(Format("dry run: %d actions, nothing changed", plan.GetCount()));
 		return true;
 	}
@@ -605,14 +654,16 @@ bool RunSync(const SyncSetup& setup, SyncReport& report, SyncResult& result, Str
 	Stmt(db, "INSERT INTO runs (started, source, target, args, state) VALUES (?, ?, ?, ?, 'running')")
 		.Int(1, GetUTCSeconds(GetSysTime())).Text(2, src).Text(3, dst).Text(4, key).Run();
 	r.run = result.run = db.LastId();
-	Stmt ins(db, "INSERT INTO actions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'planned', 0, NULL)");
+	Stmt ins(db, "INSERT INTO actions (run, seq, kind, dir, rel, type, link, link_to, size, sha256, dev, ino, "
+	             "mtime_ns, ctime_ns, mode, note, state, bytes, error, replaces) "
+	             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'planned', 0, NULL, ?)");
 	for(int i = 0; i < plan.GetCount(); i++) {
 		const Action& a = plan[i];
 		const Entry& e = a.from;
 		ins.Int(1, r.run).Int(2, i).Text(3, KindName(a.kind)).Int(4, a.dir).Text(5, e.rel)
 		   .Text(6, String(e.type, 1)).Text(7, e.link).Text(8, a.link_to).Int(9, e.size)
 		   .Text(10, e.hash).Int(11, e.dev).Int(12, e.ino).Int(13, e.mtime_ns)
-		   .Int(14, e.ctime_ns).Int(15, e.mode).Text(16, a.note);
+		   .Int(14, e.ctime_ns).Int(15, e.mode).Text(16, a.note).Int(17, a.replaces);
 		ins.Run();
 	}
 	// Merge: remember pairs that are already equal, so later changes show a direction.

@@ -5,7 +5,7 @@
 #   ./build.sh --compiler clang            # clang++ 21+, bm/CLANG26.bm (default)
 #   ./build.sh --compiler gcc              # gcc-toolset-15 g++, bm/GCC15.bm
 #   ./build.sh --compiler gcc --release    # optimized build
-#   ./build.sh --compiler gcc --test       # build and run the core tests instead
+#   ./build.sh --compiler gcc --test       # also build and run the core tests
 #
 # Packages: core/TreeSyncCore (engine, no GUI), core/TreeSyncCli (the engine in a
 # terminal), gui/TreeSync (GUI on top), core/TreeSyncTest (tests of the core).
@@ -55,13 +55,13 @@ OUT="$HERE/out/$COMPILER"
 mkdir -p "$OUT"
 ASSEMBLY="$HERE/core,$HERE/gui,$UPPSRC"
 
+# The programs are always built, so --test never leaves them older than the tests.
+echo "Building TreeSyncCli with $COMPILER ($BM)"
+"$UMK" "$ASSEMBLY" TreeSyncCli "$BM" $MODE "$OUT/treesync-cli"
+echo "Building TreeSync with $COMPILER ($BM)"
+"$UMK" "$ASSEMBLY" TreeSync "$BM" $MODE "$OUT/treesync"
 if [ "$TEST" = 1 ]; then
   echo "Building TreeSyncTest with $COMPILER ($BM)"
   "$UMK" "$ASSEMBLY" TreeSyncTest "$BM" $MODE "$OUT/treesync-test"
   "$OUT/treesync-test"
-else
-  echo "Building TreeSyncCli with $COMPILER ($BM)"
-  "$UMK" "$ASSEMBLY" TreeSyncCli "$BM" $MODE "$OUT/treesync-cli"
-  echo "Building TreeSync with $COMPILER ($BM)"
-  "$UMK" "$ASSEMBLY" TreeSync "$BM" $MODE "$OUT/treesync"
 fi

@@ -128,6 +128,8 @@ The switches are modelled on robocopy. TreeSync adds `--merge`, which copies cha
 | `--threads=N` | Copy threads (default 8; not used yet, copies run one at a time) | `/MT:n` |
 | `--big-file-mib=N` | Files this big or bigger are copied in resumable chunks (default 1024) | |
 | `--chunk-mib=N` | Chunk size for big files (default 64) | |
+| `--safe-delete` | Files a sync would delete or overwrite are moved to `<target>.old` instead, same folder layout; a name already there gets `.1`, `.2`, ... (default on; `--no-safe-delete` really deletes) | |
+| `--safe-delete-dir=PATH` | Where `--safe-delete` moves target-side files (default `<target>.old`; must be on the same disk, outside both trees) | |
 | `--preserve-owner` | Copy owner and group, matched by **name** (default on; needs root on the side being written) | `/COPY:O` |
 | `--numeric-ids` | Copy owners by number instead of name | |
 | `--compress` | Compress SSH traffic with zlib; the other end decompresses on its own. Helps text on slow links, not media | |
@@ -144,6 +146,16 @@ Content is compared by SHA-256. File size and time decide whether a cached hash 
 ## Status
 
 Working for local trees and over SFTP, with `treesync-cli` and the GUI: scan with a hash cache, Copy / Mirror / Merge, verified copies, hard links, symlinks, resumable runs and big files. Tested against a Fedora 44 server in both directions. Not yet: browsing remote trees in the GUI, password login from the GUI, copying with several threads, and live per-chunk progress in the GUI log.
+
+## Safe delete
+
+With `--safe-delete` (on by default), nothing a sync removes or overwrites is lost. Mirror's deletes, and the old version of every replaced file, are moved to a folder next to the tree with the same layout:
+
+```
+/backup/data/docs/a.txt   ->   /backup/data.old/docs/a.txt
+```
+
+If that name is already taken by an earlier move, the file gets a number on the end: `a.txt.1`, `a.txt.2`, and so on. Moving is a rename, so it is instant and needs no extra space, but it only works on the same disk: when the target is the top folder of a mount, point `--safe-delete-dir` at another folder on that disk. In Merge mode, replaced files on the source side go to `<source>.old`. Empty folders are removed, not moved. The `.old` folder is never cleaned up by TreeSync.
 
 ## Owners across machines
 

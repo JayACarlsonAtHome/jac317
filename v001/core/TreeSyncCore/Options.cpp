@@ -22,6 +22,7 @@ const BoolOption BOOL_OPTIONS[] = {
 	{ "compress",         &SyncFlags::compress,         "",     "Compress SSH traffic (helps text, not media)" },
 	{ "preserve-owner",   &SyncFlags::preserve_owner,   "/COPY:O", "Copy owner and group (by name; needs root)" },
 	{ "numeric-ids",      &SyncFlags::numeric_ids,      "",     "Copy owners by number, not by name" },
+	{ "safe-delete",      &SyncFlags::safe_delete,      "",     "Move deleted/replaced files to <target>.old" },
 	{ "include-same",     &SyncFlags::include_same,     "/IS",  "Include same files (rehash / recopy)" },
 	{ "skip-older",       &SyncFlags::skip_older,       "/XO",  "Skip if source is older than target" },
 	{ "skip-newer",       &SyncFlags::skip_newer,       "/XN",  "Skip if source is newer than target" },
@@ -117,6 +118,8 @@ Vector<String> ToArgs(const SyncSetup& s)
 		args.Add("--db=" + s.db);
 	if(s.known_hosts.GetCount())
 		args.Add("--known-hosts=" + s.known_hosts);
+	if(s.safe_delete_dir.GetCount())
+		args.Add("--safe-delete-dir=" + s.safe_delete_dir);
 	if(s.fresh)
 		args.Add("--fresh");
 	return args;
@@ -206,10 +209,10 @@ int ParseCommandLine(const Vector<String>& args, SyncSetup& s, String& error)
 			s.fresh = true;
 			continue;
 		}
-		if(name == "db" || name == "known-hosts") {
+		if(name == "db" || name == "known-hosts" || name == "safe-delete-dir") {
 			if(!need())
 				return PARSE_ERROR;
-			(name == "db" ? s.db : s.known_hosts) = CleanPath(value);
+			(name == "db" ? s.db : name == "known-hosts" ? s.known_hosts : s.safe_delete_dir) = CleanPath(value);
 			continue;
 		}
 		if(name == "exclude-file" || name == "exclude-dir") {
@@ -292,6 +295,8 @@ String Usage()
 	  << "  --fresh                Start over instead of resuming an unfinished run\n"
 	  << "  --db=PATH              Database file (default " << DefaultDbPath() << ")\n"
 	  << "  --known-hosts=FILE     SSH known_hosts file (default ~/.ssh/known_hosts)\n"
+	  << "  --safe-delete-dir=PATH Where --safe-delete moves files on the target side\n"
+	  << "                         (default <target>.old; must be on the same disk)\n"
 	  << "  --compare-ids          (treesync-cli) Compare users and groups on the two machines,\n"
 	  << "                         suggest one numbering for both, and print the commands\n\n"
 	  << "  -h, --help             Show this help\n";

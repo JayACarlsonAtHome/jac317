@@ -39,7 +39,8 @@ struct Planner {
 	}
 
 	// Copy e in direction dir, or link it to an earlier copy of the same inode.
-	void Copy(int dir, const Entry& e)
+	// replaces: something is already there and gets overwritten.
+	void Copy(int dir, const Entry& e, bool replaces = false)
 	{
 		if(flags.hard_links && e.type == 'f' && e.nlink > 1) {
 			Tuple<int64, int64> id = { e.dev, e.ino };
@@ -47,11 +48,13 @@ struct Planner {
 			if(q >= 0) {
 				Add(copies, ActionKind::Link, dir, e);
 				copies.Top().link_to = linked[dir][q];
+				copies.Top().replaces = replaces;
 				return;
 			}
 			linked[dir].Add(id, e.rel);
 		}
 		Add(copies, ActionKind::Copy, dir, e);
+		copies.Top().replaces = replaces;
 	}
 
 	// Source differs from target: the time switches may still skip it.
@@ -112,7 +115,7 @@ struct Planner {
 				continue;
 			if(s.hash != d->hash && TimeSkip(s, *d))
 				continue;
-			Copy(0, s);
+			Copy(0, s, true);
 		}
 		if(flags.mode == SyncMode::Mirror && !flags.keep_extra)
 			for(int i = dst.GetCount() - 1; i >= 0; i--)   // deepest first
@@ -159,9 +162,9 @@ struct Planner {
 				continue;
 			String h = last.Get(s.rel, Null);
 			if(h == d.hash)
-				Copy(0, s);                  // only the source changed
+				Copy(0, s, true);            // only the source changed
 			else if(h == s.hash)
-				Copy(1, d);                  // only the target changed
+				Copy(1, d, true);            // only the target changed
 			else
 				Add(copies, ActionKind::Conflict, 0, s,
 				    IsNull(h) ? "differs and there is no earlier sync to tell which side changed"
