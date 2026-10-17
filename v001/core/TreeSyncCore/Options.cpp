@@ -14,34 +14,97 @@ const char *DISCLAIMER =
 	"data arising from its use. See sections 7 and 8 of the Apache License 2.0 (LICENSE).\n";
 
 const BoolOption BOOL_OPTIONS[] = {
-	{ "dry-run",          &SyncFlags::dry_run,          "/L",   "Dry run: report only, change nothing" },
-	{ "fat-file-times",   &SyncFlags::fat_file_times,   "/FFT", "FAT file times: 2-second tolerance" },
-	{ "dst-tolerance",    &SyncFlags::dst_tolerance,    "/DST", "Allow exact 1-hour (DST) time shifts" },
-	{ "follow-links",     &SyncFlags::follow_links,     "",     "Write out symlink targets, not the links" },
-	{ "hard-links",       &SyncFlags::hard_links,       "",     "Relink hard-linked files, not copies" },
-	{ "compress",         &SyncFlags::compress,         "",     "Compress SSH traffic (helps text, not media)" },
-	{ "preserve-owner",   &SyncFlags::preserve_owner,   "/COPY:O", "Copy owner and group (by name; needs root)" },
-	{ "numeric-ids",      &SyncFlags::numeric_ids,      "",     "Copy owners by number, not by name" },
-	{ "safe-delete",      &SyncFlags::safe_delete,      "",     "Move deleted/replaced files to <target>.old" },
-	{ "low-priority",     &SyncFlags::low_priority,     "",     "Low CPU and disk priority (nice, ionice)" },
-	{ "include-same",     &SyncFlags::include_same,     "/IS",  "Include same files (rehash / recopy)" },
-	{ "skip-older",       &SyncFlags::skip_older,       "/XO",  "Skip if source is older than target" },
-	{ "skip-newer",       &SyncFlags::skip_newer,       "/XN",  "Skip if source is newer than target" },
-	{ "skip-changed",     &SyncFlags::skip_changed,     "/XC",  "Skip changed files (same time, new hash)" },
-	{ "keep-extra",       &SyncFlags::keep_extra,       "/XX",  "Keep extra target files (mirror only)" },
-	{ "skip-source-only", &SyncFlags::skip_source_only, "/XL",  "Skip files that exist only in source" },
+	{ "dry-run", &SyncFlags::dry_run, "/L", "Dry run: report only, change nothing",
+	  "Shows what a sync would do without changing anything. In the GUI, use Sync > Dry run instead." },
+	{ "fat-file-times", &SyncFlags::fat_file_times, "/FFT", "FAT file times: 2-second tolerance",
+	  "Treats file times less than 2 seconds apart as equal. Turn it on when either side is a FAT or "
+	  "exFAT disk (USB sticks, SD cards) or some network shares: they keep times only to 2 seconds, so "
+	  "without this every file there looks changed." },
+	{ "dst-tolerance", &SyncFlags::dst_tolerance, "/DST", "Allow exact 1-hour (DST) time shifts",
+	  "Treats file times exactly one hour apart as equal. For FAT disks and Windows shares whose times "
+	  "jump by an hour when daylight saving time starts or ends." },
+	{ "follow-links", &SyncFlags::follow_links, "", "Write out symlink targets, not the links",
+	  "A symlink (soft link) is a small pointer to another file or folder, like a shortcut. "
+	  "Off (normal): the pointer itself is copied, so the copy points to the same place. "
+	  "On: whatever it points to is copied instead, as real files. "
+	  "Example: docs/latest points to docs/v3. Off copies the pointer 'latest'; on copies all of v3 a "
+	  "second time under the name 'latest'." },
+	{ "hard-links", &SyncFlags::hard_links, "", "Relink hard-linked files, not copies",
+	  "A hard link is one file with two or more names: change it under one name and it changes under "
+	  "all of them. On (normal): such a file is copied once and its other names are linked to it on "
+	  "the target, so it stays one file and uses the space once. Off: every name becomes its own "
+	  "separate copy. Over SFTP hard links cannot be made, so they are always written out." },
+	{ "compress", &SyncFlags::compress, "", "Compress SSH traffic (helps text, not media)",
+	  "Compresses what is sent over SSH; the other side unpacks it automatically. Helps for text, logs "
+	  "and documents on a slow connection. Photos, video and zip files are already compressed, so it "
+	  "only costs CPU time for them. No effect on local copies." },
+	{ "preserve-owner", &SyncFlags::preserve_owner, "/COPY:O", "Copy owner and group (by name; needs root)",
+	  "Gives each copy the same owner and group as the original, matched by name: user 'jay' stays "
+	  "'jay' even when that user has a different number on the other machine. Needs root on the side "
+	  "being written; otherwise copies belong to whoever runs TreeSync." },
+	{ "numeric-ids", &SyncFlags::numeric_ids, "", "Copy owners by number, not by name",
+	  "With 'Copy owner and group', uses the raw user and group numbers instead of the names. Only "
+	  "for machines that number their users the same way; otherwise files can end up owned by the "
+	  "wrong user." },
+	{ "safe-delete", &SyncFlags::safe_delete, "", "Move deleted/replaced files to <target>.old",
+	  "Nothing a sync removes or overwrites is lost: those files are moved to a folder next to the "
+	  "target, <target>.old, in the same folder layout. A name already there gets .1, .2, ... added. "
+	  "Off: removed and replaced files are deleted for good." },
+	{ "low-priority", &SyncFlags::low_priority, "", "Low CPU and disk priority (nice, ionice)",
+	  "Runs the sync at the lowest CPU and disk priority, so other programs and copies go first. The "
+	  "sync takes longer while the machine is busy. Does not change the remote machine's priority." },
+	{ "include-same", &SyncFlags::include_same, "/IS", "Include same files (rehash / recopy)",
+	  "Copies files even when they are already identical on both sides. Normally they are skipped. "
+	  "Useful to rewrite a target you suspect is damaged." },
+	{ "skip-older", &SyncFlags::skip_older, "/XO", "Skip if source is older than target",
+	  "Does not copy a file when the source version is older than the one on the target. Protects "
+	  "newer changes made on the target." },
+	{ "skip-newer", &SyncFlags::skip_newer, "/XN", "Skip if source is newer than target",
+	  "Does not copy a file when the source version is newer than the one on the target." },
+	{ "skip-changed", &SyncFlags::skip_changed, "/XC", "Skip changed files (same time, new hash)",
+	  "Does not copy a file whose content differs but whose time is the same on both sides." },
+	{ "keep-extra", &SyncFlags::keep_extra, "/XX", "Keep extra target files (mirror only)",
+	  "Mirror normally removes files from the target that the source does not have. With this on, "
+	  "they are kept. Copy mode never removes anything anyway." },
+	{ "skip-source-only", &SyncFlags::skip_source_only, "/XL", "Skip files that exist only in source",
+	  "Only updates files the target already has; files that are new in the source are not copied." },
 };
 static_assert(std::size(BOOL_OPTIONS) == BOOL_OPTION_COUNT);
 
 const IntOption INT_OPTIONS[] = {
-	{ "retries",    &SyncFlags::retries,    "/R:n",  "Retries on a failed copy",  0, 1000000 },
-	{ "retry-wait", &SyncFlags::retry_wait, "/W:n",  "Seconds between retries",   0, 3600 },
-	{ "threads",    &SyncFlags::threads,    "/MT:n", "Copy threads",              1, 128 },
-	{ "big-file-mib", &SyncFlags::big_file_mib, "",  "Chunked copy from (MiB)",   1, 1048576 },
-	{ "chunk-mib",  &SyncFlags::chunk_mib,  "",      "Chunk size (MiB)",          1, 1024 },
-	{ "bwlimit",    &SyncFlags::bwlimit_kib, "/IPG:n", "Bandwidth limit (KiB/s)", 0, 10485760 },
+	{ "retries", &SyncFlags::retries, "/R:n", "Retries on a failed copy", 0, 1000000,
+	  "How many more times a failed copy is tried. Errors that waiting cannot fix (permission denied, "
+	  "disk full) are not retried." },
+	{ "retry-wait", &SyncFlags::retry_wait, "/W:n", "Seconds between retries", 0, 3600,
+	  "How long to wait before each retry, in seconds." },
+	{ "threads", &SyncFlags::threads, "/MT:n", "Copy threads", 1, 128,
+	  "How many files are copied at the same time. More helps with many small files. A remote side "
+	  "gets one SSH connection per thread. 1 copies one file at a time." },
+	{ "big-file-mib", &SyncFlags::big_file_mib, "", "Chunked copy from (MiB)", 1, 1048576,
+	  "Files at least this big, in MiB, are copied in pieces that are recorded as they finish, so a "
+	  "stopped copy continues where it left off. Smaller files are started over if stopped. Remote "
+	  "copies always use pieces." },
+	{ "chunk-mib", &SyncFlags::chunk_mib, "", "Chunk size (MiB)", 1, 1024,
+	  "The size of each recorded piece of a big file, in MiB. Smaller pieces lose less when stopped "
+	  "but are recorded more often." },
+	{ "bwlimit", &SyncFlags::bwlimit_kib, "/IPG:n", "Bandwidth limit (KiB/s)", 0, 10485760,
+	  "Caps the speed in KiB per second (1024 is 1 MiB/s), leaving room for other work. 0 means no "
+	  "limit. Counts network traffic; for a local copy it limits the writes." },
 };
 static_assert(std::size(INT_OPTIONS) == INT_OPTION_COUNT);
+
+const char *HELP_MODE[3] = {
+	"Copy: new and changed files go from source to target. Nothing on the target is ever removed.",
+	"Mirror: the target is made to match the source, so files the target has but the source does "
+	"not are removed (with safe delete they are moved to <target>.old).",
+	"Merge: changes go both ways. A file changed on only one side is copied to the other; a file "
+	"changed on both sides since the last sync is a conflict and left alone. Nothing is removed.",
+};
+const char *HELP_EXCLUDE_FILES =
+	"File names to leave out, with * and ? as wildcards, separated by ';'. Example: *.tmp;Thumbs.db";
+const char *HELP_EXCLUDE_DIRS =
+	"Folder names to leave out, with everything inside them; * and ? are wildcards, ';' separates. "
+	"Example: .git;node_modules;cache*";
 
 static const struct { const char *name; SyncMode mode; const char *robocopy; const char *text; } MODES[] = {
 	{ "copy",   SyncMode::Copy,   "/E",   "Copy new and changed files, never delete" },

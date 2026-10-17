@@ -3,7 +3,12 @@
 
 // TreeSync GUI: a presenter on top of TreeSyncCore, which does the real work.
 #include <CtrlLib/CtrlLib.h>
+#include <plugin/png/png.h>
 #include <TreeSyncCore/TreeSyncCore.h>
+
+// --screenshot (a developer aid): draws a window or dialog offscreen into a PNG,
+// so the layout can be checked without a screen.
+void SaveScreenshot(Ctrl& c, const String& path);
 
 #include <thread>
 #include <sys/types.h>
@@ -58,13 +63,16 @@ class SetupDlg : public TopWindow {
 	};
 
 	struct FlagsPane : ParentCtrl {
-		Label      lbl_mode, lbl_xf, lbl_xd, preview;
-		Switch     mode;
-		Option     opt[BOOL_OPTION_COUNT];
-		Label      lbl_int[INT_OPTION_COUNT];
-		EditInt    num[INT_OPTION_COUNT];
-		EditString xf, xd;
+		Label        lbl_mode, lbl_xf, lbl_xd, preview;
+		Switch       mode;
+		Option       opt[BOOL_OPTION_COUNT];
+		Label        lbl_int[INT_OPTION_COUNT];
+		EditInt      num[INT_OPTION_COUNT];
+		EditString   xf, xd;
+		RichTextView help;          // what the option just clicked does
+		Size         need;          // the size the layout needs, in pixels
 
+		void ShowHelp(const String& title, const String& text);
 		FlagsPane();
 		void Sync();
 		void Set(const SyncFlags& f);
@@ -80,7 +88,12 @@ public:
 	SetupDlg();
 	void      Set(const SyncSetup& s);
 	SyncSetup Get() const;
+	void      Screenshots(const String& dir);   // --screenshot: each tab as a PNG
 };
+
+// The command line shown in the GUI leaves out --dry-run / --no-dry-run: in the
+// GUI the Sync menu decides between a real run and a dry run.
+Vector<String> WithoutDryRun(Vector<String> args);
 
 // Messages.cpp: core messages shown in a dialog and printed to the terminal.
 void   WarnNotRoot();
@@ -131,6 +144,8 @@ class TreeSyncWindow : public TopWindow {
 	LineEdit  log;
 
 	// Thermometers: the whole run, and one row per file being copied right now.
+	// They sit above the log and are shown only while a sync runs.
+	ParentCtrl        bottom;
 	ParentCtrl        progress_pane;
 	ProgressIndicator overall;
 	Label             overall_text;
@@ -145,6 +160,7 @@ class TreeSyncWindow : public TopWindow {
 
 	void Log(const String& line);
 	void ShowProgress(const String& line);   // an @file or @overall line from treesync-cli
+	void ProgressVisible(bool on);
 	void StartSync(bool dry_run);
 	bool ConfirmRun(const SyncSetup& s);
 	void StopSync();

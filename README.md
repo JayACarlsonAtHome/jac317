@@ -63,6 +63,8 @@ cd v001
 
 Output goes to `v001/out/<compiler>/treesync` (and `treesync-test`). U++'s stock build methods pass `-std=c++17` after any package options, so TreeSync ships its own build methods in `v001/bm/` that pass `-std=c++26`. A `static_assert` stops the build if C++26 is not in effect.
 
+`treesync --screenshot=DIR` (a developer aid) draws the main window and each Setup tab into PNG files without showing anything, so the layout can be checked without a screen.
+
 The tests build a scratch tree under `$TMPDIR` with awkward names and a folder chain deeper than `PATH_MAX`. They also check option round trips (including shell quoting through a real `sh`), the home-only limit, and the progress-line layout. The scratch tree is removed afterwards.
 
 ## Seeing what happens
@@ -78,6 +80,7 @@ The point of the GUI is to see what is going on. So the engine reports each step
   ```
 
 - **Thermometers**: in the terminal, the passing status line of a file in progress carries a text bar, `45% [=========           ]`. In the GUI, a strip between the trees and the log shows a bar for the whole run (bytes done of bytes planned) and one row with its own bar per file being copied right now, so with `--threads=4` up to four move at once. Bars move within a chunk too, about four times a second.
+- **Help**: in File > Setup > Flags, clicking an option shows a plain explanation of what it does underneath (hovering shows its command-line name).
 - **GUI**: Sync > Run (F9) syncs for real, after a confirmation that says what will change; Sync > Dry run (Shift+F9) only shows the list of changes. (The `--dry-run` switch is for `treesync-cli`; in the GUI the menu decides.) The GUI starts `treesync-cli` and shows its output in a log pane under the trees; Sync > Stop (Esc) stops it after the current file or chunk, and the trees reload when it ends. Warnings appear in a dialog and are also printed to the terminal.
 
 **Restarts**: every step is recorded in the SQLite database before the next one starts, so a stopped or crashed run continues where it left off: run the same command again. Big files are copied in chunks, each chunk recorded as it finishes, so a restart continues part-way through the file instead of from the start (for example "resuming big one.bin at chunk 7 of 19"). `--fresh` starts over instead. Inode numbers identify unchanged files, so they are not read again. Details are in [`v001/docs/engine.md`](v001/docs/engine.md).

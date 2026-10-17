@@ -30,12 +30,11 @@ TreeSyncWindow::TreeSyncWindow()
 	active.AddColumn("Size", 12).HeaderTab().AlignRight();
 	active.NoCursor().NoGrid();
 
-	vsplit.Vert();
-	vsplit.Add(split);
-	vsplit.Add(progress_pane);
-	vsplit.Add(log);
-	vsplit.SetPos(5800, 0);
-	vsplit.SetPos(7600, 1);
+	bottom.Add(progress_pane);
+	bottom.Add(log);
+	ProgressVisible(false);
+	vsplit.Vert(split, bottom);
+	vsplit.SetPos(6500);
 	log.SetReadOnly();
 	log.SetFont(Monospace());
 	Add(vsplit.SizePos());
@@ -120,9 +119,25 @@ void TreeSyncWindow::LoadTrees()
 	target_panel.tree.Load("Target", setup.target, setup.flags.follow_links, setup.known_hosts);
 }
 
+void TreeSyncWindow::ProgressVisible(bool on)
+{
+	int h = on ? Zy(130) : 0;
+	progress_pane.HSizePos().TopPos(0, h);
+	progress_pane.Show(on);
+	log.HSizePos().VSizePos(h, 0);
+}
+
+Vector<String> WithoutDryRun(Vector<String> args)
+{
+	for(int i = args.GetCount() - 1; i >= 0; i--)
+		if(args[i] == "--dry-run" || args[i] == "--no-dry-run")
+			args.Remove(i);
+	return args;
+}
+
 void TreeSyncWindow::ShowStatus()
 {
-	status = CommandLineText(ToArgs(setup));
+	status = CommandLineText(WithoutDryRun(ToArgs(setup)));
 }
 
 void TreeSyncWindow::EditSetup()
@@ -151,17 +166,48 @@ void TreeSyncWindow::SetSetup(const SyncSetup& s)
 	ShowStatus();
 }
 
+void SaveScreenshot(Ctrl& c, const String& path)
+{
+	Size sz = c.GetRect().GetSize();
+	ImageDraw iw(sz);
+	iw.DrawRect(sz, SColorFace());
+	c.DrawCtrl(iw);
+	PNGEncoder().SaveFile(path, iw);
+}
+
 GUI_APP_MAIN
 {
+	Vector<String> args = clone(CommandLine());
+	String shots;
+	for(int i = args.GetCount() - 1; i >= 0; i--)
+		if(args[i].StartsWith("--screenshot=")) {
+			shots = args[i].Mid(13);
+			args.Remove(i);
+		}
+
 	SyncSetup setup;
 	String error;
-	switch(ParseCommandLine(CommandLine(), setup, error)) {
+	switch(ParseCommandLine(args, setup, error)) {
 	case PARSE_HELP:
 		Cout() << Usage();
 		return;
 	case PARSE_ERROR:
 		Cerr() << ToLower(GetExeTitle()) << ": " << error << "\nTry '--help' for more information.\n";
 		SetExitCode(2);
+		return;
+	}
+	if(shots.GetCount()) {   // draw the windows offscreen into PNGs and quit
+		RealizeDirectory(shots);
+		{
+			TreeSyncWindow w;
+			w.SetSetup(setup);
+			SaveScreenshot(w, AppendFileName(shots, "main.png"));
+			SetupDlg dlg;
+			dlg.Set(setup);
+			dlg.Screenshots(shots);
+		}
+		DirTree::WaitForWorkers(10);   // a remote tree may still be connecting
+		Cout() << "screenshots in " << shots << "\n";
 		return;
 	}
 	WarnNotRoot();

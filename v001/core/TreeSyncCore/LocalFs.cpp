@@ -13,7 +13,7 @@ static String Errno(const String& what)
 	return what + ": " + strerror(errno);
 }
 
-static int64 Ns(const timespec& t)
+static int64 LocalNs(const timespec& t)
 {
 	return (int64)t.tv_sec * 1000000000 + t.tv_nsec;
 }
@@ -73,8 +73,8 @@ bool LocalFs::Stat(const String& rel, bool follow, Entry& e, String& error)
 		e.ino = st.st_ino;
 		e.nlink = st.st_nlink;
 		e.size = st.st_size;
-		e.mtime_ns = Ns(st.st_mtim);
-		e.ctime_ns = Ns(st.st_ctim);
+		e.mtime_ns = LocalNs(st.st_mtim);
+		e.ctime_ns = LocalNs(st.st_ctim);
 		e.mode = st.st_mode & 07777;
 		e.uid = st.st_uid;
 		e.gid = st.st_gid;

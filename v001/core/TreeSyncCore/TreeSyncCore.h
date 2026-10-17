@@ -72,6 +72,7 @@ struct BoolOption {
 	bool SyncFlags::*field;
 	const char *robocopy;
 	const char *text;
+	const char *help;                // plain-language explanation, shown in the GUI
 };
 
 struct IntOption {
@@ -80,7 +81,13 @@ struct IntOption {
 	const char *robocopy;
 	const char *text;
 	int min, max;
+	const char *help;
 };
+
+// Help for the parts of the Flags tab that are not in the two tables.
+extern const char *HELP_MODE[3];          // Copy, Mirror, Merge
+extern const char *HELP_EXCLUDE_FILES;
+extern const char *HELP_EXCLUDE_DIRS;
 
 constexpr int BOOL_OPTION_COUNT = 16;
 constexpr int INT_OPTION_COUNT = 6;

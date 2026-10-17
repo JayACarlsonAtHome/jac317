@@ -57,66 +57,107 @@ TreeEndpoint SetupDlg::EndpointPane::Get() const
 	return e;
 }
 
+// Laid out from the measured width of each label in the dialog's font, so text
+// never runs into the next control; the dialog is sized to fit (SetupDlg).
 SetupDlg::FlagsPane::FlagsPane()
 {
+	Font font = StdFont();
+	auto W = [&](const char *t) { return GetTextSize(t, font).cx; };
+	int m = Zx(8), gap = Zx(18), row = Zy(24), h = Zy(19), box = Zx(26);
+
 	mode.Add((int)SyncMode::Copy, "Copy");
 	mode.Add((int)SyncMode::Mirror, "Mirror");
 	mode.Add((int)SyncMode::Merge, "Merge (both ways)");
 	mode.Tip("--copy, --mirror or --merge");
-	Add(lbl_mode.SetLabel("Mode").LeftPosZ(8, 90).TopPosZ(8, 19));
-	Add(mode.LeftPosZ(100, 360).TopPosZ(8, 19));
+	int lw = W("Mode") + Zx(12);
+	Add(lbl_mode.SetLabel("Mode").LeftPos(m, lw).TopPos(m, h));
+	Add(mode.HSizePos(m + lw, m).TopPos(m, h));
 
-	// Switches in two columns, labelled in plain words; the tooltip names the option.
-	int half = (BOOL_OPTION_COUNT + 1) / 2;
+	// Switches in two columns. Dry run is left out: in the GUI the Sync menu decides.
+	Vector<int> shown;
+	int col_w = 0;
 	for(int i = 0; i < BOOL_OPTION_COUNT; i++) {
+		if(BOOL_OPTIONS[i].field == &SyncFlags::dry_run) {
+			Add(opt[i]);   // kept for Set/Get, never shown
+			opt[i].Hide();
+			continue;
+		}
+		shown.Add(i);
+		col_w = max(col_w, W(BOOL_OPTIONS[i].text) + box);
+	}
+	int half = (shown.GetCount() + 1) / 2;
+	int y = m + row + Zy(6);
+	for(int k = 0; k < shown.GetCount(); k++) {
+		int i = shown[k];
 		const BoolOption& o = BOOL_OPTIONS[i];
-		int col = i < half ? 0 : 1;
-		int row = i < half ? i : i - half;
-		Add(opt[i].SetLabel(o.text).LeftPosZ(8 + col * 240, 236).TopPosZ(36 + row * 24, 19));
+		int x = k < half ? m : m + col_w + gap;
+		Add(opt[i].SetLabel(o.text).LeftPos(x, col_w).TopPos(y + (k % half) * row, h));
 		opt[i].Tip(String("--") + o.name + (*o.robocopy ? String("   (robocopy ") + o.robocopy + ")" : String()));
 	}
+	need.cx = m + 2 * col_w + gap + m;
+	y += half * row + Zy(8);
 
-	int y = 36 + half * 24 + 4;
-	Add(lbl_xf.SetLabel("Exclude files").LeftPosZ(8, 90).TopPosZ(y, 19));
-	Add(xf.LeftPosZ(100, 360).TopPosZ(y, 19).Tip("--exclude-file=GLOB, ';' between patterns   (robocopy /XF)"));
-	y += 26;
-	Add(lbl_xd.SetLabel("Exclude folders").LeftPosZ(8, 90).TopPosZ(y, 19));
-	Add(xd.LeftPosZ(100, 360).TopPosZ(y, 19).Tip("--exclude-dir=GLOB, ';' between patterns   (robocopy /XD)"));
-	y += 26;
+	int xw = max(W("Exclude files"), W("Exclude folders")) + Zx(12);
+	Add(lbl_xf.SetLabel("Exclude files").LeftPos(m, xw).TopPos(y, h));
+	Add(xf.HSizePos(m + xw, m).TopPos(y, h).Tip("--exclude-file=GLOB, ';' between patterns   (robocopy /XF)"));
+	y += Zy(26);
+	Add(lbl_xd.SetLabel("Exclude folders").LeftPos(m, xw).TopPos(y, h));
+	Add(xd.HSizePos(m + xw, m).TopPos(y, h).Tip("--exclude-dir=GLOB, ';' between patterns   (robocopy /XD)"));
+	y += Zy(30);
+
+	// Numbers, two per row.
+	int nw = 0;
+	for(int i = 0; i < INT_OPTION_COUNT; i++)
+		nw = max(nw, W(INT_OPTIONS[i].text) + Zx(10));
+	int fw = Zx(80), span = nw + fw + gap;
 	for(int i = 0; i < INT_OPTION_COUNT; i++) {
 		const IntOption& o = INT_OPTIONS[i];
-		int col = i % 3, row = i / 3;   // three per row
-		Add(lbl_int[i].SetLabel(o.text).LeftPosZ(8 + col * 165, 108).TopPosZ(y + row * 26, 19));
-		Add(num[i].LeftPosZ(118 + col * 165, 50).TopPosZ(y + row * 26, 19));
+		int x = m + (i % 2) * span, yy = y + (i / 2) * Zy(26);
+		Add(lbl_int[i].SetLabel(o.text).LeftPos(x, nw).TopPos(yy, h));
+		Add(num[i].LeftPos(x + nw, fw).TopPos(yy, h));
 		num[i].MinMax(o.min, o.max).Tip(String("--") + o.name + "=N" +
 		                                (*o.robocopy ? String("   (robocopy ") + o.robocopy + ")" : String()));
 	}
-	y += ((INT_OPTION_COUNT + 2) / 3) * 26 + 4;
-	Add(preview.HSizePosZ(8, 8).TopPosZ(y, 38));
-	preview.SetAlign(ALIGN_TOP);
+	need.cx = max(need.cx, m + 2 * span);
+	y += ((INT_OPTION_COUNT + 1) / 2) * Zy(26) + Zy(6);
+
+	Add(preview.HSizePos(m, m).TopPos(y, h));
+	y += row + Zy(4);
+
+	int help_h = Zy(120);
+	Add(help.HSizePos(m, m).VSizePos(y, m));
+	need.cy = y + help_h + m;
 
 	for(Ctrl *c = GetFirstChild(); c; c = c->GetNext())
 		*c << [this] { Sync(); };
+	// Clicking an option also explains it.
+	for(int i = 0; i < BOOL_OPTION_COUNT; i++)
+		opt[i] << [this, i] { ShowHelp(BOOL_OPTIONS[i].text, BOOL_OPTIONS[i].help); Sync(); };
+	for(int i = 0; i < INT_OPTION_COUNT; i++)
+		num[i] << [this, i] { ShowHelp(INT_OPTIONS[i].text, INT_OPTIONS[i].help); Sync(); };
+	mode << [this] { ShowHelp("Mode", HELP_MODE[clamp((int)~mode, 0, 2)]); Sync(); };
+	xf << [this] { ShowHelp("Exclude files", HELP_EXCLUDE_FILES); Sync(); };
+	xd << [this] { ShowHelp("Exclude folders", HELP_EXCLUDE_DIRS); Sync(); };
+	ShowHelp("Help", "Click an option to see what it does. Hover over it to see its command-line name.");
 	Set(SyncFlags());
+}
+
+void SetupDlg::FlagsPane::ShowHelp(const String& title, const String& text)
+{
+	help.SetQTF("[2 [* " + DeQtf(title) + "]&" + DeQtf(text) + "]");   // [2: the dialog's text size
 }
 
 void SetupDlg::FlagsPane::Sync()
 {
 	SyncMode m = (SyncMode)(int)~mode;
 	for(int i = 0; i < BOOL_OPTION_COUNT; i++) {
-		// In the GUI the Sync menu decides: Run is real, Dry run previews.
-		if(BOOL_OPTIONS[i].field == &SyncFlags::dry_run)
-		{
-			opt[i].Disable();
-			opt[i].Tip("In the GUI, use Sync > Run or Sync > Dry run (--dry-run is for treesync-cli)");
-		}
 		// Mirror already deletes extras, --keep-extra opts out; Merge never deletes.
 		if(BOOL_OPTIONS[i].field == &SyncFlags::keep_extra)
 			opt[i].Enable(m == SyncMode::Mirror);
 		if(BOOL_OPTIONS[i].field == &SyncFlags::skip_source_only)
 			opt[i].Enable(m != SyncMode::Merge);
 	}
-	preview = CommandLineText(FlagArgs(Get()));
+	preview = CommandLineText(WithoutDryRun(FlagArgs(Get())));
 }
 
 void SetupDlg::FlagsPane::Set(const SyncFlags& f)
@@ -147,7 +188,9 @@ SyncFlags SetupDlg::FlagsPane::Get() const
 SetupDlg::SetupDlg()
 {
 	Title("TreeSync - Setup");
-	SetRect(0, 0, Zx(520), Zy(560));
+	// Big enough for the Flags tab as laid out (tab header and buttons around it).
+	SetRect(0, 0, max(Zx(520), flags.need.cx + Zx(16)), max(Zy(560), flags.need.cy + Zy(80)));
+	Sizeable();
 
 	tabs.Add(source.SizePos(), "Source tree");
 	tabs.Add(target.SizePos(), "Target tree");
@@ -160,6 +203,20 @@ SetupDlg::SetupDlg()
 	Rejector(cancel, IDCANCEL);
 	ok.Ok();
 	cancel.Cancel();
+}
+
+void SetupDlg::Screenshots(const String& dir)
+{
+	const char *name[] = { "setup-source", "setup-target", "setup-flags" };
+	for(int i = 0; i < 3; i++) {
+		tabs.Set(i);
+		SaveScreenshot(*this, AppendFileName(dir, String(name[i]) + ".png"));
+	}
+	// The Flags tab again, with the help for symlinks showing.
+	for(int i = 0; i < BOOL_OPTION_COUNT; i++)
+		if(BOOL_OPTIONS[i].field == &SyncFlags::follow_links)
+			flags.ShowHelp(BOOL_OPTIONS[i].text, BOOL_OPTIONS[i].help);
+	SaveScreenshot(*this, AppendFileName(dir, "setup-flags-help.png"));
 }
 
 void SetupDlg::Set(const SyncSetup& s)

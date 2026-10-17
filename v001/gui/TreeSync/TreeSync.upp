@@ -2,6 +2,7 @@ description "TreeSync GUI - on top of TreeSyncCore\n";
 
 uses
 	CtrlLib,
+	plugin/png,
 	TreeSyncCore;
 
 file

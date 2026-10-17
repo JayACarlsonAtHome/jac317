@@ -130,6 +130,7 @@ void TreeSyncWindow::StartSync(bool dry_run)
 	active.Clear();
 	overall.Set(0, 1000);
 	overall_text = "";
+	ProgressVisible(true);
 
 	// Reader thread: lines go to the log on the GUI thread; exit status at the end.
 	int fd = out[0];
@@ -185,6 +186,7 @@ void TreeSyncWindow::SyncFinished(int code)
 	                 : code == 126 || code == 127 ? "pkexec refused or was cancelled" : "ended abnormally";
 	Log(Format("treesync-cli exit code %d: %s", code, what));
 	active.Clear();
+	ProgressVisible(false);
 	status = Format("Last run: %s", what);
 	LoadTrees();
 }
