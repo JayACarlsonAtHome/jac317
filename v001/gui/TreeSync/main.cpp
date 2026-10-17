@@ -149,9 +149,16 @@ Vector<String> WithoutDryRun(Vector<String> args)
 	return args;
 }
 
+// Off for --screenshot and --bench-log: they never touch the user's settings file.
+static bool save_settings = false;
+
 void TreeSyncWindow::ShowStatus()
 {
 	status = CommandLineText(WithoutDryRun(ToArgs(setup)));
+	// Every change of the setup comes through here: saved at once, so a crash loses nothing.
+	String error;
+	if(save_settings && !SaveSettings(SettingsPath(), setup, error))
+		Log("warning: settings not saved: " + error);
 }
 
 void TreeSyncWindow::EditSetup()
@@ -241,6 +248,16 @@ GUI_APP_MAIN
 		Cout() << "screenshots in " << shots << "\n";
 		return;
 	}
+	// Options on the command line win (and become the saved settings); without any,
+	// the settings saved last time are used.
+	bool from_file = false;
+	if(args.IsEmpty()) {
+		String why;
+		from_file = LoadSettings(SettingsPath(), setup, why);
+		if(why.GetCount())
+			Exclamation("The saved settings could not be read; starting with the defaults.&&[C " + DeQtf(why) + "]");
+	}
+	save_settings = true;
 	WarnNotRoot();
 	for(TreeEndpoint *e : { &setup.source, &setup.target })
 		if(!e->remote && !PathAllowed(e->path)) {
@@ -249,7 +266,7 @@ GUI_APP_MAIN
 		}
 	{
 		TreeSyncWindow w;
-		if(CommandLine().GetCount())
+		if(args.GetCount() || from_file)
 			w.SetSetup(setup);
 		w.Run();
 	}   // the trees are gone: their remote workers are told to finish

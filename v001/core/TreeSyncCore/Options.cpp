@@ -5,6 +5,10 @@
 #include "TreeSyncCore.h"
 
 #include <charconv>
+#include <fcntl.h>
+#include <unistd.h>
+#include <cerrno>
+#include <cstring>
 
 const char *DISCLAIMER =
 	"TreeSync is experimental testing software. It copies, overwrites and deletes files,\n"
@@ -436,4 +440,56 @@ String Usage()
 	  << "                         suggest one numbering for both, and print the commands\n\n"
 	  << "  -h, --help             Show this help\n";
 	return u;
+}
+
+// Saved settings ---------------------------------------------------------------
+
+String SettingsPath()
+{
+	String base = GetEnv("XDG_CONFIG_HOME");
+	if(!base.StartsWith("/"))
+		base = AppendFileName(GetHomeDirectory(), ".config");
+	return AppendFileName(base, "treesync/settings");
+}
+
+bool SaveSettings(const String& path, const SyncSetup& s, String& error)
+{
+	String text = "# TreeSync settings, saved by the GUI on every change. One option per line,\n"
+	              "# as on the command line (see treesync --help).\n";
+	for(const String& a : ToArgs(s)) {
+		// One-shot options are not settings; a name with a line break cannot be kept.
+		if(a == "--dry-run" || a == "--no-dry-run" || a == "--fresh" || a.Find('\n') >= 0)
+			continue;
+		text << a << "\n";
+	}
+	String tmp = path + ".new";
+	RealizePath(path);
+	int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	bool ok = fd >= 0 && write(fd, ~text, text.GetCount()) == text.GetCount() && fsync(fd) == 0;
+	if(fd >= 0 && close(fd) != 0)
+		ok = false;
+	if(ok && rename(tmp, path) == 0)
+		return true;
+	error = "cannot write " + path + ": " + strerror(errno);
+	unlink(tmp);
+	return false;
+}
+
+bool LoadSettings(const String& path, SyncSetup& s, String& error)
+{
+	if(!FileExists(path))
+		return false;
+	Vector<String> args;
+	for(String line : Split(LoadFile(path), '\n')) {
+		line.TrimEnd("\r");
+		if(line.GetCount() && *line != '#')
+			args.Add(line);
+	}
+	SyncSetup loaded;
+	if(ParseCommandLine(args, loaded, error) != PARSE_OK) {
+		error = path + ": " + error;
+		return false;
+	}
+	s = loaded;
+	return true;
 }

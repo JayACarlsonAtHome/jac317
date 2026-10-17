@@ -134,6 +134,15 @@ Vector<String> ToArgs(const SyncSetup& s);
 String         CommandLineText(const Vector<String>& args);   // shell-quoted, ready to paste
 String         Usage();
 
+// Saved settings: command-line options, one per line ('#' starts a comment), in
+// ~/.config/treesync/settings ($XDG_CONFIG_HOME). The GUI saves on every change
+// (written to a new file, flushed, renamed over the old: a crash leaves the old
+// settings or the new ones) and loads them at start. One-shot options (--dry-run,
+// --fresh) are not kept. LoadSettings: false and no error when there is no file.
+String         SettingsPath();
+bool           SaveSettings(const String& path, const SyncSetup& s, String& error);
+bool           LoadSettings(const String& path, SyncSetup& s, String& error);
+
 // Disks.cpp
 struct DiskInfo : Moveable<DiskInfo> {          // a physical disk (sda, nvme0n1)
 	String id;

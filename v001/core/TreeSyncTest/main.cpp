@@ -261,6 +261,36 @@ static void TestOptions()
 	EXPECT(!o2.flags.preserve_owner && !o2.flags.numeric_ids, "--no-preserve-owner: no owners at all");
 }
 
+// Saved settings: a round trip through the file, one-shot options left out, the
+// old file kept if a save cannot be written, a bad file reported, not half-used.
+static void TestSettings(const String& root)
+{
+	String path = root + "/config/treesync/settings";
+	SyncSetup s;
+	String error;
+	EXPECT(!LoadSettings(path, s, error) && error.IsEmpty(), "no settings file: defaults, no error");
+	const char *argv[] = { "--source=/home/jay/my files", "--target-host=192.168.1.194", "--target-user=jay",
+	                       "--target=/vm/slow/test", "--mirror", "--threads=6", "--network-wait=600",
+	                       "--exclude-file=*.tmp", "--dry-run", "--fresh" };
+	Vector<String> args;
+	for(const char *a : argv)
+		args.Add(a);
+	EXPECT(ParseCommandLine(args, s, error) == PARSE_OK, "settings: parse " + error);
+	EXPECT(SaveSettings(path, s, error), "settings saved: " + error);
+	String text = LoadFile(path);
+	EXPECT(text.Find("--dry-run") < 0 && text.Find("--fresh") < 0, "one-shot options not saved");
+	EXPECT(!FileExists(path + ".new"), "no leftover temporary file");
+	SyncSetup back;
+	EXPECT(LoadSettings(path, back, error), "settings loaded: " + error);
+	back.flags.dry_run = s.flags.dry_run;
+	back.fresh = s.fresh;
+	EXPECT(ToArgs(back) == ToArgs(s), "settings round trip: " + Join(ToArgs(back), " "));
+	SaveFile(path, "--mirror\n--no-such-option\n");
+	SyncSetup bad = clone(back);
+	EXPECT(!LoadSettings(path, bad, error) && error.Find("no-such-option") >= 0 && ToArgs(bad) == ToArgs(back),
+	       "bad settings file reported, setup left alone: " + error);
+}
+
 static void TestMessages()
 {
 	String m = NotRootMessage();
@@ -826,6 +856,7 @@ CONSOLE_APP_MAIN
 	TestCleanPath(root);
 	TestOptions();
 	TestPathAllowed();
+	TestSettings(root);
 	TestMessages();
 	TestIds();
 
