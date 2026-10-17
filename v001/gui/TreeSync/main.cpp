@@ -1,7 +1,13 @@
-// TreeSync bootstrap: main window with source and target trees side by side,
-// plus the setup screen. Scan, SHA-256 hashing, SQLite cache, remote transport
-// and sync are not implemented yet.
+// TreeSync bootstrap: main window with source and target trees side by side, each
+// with a disk / mount / path picker, plus the setup screen. Scan, SHA-256 hashing,
+// SQLite cache, remote transport and sync are not implemented yet.
 #include "TreeSync.h"
+
+TreePanel::TreePanel()
+{
+	Add(picker.HSizePosZ(4, 4).TopPosZ(4, PathPicker::Height));
+	Add(tree.HSizePosZ(0, 0).VSizePosZ(PathPicker::Height + 8, 0));
+}
 
 TreeSyncWindow::TreeSyncWindow()
 {
@@ -9,12 +15,24 @@ TreeSyncWindow::TreeSyncWindow()
 	AddFrame(menu);
 	AddFrame(status);
 	menu.Set([this](Bar& bar) { MainMenu(bar); });
-	split.Horz(source_tree, target_tree);
+	split.Horz(source_panel, target_panel);
 	Add(split.SizePos());
+
+	source_panel.picker.WhenPath = [this] {
+		setup.source.path = source_panel.picker.Get();
+		LoadTrees();
+		ShowStatus();
+	};
+	target_panel.picker.WhenPath = [this] {
+		setup.target.path = target_panel.picker.Get();
+		LoadTrees();
+		ShowStatus();
+	};
+
 	LoadTrees();
 	status = TS_CONTRACTS_NATIVE ? "Ready (native contracts)" : "Ready";
 	Sizeable().Zoomable();
-	SetRect(0, 0, Zx(900), Zy(560));
+	SetRect(0, 0, Zx(1000), Zy(620));
 }
 
 void TreeSyncWindow::MainMenu(Bar& bar)
@@ -36,17 +54,32 @@ void TreeSyncWindow::FileMenu(Bar& bar)
 
 void TreeSyncWindow::ViewMenu(Bar& bar)
 {
-	bar.Add("Reload trees", [this] { LoadTrees(); }).Key(K_F5);
+	bar.Add("Reload trees", [this] {
+		source_panel.picker.LoadDisks();
+		target_panel.picker.LoadDisks();
+		LoadTrees();
+	}).Key(K_F5);
 	bar.Add("Collapse all", [this] {
-		source_tree.CollapseAll();
-		target_tree.CollapseAll();
+		source_panel.tree.CollapseAll();
+		target_panel.tree.CollapseAll();
 	});
 }
 
 void TreeSyncWindow::LoadTrees()
 {
-	source_tree.Load("Source", setup.source, setup.flags.xj);
-	target_tree.Load("Target", setup.target, setup.flags.xj);
+	source_panel.picker.Set(setup.source.path);
+	source_panel.picker.Remote(setup.source.remote);
+	source_panel.tree.Load("Source", setup.source, setup.flags.xj);
+	target_panel.picker.Set(setup.target.path);
+	target_panel.picker.Remote(setup.target.remote);
+	target_panel.tree.Load("Target", setup.target, setup.flags.xj);
+}
+
+void TreeSyncWindow::ShowStatus()
+{
+	status = setup.source.path + " -> " +
+	         (setup.target.remote ? setup.target.user + "@" + setup.target.host + ":" : String()) +
+	         setup.target.path + "   " + setup.flags.ToString();
 }
 
 void TreeSyncWindow::EditSetup()
@@ -59,9 +92,7 @@ void TreeSyncWindow::EditSetup()
 	TS_POST(setup.source.port > 0 && setup.target.port > 0);
 	TS_POST(setup.flags.threads >= 1);
 	LoadTrees();
-	status = setup.source.path + " -> " +
-	         (setup.target.remote ? setup.target.user + "@" + setup.target.host + ":" : String()) +
-	         setup.target.path + "   " + setup.flags.ToString();
+	ShowStatus();
 }
 
 GUI_APP_MAIN

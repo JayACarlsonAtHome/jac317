@@ -8,6 +8,8 @@ file
 	TreeSync.h,
 	SetupDlg.cpp,
 	DirTree.cpp,
+	Disks.cpp,
+	PathPicker.cpp,
 	main.cpp;
 
 mainconfig

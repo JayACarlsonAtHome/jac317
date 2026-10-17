@@ -3,6 +3,8 @@
 
 #include <CtrlLib/CtrlLib.h>
 
+#include <filesystem>
+
 #include "Contracts.h"
 
 // U++'s stock build methods pass -std=c++17; build with v001/gui/bm/*.bm.
@@ -57,12 +59,56 @@ struct SyncSetup {
 	SyncFlags    flags;
 };
 
+// Linux: a physical disk (sda, nvme0n1). Windows: not used.
+struct DiskInfo : Moveable<DiskInfo> {
+	String id;
+	String label;
+};
+
+// A mounted filesystem: the folder it appears at and the disk it lives on.
+// On Windows, a drive letter.
+struct MountInfo : Moveable<MountInfo> {
+	String dir;
+	String disk;    // DiskInfo::id, DISK_NETWORK, or empty on Windows
+	String label;
+};
+
+inline const char *DISK_NETWORK = "*network";
+
+Vector<DiskInfo>  ListDisks();
+Vector<MountInfo> ListMounts();
+bool              IsUnder(const String& p, const String& dir);
+
+// Disk -> Mount (Drive on Windows) -> Path, with a browse button.
+class PathPicker : public ParentCtrl {
+	Label      lbl_disk, lbl_mount, lbl_path;
+	DropList   disk, mount;
+	EditString path;
+	Button     browse;
+	Vector<MountInfo> mounts;
+
+	void FillMounts();
+	void PickMount();
+	void Browse();
+	void Commit();
+
+public:
+	Event<> WhenPath;   // path changed by mount choice, browse, or Enter
+
+	PathPicker();
+	void   LoadDisks();
+	void   Set(const String& p);
+	String Get() const;
+	void   Remote(bool r);
+
+	static constexpr int Height = 67;   // three rows, in Zy units
+};
+
 // Second screen: tree parameters and remote login for both sides, plus flags.
 class SetupDlg : public TopWindow {
 	struct EndpointPane : ParentCtrl {
-		Label      lbl_path, lbl_host, lbl_port, lbl_user, lbl_key, lbl_pass;
-		EditString path;
-		Button     browse;
+		Label      lbl_host, lbl_port, lbl_user, lbl_key, lbl_pass;
+		PathPicker path;
 		Option     remote;
 		EditString host;
 		EditInt    port;
@@ -114,12 +160,22 @@ public:
 	bool Key(dword key, int count) override;
 };
 
+// One side of the main window: path picker above its tree.
+struct TreePanel : ParentCtrl {
+	PathPicker picker;
+	DirTree    tree;
+
+	TreePanel();
+};
+
 class TreeSyncWindow : public TopWindow {
 	MenuBar   menu;
 	StatusBar status;
 	Splitter  split;
-	DirTree   source_tree, target_tree;
+	TreePanel source_panel, target_panel;
 	SyncSetup setup;
+
+	void ShowStatus();
 
 	void MainMenu(Bar& bar);
 	void FileMenu(Bar& bar);

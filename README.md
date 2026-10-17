@@ -8,6 +8,7 @@ TreeSync keeps two directory trees in sync. The trees can be on the same machine
 - **SHA-256 comparison**: each file and each folder gets a SHA-256 hash. Matching hashes mean the files or folders are the same, and those parts of the tree are skipped.
 - **Local SQLite cache**: hashes are stored in a local SQLite table, so a later sync only has to re-hash what has changed.
 - **U++ GUI**: a desktop interface built with [U++ (Ultimate++)](https://www.ultimatepp.org/) for:
+  - picking each tree by disk, mount point (drive letter on Windows) and path
   - setting sync options
   - viewing one or both trees side by side, with [+]/[-] to expand and collapse folders (mouse, or the + and - keys)
   - showing sync results (what matched, what was copied, updated or skipped, and any conflicts)

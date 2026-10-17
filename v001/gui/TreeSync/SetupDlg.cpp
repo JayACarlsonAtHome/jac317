@@ -4,19 +4,12 @@
 
 SetupDlg::EndpointPane::EndpointPane()
 {
-	int y = 8;
+	Add(path.HSizePosZ(8, 8).TopPosZ(8, PathPicker::Height));
+	int y = 8 + PathPicker::Height + 8;
 	auto row = [&](Label& l, const char* text, Ctrl& c, int w) {
 		Add(l.SetLabel(text).LeftPosZ(8, 90).TopPosZ(y, 19));
 		Add(c.LeftPosZ(100, w).TopPosZ(y, 19));
 		y += 26;
-	};
-
-	row(lbl_path, "Tree path", path, 300);
-	Add(browse.SetLabel("...").LeftPosZ(404, 24).TopPosZ(8, 19));
-	browse << [this] {
-		FileSel fs;
-		if(fs.ExecuteSelectDir("Tree root"))
-			path <<= ~fs;
 	};
 
 	Add(remote.SetLabel("Remote machine").LeftPosZ(100, 200).TopPosZ(y, 19));
@@ -39,7 +32,7 @@ SetupDlg::EndpointPane::EndpointPane()
 void SetupDlg::EndpointPane::Sync()
 {
 	bool r = remote;
-	browse.Enable(!r);
+	path.Remote(r);
 	for(Ctrl *c : { (Ctrl *)&host, (Ctrl *)&port, (Ctrl *)&user, (Ctrl *)&use_key })
 		c->Enable(r);
 	key_file.Enable(r && use_key);
@@ -48,7 +41,7 @@ void SetupDlg::EndpointPane::Sync()
 
 void SetupDlg::EndpointPane::Set(const TreeEndpoint& e)
 {
-	path <<= e.path;
+	path.Set(e.path);
 	remote <<= e.remote;
 	host <<= e.host;
 	port <<= e.port;
@@ -62,7 +55,7 @@ void SetupDlg::EndpointPane::Set(const TreeEndpoint& e)
 TreeEndpoint SetupDlg::EndpointPane::Get() const
 {
 	TreeEndpoint e;
-	e.path = ~path;
+	e.path = path.Get();
 	e.remote = remote;
 	e.host = ~host;
 	e.port = Nvl((int)~port, 22);
@@ -210,7 +203,7 @@ SyncFlags SetupDlg::FlagsPane::Get() const
 SetupDlg::SetupDlg()
 {
 	Title("TreeSync - Setup");
-	SetRect(0, 0, Zx(480), Zy(360));
+	SetRect(0, 0, Zx(520), Zy(440));
 
 	tabs.Add(source.SizePos(), "Source tree");
 	tabs.Add(target.SizePos(), "Target tree");
