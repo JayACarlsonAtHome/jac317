@@ -172,25 +172,57 @@ CONSOLE_APP_MAIN
 	bool ok = RunSync(setup, report, result, error);
 	SetRunLog(setup.db, result.run, log_path);
 	int64 ended = (int64)time(nullptr);
-	Print("took " + DurationWords(ended - started) + " (" + DurationClock(ended - started) + "), from " +
-	      ClockTime(started) + " to " + ClockTime(ended));
+	int code = 0;
+	String status, summary;
 	if(!ok) {
 		Print("treesync-cli: " + error);
-		SetExitCode(2);
-		return;
+		code = 2;
+		status = "Error";
+		summary = error;
 	}
-	if(result.stopped) {
+	else if(result.stopped) {
 		if(result.run)
 			Print(Format("stopped: %d of %d actions done; run treesync-cli again with the same options to resume",
 			             result.done, result.planned));
 		else
 			Print("stopped while scanning; the hashes finished so far are kept, so the next run is quicker");
-		SetExitCode(3);
-		return;
+		code = 3;
+		status = "Stopped";
+		summary = Format("%d of %d actions done", result.done, result.planned);
 	}
-	if(!setup.flags.dry_run)
-		Print(Format("finished run %d: %d of %d actions done, %d failed, %d conflicts, %s copied",
-		             result.run, result.done, result.planned, result.failed, result.conflicts,
-		             FormatBytes(result.bytes)));
-	SetExitCode(result.failed || result.conflicts ? 1 : 0);
+	else {
+		code = result.failed || result.conflicts ? 1 : 0;
+		status = code ? "Failures or conflicts" : "Good";
+		summary = Format("%d actions, %d failed, %d conflicts, %s copied", result.done, result.failed,
+		                 result.conflicts, FormatBytes(result.bytes));
+		if(!setup.flags.dry_run)
+			Print(Format("finished run %d: %d of %d actions done, %d failed, %d conflicts, %s copied",
+			             result.run, result.done, result.planned, result.failed, result.conflicts,
+			             FormatBytes(result.bytes)));
+	}
+	Print("took " + DurationWords(ended - started) + " (" + DurationClock(ended - started) + "), from " +
+	      ClockTime(started) + " to " + ClockTime(ended));
+
+	// Start, stop and duration in the layout of the j5c build Results.txt: at the end
+	// of this run's log, and one line per run in logs/Results.txt.
+	auto where = [](const TreeEndpoint& e) {
+		return e.remote ? Nvl(e.user, GetUserName()) + "@" + e.host + ":" + e.path : e.path;
+	};
+	const char *mode = setup.flags.mode == SyncMode::Mirror ? "Mirror" : setup.flags.mode == SyncMode::Merge
+	                   ? "Merge" : "Copy";
+	String what = setup.flags.dry_run ? String(mode) + " dry run"
+	            : result.run ? String(mode) + " run " + AsString(result.run) : String(mode);
+	String line = ResultsLine(started, ended, what, code, status,
+	                          where(setup.source) + " -> " + where(setup.target) + "  (" + summary + ")");
+	Print("");
+	Print(ResultsHeader(started) + line);
+	String results = AppendFileName(LogFolder(setup.db), "Results.txt");
+	bool fresh = !FileExists(results);
+	FileAppend fa(results);
+	if(fa) {
+		if(fresh)
+			fa << "\n" << ResultsHeader(started);
+		fa << line << "\n";
+	}
+	SetExitCode(code);
 }

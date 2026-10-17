@@ -207,6 +207,14 @@ String DurationClock(int64 seconds);
 String DurationWords(int64 seconds);
 String ClockTime(int64 unix_time);
 
+// The run's start, stop and duration as a table in the layout of the j5c build
+// Results.txt: a header ("Status started on ...", the column titles) and one line
+// per run, " 14:02:58 : 16:08:07 : 000:000:02:05:09 : Mirror run 6.... : Result =
+// ....0 : Good.... : comment".
+String ResultsHeader(int64 unix_time);
+String ResultsLine(int64 start, int64 stop, const String& what, int result, const String& status,
+                   const String& comment);
+
 // Toolchain.cpp: compiler, library and C++26 feature report.
 String ToolchainReport();
 

@@ -118,3 +118,37 @@ String ClockTime(int64 unix_time)
 	localtime_r(&t, &lt);
 	return String(std::format("{:02}:{:02}:{:02}", lt.tm_hour, lt.tm_min, lt.tm_sec));
 }
+
+// Results table -------------------------------------------------------------------
+
+static String Dotted(const String& s, int width)   // left-aligned, filled with dots
+{
+	return s.GetCount() >= width ? s : s + String('.', width - s.GetCount());
+}
+
+String ResultsHeader(int64 unix_time)
+{
+	time_t t = (time_t)unix_time;
+	struct tm lt;
+	localtime_r(&t, &lt);
+	long off = lt.tm_gmtoff;
+	String utc = AsString(off / 3600);
+	if(off % 3600)
+		utc << ":" << String(std::format("{:02}", (int)(abs(off) % 3600 / 60)));
+	return String(std::format(" Status started on {:04}-{:02}-{:02}  UTC = ", lt.tm_year + 1900, lt.tm_mon + 1,
+	                          lt.tm_mday)) + utc + "\n\n"
+	       " Start    : Stop     : Duration         : Command / Comments\n"
+	       " HH:MM:SS : HH:MM:SS : YYY:DDD:HH:MM:SS :\n " + String('=', 127) + "\n";
+}
+
+String ResultsLine(int64 start, int64 stop, const String& what, int result, const String& status,
+                   const String& comment)
+{
+	String r = AsString(result);
+	r = String('.', max(5 - r.GetCount(), 0)) + r;
+	String line = " " + ClockTime(start) + " : " + ClockTime(stop) + " : " + DurationClock(stop - start) + " : " +
+	              Dotted(what, 40) + " : Result = " + r + " : " + Dotted(status, 25);
+	if(comment.GetCount())
+		line << " : " << comment;
+	return line;
+}

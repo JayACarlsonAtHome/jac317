@@ -382,6 +382,18 @@ static void TestProgress()
 	       "duration words line up: \"" + DurationWords(43811) + "\" / \"" + DurationWords(3660) + "\"");
 	EXPECT(DurationWords(3 * 86400 + 3600) == "  3 days  1 hour  00 minutes 00 seconds", "duration with days: " + DurationWords(3 * 86400 + 3600));
 	EXPECT(DurationClock(-90) == "000:000:00:01:30", "duration always positive");
+
+	// The j5c build Results.txt layout.
+	int64 t0 = 1760731378;   // some afternoon
+	String rl = ResultsLine(t0, t0 + 7509, "Mirror run 6", 0, "Good", "src -> dst");
+	Cout() << rl << "\n";
+	EXPECT(rl.Find(" : 000:000:02:05:09 : Mirror run 6............................ : Result = ....0 : "
+	               "Good..................... : src -> dst") == 20, "results line layout: " + rl);
+	EXPECT(ResultsLine(t0, t0, "Copy run 7", 3, "Stopped", "").Find("Result = ....3 : Stopped..................") > 0 &&
+	       !ResultsLine(t0, t0, "Copy run 7", 3, "Stopped", "").EndsWith(" : "), "results line, no comment");
+	String rh = ResultsHeader(t0);
+	EXPECT(rh.StartsWith(" Status started on 20") && rh.Find("UTC = ") > 0 &&
+	       rh.Find(" Start    : Stop     : Duration         : Command / Comments\n") > 0, "results header");
 	EXPECT(DurationClock(400LL * 31556952 + 86400) == "400:001:00:00:00", "duration in years: " + DurationClock(400LL * 31556952 + 86400));
 	Cout() << "\n";
 }
