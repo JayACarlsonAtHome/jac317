@@ -81,6 +81,7 @@ void TreeSyncWindow::FileMenu(Bar& bar)
 	bar.Separator();
 	bar.Add("About..", [this] {
 		String qtf = "[* TreeSync]&&Sync two directory trees by SHA-256.&&[*@6 Use at your own risk.]&";
+		qtf << "&Display: " << DeQtf(DisplayName(DisplayNow())) << "&";
 		for(const String& line : Split(DISCLAIMER, '\n'))
 			qtf << DeQtf(line) << " ";
 		qtf << "&&[C1 ";
@@ -270,20 +271,14 @@ GUI_APP_MAIN
 			Exclamation("The saved settings could not be read; starting with the defaults.&&[C " + DeQtf(why) + "]");
 	}
 	save_settings = true;
+	ApplyDisplayChoice();   // Wayland or X11, as chosen on the options page
 	// First screen: compiler and test options (like jac313's runner); then the sync
 	// window. If this program was rebuilt there, start the new build in its place.
 	String use = from_start_page || !BuildPageAtStart() ? String() : BuildStartPage();
 	if(use.GetCount()) {   // the chosen compiler's build, newest, without the page again
-		String exe = TreeSyncExe(use);
 		Vector<String> pass = clone(CommandLine());
 		pass.Add("--from-start-page");
-		std::vector<char *> argv;
-		argv.push_back(const_cast<char *>(~exe));
-		for(const String& a : pass)
-			argv.push_back(const_cast<char *>(~a));
-		argv.push_back(nullptr);
-		execv(exe, argv.data());
-		Exclamation("Could not start " + DeQtf(exe) + ": " + DeQtf(strerror(errno)));
+		ExecOnDisplay(TreeSyncExe(use), pass, DisplayChoice());
 	}
 	WarnNotRoot();
 	for(TreeEndpoint *e : { &setup.source, &setup.target })

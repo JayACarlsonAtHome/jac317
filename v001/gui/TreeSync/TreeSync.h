@@ -109,6 +109,11 @@ void   BuildRun();
 bool   BuildPageAtStart();                         // the options page is the first screen
 String BuildStartPage();                           // shows it; returns "gcc"/"clang" to continue with
 String TreeSyncExe(const String& compiler);        // out/<compiler>/treesync
+String DisplayNow();                               // "wayland" or "x11": what this program runs on
+String DisplayChoice();                            // the saved choice (x11 when there is no Wayland)
+String DisplayName(const String& d);
+void   ExecOnDisplay(const String& exe, const Vector<String>& args, const String& display);
+void   ApplyDisplayChoice();                       // restart on the chosen display if needed
 String LatestLog(const String& db_path);
 
 // Messages.cpp: core messages shown in a dialog and printed to the terminal.

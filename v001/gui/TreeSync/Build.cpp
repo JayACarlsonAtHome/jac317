@@ -35,6 +35,55 @@ static String BuildSettingsPath()
 	return AppendFileName(GetFileFolder(SettingsPath()), "build");
 }
 
+// Display: Wayland (recommended) or X Windows (X11, not recommended: any X11 program
+// can read the keyboard and the screen of the others). GTK picks by GDK_BACKEND.
+bool WaylandAvailable()
+{
+	return GetEnv("WAYLAND_DISPLAY").GetCount();
+}
+
+String DisplayNow()
+{
+	return Ctrl::IsWayland() ? "wayland" : "x11";
+}
+
+String DisplayChoice()
+{
+	String d = "wayland";
+	for(const String& line : Split(LoadFile(BuildSettingsPath()), '\n'))
+		if(line == "display=x11")
+			d = "x11";
+	return WaylandAvailable() ? d : String("x11");
+}
+
+String DisplayName(const String& d)
+{
+	return d == "wayland" ? "Wayland" : "X Windows (X11)";
+}
+
+// Starts exe (with args) on the chosen display, in place of this program.
+void ExecOnDisplay(const String& exe, const Vector<String>& args, const String& display)
+{
+	setenv("GDK_BACKEND", display == "wayland" ? "wayland" : "x11", 1);
+	setenv("TREESYNC_DISPLAY_SET", "1", 1);   // the started program does not switch again
+	std::vector<char *> argv;
+	argv.push_back(const_cast<char *>(~exe));
+	for(const String& a : args)
+		argv.push_back(const_cast<char *>(~a));
+	argv.push_back(nullptr);
+	execv(exe, argv.data());
+	Exclamation("Could not start " + DeQtf(exe) + ": " + DeQtf(strerror(errno)));
+}
+
+// At start: if this program came up on the other display than the chosen one, start
+// it again on the chosen one (once; GDK_BACKEND is only read when GTK starts).
+void ApplyDisplayChoice()
+{
+	if(GetEnv("TREESYNC_DISPLAY_SET").GetCount() || DisplayNow() == DisplayChoice())
+		return;
+	ExecOnDisplay(GetExeFilePath(), CommandLine(), DisplayChoice());
+}
+
 namespace {
 
 struct BuildStep : Moveable<BuildStep> {
@@ -54,7 +103,9 @@ class BuildWindow : public TopWindow {
 	ParentCtrl s1, s2, s3;
 
 	// Screen 1
-	LabelBox  compiler_box, build_box, toolchain_box;
+	LabelBox  compiler_box, build_box, display_box, toolchain_box;
+	Switch    display;
+	Label     display_now;
 	Label     compiler_label, type_label;
 	Switch    compiler, type;
 	Option    tests, tsan, clean, compare;
@@ -102,6 +153,7 @@ class BuildWindow : public TopWindow {
 public:
 	bool startup = false;              // the page TreeSync opens on: Continue instead of Close
 	String continue_with;              // startup: "gcc" or "clang", the build to run next
+	String DisplayChosen() const       { return AsString(~display); }
 	void Startup();
 	void UseButtons();
 	bool auto_run = false;             // --build-run: start at once, close when done
@@ -140,11 +192,17 @@ BuildWindow::BuildWindow()
 	compare.SetLabel("Compare the compilers: versions, C++26 features, import std, speed, size");
 	s1.Add(compare.LeftPosZ(20, 700).TopPosZ(184, 22));
 
-	s1.Add(toolchain_box.SetLabel("This program was built with").HSizePosZ(8, 8).VSizePosZ(222, 132));
+	s1.Add(display_box.SetLabel("Display").HSizePosZ(8, 8).TopPosZ(222, 52));
+	display.Add("wayland", "Wayland (recommended)").Add("x11", "X Windows / X11 (not recommended)");
+	s1.Add(display.LeftPosZ(20, 520).TopPosZ(242, 22));
+	s1.Add(display_now.HSizePosZ(560, 16).TopPosZ(242, 22));
+	display.Tip("X11 lets any program read the keyboard and the screen of the others, and is no "
+	            "longer developed. Use it only on a desktop without Wayland.");
+	s1.Add(toolchain_box.SetLabel("This program was built with").HSizePosZ(8, 8).VSizePosZ(280, 132));
 	toolchain.SetReadOnly();
 	toolchain.SetFont(Monospace());
 	toolchain <<= ToolchainReport();
-	s1.Add(toolchain.HSizePosZ(16, 16).VSizePosZ(242, 140));
+	s1.Add(toolchain.HSizePosZ(16, 16).VSizePosZ(300, 140));
 
 	command.SetFont(Monospace());
 	s1.Add(command.HSizePosZ(8, 8).BottomPosZ(42, 84));   // up to 5 steps, one line each
@@ -197,6 +255,7 @@ BuildWindow::BuildWindow()
 	close3 << [this] { Close(); };
 	stop << [this] { Stop(); };
 	at_start << [this] { Save(); };
+	display << [this] { Save(); };
 	back << [this] { Screen(1); };
 
 	Load();
@@ -276,6 +335,10 @@ void BuildWindow::Load()
 	clean = false;
 	compare = false;
 	at_start = true;
+	display <<= DisplayChoice();
+	display.EnableCase(0, WaylandAvailable());
+	display_now = "Now running on " + DisplayName(DisplayNow()) +
+	              (WaylandAvailable() ? String() : String(" (no Wayland session found)"));
 	for(String line : Split(LoadFile(BuildSettingsPath()), '\n')) {
 		String key = line.Left(max(line.Find('='), 0)), value = line.Mid(line.Find('=') + 1);
 		if(key == "compiler" && (value == "gcc" || value == "clang" || value == "both"))
@@ -302,7 +365,7 @@ void BuildWindow::Save()
 	SaveFile(path, "compiler=" + AsString(~compiler) + "\ntype=" + AsString(~type) +
 	               "\ntests=" + AsString((int)tests) + "\ntsan=" + AsString((int)tsan) +
 	               "\nclean=" + AsString((int)clean) + "\ncompare=" + AsString((int)compare) +
-	               "\nat_start=" + AsString((int)at_start) + "\n");
+	               "\nat_start=" + AsString((int)at_start) + "\ndisplay=" + AsString(~display) + "\n");
 }
 
 void BuildWindow::Start()
