@@ -7,6 +7,10 @@
 
 #include "Contracts.h"
 
+#ifndef PLATFORM_LINUX
+#error "TreeSync is Linux-only for now"
+#endif
+
 // U++'s stock build methods pass -std=c++17; build with v001/gui/bm/*.bm.
 static_assert(__cplusplus > 202302L, "TreeSync requires C++26: build with v001/gui/bm/CLANG26.bm or GCC15.bm");
 
@@ -24,34 +28,52 @@ struct TreeEndpoint {
 	String password;   // held in memory only, never written to the SQLite cache
 };
 
-// Copy:   copy new/changed files source -> target, never delete    (robocopy /E)
-// Mirror: make target match source, deleting extras                (robocopy /MIR)
-// Merge:  copy changes both ways; changed on both sides = conflict (no robocopy equivalent)
+// Copy:   copy new/changed files source -> target, never delete    (--copy,   robocopy /E)
+// Mirror: make target match source, deleting extras                (--mirror, robocopy /MIR)
+// Merge:  copy changes both ways; changed on both sides = conflict (--merge)
 enum class SyncMode { Copy, Mirror, Merge };
 
-// Options named after their robocopy switches. Content is compared by SHA-256;
-// size + time decide whether a cached hash can be reused, and in Merge mode which
-// side is newer, so the time flags (/FFT, /DST) still matter.
+// Sync switches; Options.cpp maps each to its --long-option (and robocopy switch).
+// Content is compared by SHA-256; size + time decide whether a cached hash can be
+// reused and, in Merge mode, which side is newer, so the time switches still matter.
 struct SyncFlags {
 	SyncMode mode = SyncMode::Mirror;
-	bool   list_only = true;      // /L   report only, change nothing
-	bool   fft = false;           // /FFT FAT file times: 2-second tolerance
-	bool   dst = false;           // /DST tolerate exact 1-hour (DST) differences
-	bool   xo = false;            // /XO  skip if source is older than target
-	bool   xn = false;            // /XN  skip if source is newer than target
-	bool   xc = false;            // /XC  skip changed files (same time, different hash)
-	bool   xx = false;            // /XX  leave extra target files alone (never purge)
-	bool   xl = false;            // /XL  skip files that exist only in source
-	bool   xj = true;             // /XJ  do not follow symlinks / junctions
-	bool   is = false;            // /IS  include same files (rehash / recopy)
-	String xf;                    // /XF  exclude file globs, ';'-separated
-	String xd;                    // /XD  exclude directory globs, ';'-separated
-	int    retries = 3;           // /R:n
-	int    wait = 5;              // /W:n seconds between retries
-	int    threads = 8;           // /MT:n
-
-	String ToString() const;      // robocopy-style switch summary
+	bool   dry_run = true;
+	bool   fat_file_times = false;   // 2-second time tolerance
+	bool   dst_tolerance = false;    // allow exact 1-hour shifts
+	bool   skip_links = true;
+	bool   include_same = false;
+	bool   skip_older = false;
+	bool   skip_newer = false;
+	bool   skip_changed = false;
+	bool   keep_extra = false;
+	bool   skip_source_only = false;
+	String exclude_files;            // globs, ';'-separated
+	String exclude_dirs;             // globs, ';'-separated
+	int    retries = 3;
+	int    retry_wait = 5;           // seconds
+	int    threads = 8;
 };
+
+struct BoolOption {
+	const char *name;                // --name / --no-name
+	bool SyncFlags::*field;
+	const char *robocopy;
+	const char *text;
+};
+
+struct IntOption {
+	const char *name;                // --name=N
+	int SyncFlags::*field;
+	const char *robocopy;
+	const char *text;
+	int min, max;
+};
+
+constexpr int BOOL_OPTION_COUNT = 10;
+constexpr int INT_OPTION_COUNT = 3;
+extern const BoolOption BOOL_OPTIONS[];
+extern const IntOption  INT_OPTIONS[];
 
 struct SyncSetup {
 	TreeEndpoint source;
@@ -59,17 +81,24 @@ struct SyncSetup {
 	SyncFlags    flags;
 };
 
-// Linux: a physical disk (sda, nvme0n1). Windows: not used.
+enum { PARSE_OK, PARSE_HELP, PARSE_ERROR };
+
+int            ParseCommandLine(const Vector<String>& args, SyncSetup& s, String& error);
+Vector<String> FlagArgs(const SyncFlags& f);
+Vector<String> ToArgs(const SyncSetup& s);
+String         CommandLineText(const Vector<String>& args);   // shell-quoted, ready to paste
+String         Usage();
+
+// A physical disk (sda, nvme0n1).
 struct DiskInfo : Moveable<DiskInfo> {
 	String id;
 	String label;
 };
 
 // A mounted filesystem: the folder it appears at and the disk it lives on.
-// On Windows, a drive letter.
 struct MountInfo : Moveable<MountInfo> {
 	String dir;
-	String disk;    // DiskInfo::id, DISK_NETWORK, or empty on Windows
+	String disk;    // DiskInfo::id or DISK_NETWORK
 	String label;
 };
 
@@ -91,7 +120,7 @@ String                FromFs(const std::filesystem::path& p);
 bool                  ListFolder(const String& dir, Vector<FolderEntry>& out, String& error);
 String                CleanPath(String p);
 
-// Disk -> Mount (Drive on Windows) -> Path, with a browse button.
+// Disk -> Mount -> Path, with a browse button.
 class PathPicker : public ParentCtrl {
 	Label      lbl_disk, lbl_mount, lbl_path;
 	DropList   disk, mount;
@@ -139,11 +168,12 @@ class SetupDlg : public TopWindow {
 	};
 
 	struct FlagsPane : ParentCtrl {
-		Label      lbl_mode, lbl_xf, lbl_xd, lbl_r, lbl_w, lbl_mt, preview;
+		Label      lbl_mode, lbl_xf, lbl_xd, preview;
 		Switch     mode;
-		Option     list_only, fft, dst, xo, xn, xc, xx, xl, xj, is;
+		Option     opt[BOOL_OPTION_COUNT];
+		Label      lbl_int[INT_OPTION_COUNT];
+		EditInt    num[INT_OPTION_COUNT];
 		EditString xf, xd;
-		EditInt    retries, wait, threads;
 
 		FlagsPane();
 		void Sync();
@@ -163,7 +193,6 @@ public:
 };
 
 bool   IsRoot();
-String RootName();
 String HomeDir();
 bool   PathAllowed(const String& p);   // always true as root; else only inside HomeDir()
 void   WarnNotRoot();
@@ -198,6 +227,11 @@ class TreeSyncWindow : public TopWindow {
 	SyncSetup setup;
 
 	void ShowStatus();
+
+public:
+	void SetSetup(const SyncSetup& s);
+
+private:
 
 	void MainMenu(Bar& bar);
 	void FileMenu(Bar& bar);

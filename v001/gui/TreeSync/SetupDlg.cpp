@@ -1,4 +1,4 @@
-// Setup screen: tree paths, remote login, and robocopy-style flags. Stub: the values
+// Setup screen: tree paths, remote login, and sync switches. Stub: the values
 // are collected and handed back, but nothing connects or scans yet.
 #include "TreeSync.h"
 
@@ -66,88 +66,41 @@ TreeEndpoint SetupDlg::EndpointPane::Get() const
 	return e;
 }
 
-String SyncFlags::ToString() const
-{
-	String s = mode == SyncMode::Copy   ? "/E" :
-	           mode == SyncMode::Mirror ? "/MIR" : "MERGE";
-	auto sw = [&](bool on, const char *name) { if(on) s << ' ' << name; };
-	sw(list_only, "/L");
-	sw(fft, "/FFT");
-	sw(dst, "/DST");
-	sw(xo, "/XO");
-	sw(xn, "/XN");
-	sw(xc, "/XC");
-	sw(xx, "/XX");
-	sw(xl, "/XL");
-	sw(xj, "/XJ");
-	sw(is, "/IS");
-	// Patterns are ';'-separated; ones with spaces are quoted, as robocopy needs.
-	auto patterns = [&](const char *sw, const String& list) {
-		if(list.IsEmpty())
-			return;
-		s << ' ' << sw;
-		for(const String& p : Split(list, ';'))
-			s << ' ' << (p.Find(' ') >= 0 ? "\"" + p + "\"" : p);
-	};
-	patterns("/XF", xf);
-	patterns("/XD", xd);
-	s << " /R:" << retries << " /W:" << wait << " /MT:" << threads;
-	return s;
-}
-
 SetupDlg::FlagsPane::FlagsPane()
 {
-	mode.Add((int)SyncMode::Copy, "Copy (/E)");
-	mode.Add((int)SyncMode::Mirror, "Mirror (/MIR)");
+	mode.Add((int)SyncMode::Copy, "Copy");
+	mode.Add((int)SyncMode::Mirror, "Mirror");
 	mode.Add((int)SyncMode::Merge, "Merge (both ways)");
-	Add(lbl_mode.SetLabel("Mode").LeftPosZ(8, 60).TopPosZ(8, 19));
-	Add(mode.LeftPosZ(70, 380).TopPosZ(8, 19));
+	mode.Tip("--copy, --mirror or --merge");
+	Add(lbl_mode.SetLabel("Mode").LeftPosZ(8, 90).TopPosZ(8, 19));
+	Add(mode.LeftPosZ(100, 360).TopPosZ(8, 19));
 
-	struct Flag { Option& o; const char *text; };
-	Flag left[] = {
-		{ list_only, "/L   List only (dry run)" },
-		{ fft,       "/FFT FAT file times (2 s)" },
-		{ dst,       "/DST Allow 1-hour DST shift" },
-		{ xj,        "/XJ  Skip symlinks/junctions" },
-		{ is,        "/IS  Include same files" },
-	};
-	Flag right[] = {
-		{ xo, "/XO Skip older source files" },
-		{ xn, "/XN Skip newer source files" },
-		{ xc, "/XC Skip changed files" },
-		{ xx, "/XX Keep extra target files" },
-		{ xl, "/XL Skip source-only files" },
-	};
-	int y = 36;
-	for(Flag& f : left) {
-		Add(f.o.SetLabel(f.text).LeftPosZ(8, 220).TopPosZ(y, 19));
-		y += 24;
-	}
-	y = 36;
-	for(Flag& f : right) {
-		Add(f.o.SetLabel(f.text).LeftPosZ(236, 220).TopPosZ(y, 19));
-		y += 24;
+	// Switches in two columns, labelled in plain words; the tooltip names the option.
+	int half = (BOOL_OPTION_COUNT + 1) / 2;
+	for(int i = 0; i < BOOL_OPTION_COUNT; i++) {
+		const BoolOption& o = BOOL_OPTIONS[i];
+		int col = i < half ? 0 : 1;
+		int row = i < half ? i : i - half;
+		Add(opt[i].SetLabel(o.text).LeftPosZ(8 + col * 240, 236).TopPosZ(36 + row * 24, 19));
+		opt[i].Tip(String("--") + o.name + "   (robocopy " + o.robocopy + ")");
 	}
 
-	y = 36 + 5 * 24 + 4;
-	Add(lbl_xf.SetLabel("/XF files").LeftPosZ(8, 60).TopPosZ(y, 19));
-	Add(xf.LeftPosZ(70, 380).TopPosZ(y, 19));
+	int y = 36 + half * 24 + 4;
+	Add(lbl_xf.SetLabel("Exclude files").LeftPosZ(8, 90).TopPosZ(y, 19));
+	Add(xf.LeftPosZ(100, 360).TopPosZ(y, 19).Tip("--exclude-file=GLOB, ';' between patterns   (robocopy /XF)"));
 	y += 26;
-	Add(lbl_xd.SetLabel("/XD dirs").LeftPosZ(8, 60).TopPosZ(y, 19));
-	Add(xd.LeftPosZ(70, 380).TopPosZ(y, 19));
+	Add(lbl_xd.SetLabel("Exclude folders").LeftPosZ(8, 90).TopPosZ(y, 19));
+	Add(xd.LeftPosZ(100, 360).TopPosZ(y, 19).Tip("--exclude-dir=GLOB, ';' between patterns   (robocopy /XD)"));
 	y += 26;
-	Add(lbl_r.SetLabel("/R:").LeftPosZ(8, 30).TopPosZ(y, 19));
-	Add(retries.LeftPosZ(40, 50).TopPosZ(y, 19));
-	Add(lbl_w.SetLabel("/W:").LeftPosZ(110, 30).TopPosZ(y, 19));
-	Add(wait.LeftPosZ(142, 50).TopPosZ(y, 19));
-	Add(lbl_mt.SetLabel("/MT:").LeftPosZ(212, 34).TopPosZ(y, 19));
-	Add(threads.LeftPosZ(248, 50).TopPosZ(y, 19));
+	for(int i = 0; i < INT_OPTION_COUNT; i++) {
+		const IntOption& o = INT_OPTIONS[i];
+		Add(lbl_int[i].SetLabel(o.text).LeftPosZ(8 + i * 160, 96).TopPosZ(y, 19));
+		Add(num[i].LeftPosZ(104 + i * 160, 50).TopPosZ(y, 19));
+		num[i].MinMax(o.min, o.max).Tip(String("--") + o.name + "=N   (robocopy " + o.robocopy + ")");
+	}
 	y += 30;
-	Add(preview.LeftPosZ(8, 450).TopPosZ(y, 19));
-
-	retries.MinMax(0, 1000000);
-	wait.MinMax(0, 3600);
-	threads.MinMax(1, 128);
+	Add(preview.HSizePosZ(8, 8).TopPosZ(y, 38));
+	preview.SetAlign(ALIGN_TOP);
 
 	for(Ctrl *c = GetFirstChild(); c; c = c->GetNext())
 		*c << [this] { Sync(); };
@@ -157,30 +110,25 @@ SetupDlg::FlagsPane::FlagsPane()
 void SetupDlg::FlagsPane::Sync()
 {
 	SyncMode m = (SyncMode)(int)~mode;
-	// /MIR already purges, /XX is how to opt out; Merge never purges.
-	xx.Enable(m == SyncMode::Mirror);
-	xl.Enable(m != SyncMode::Merge);
-	preview = Get().ToString();
+	for(int i = 0; i < BOOL_OPTION_COUNT; i++) {
+		// Mirror already deletes extras, --keep-extra opts out; Merge never deletes.
+		if(BOOL_OPTIONS[i].field == &SyncFlags::keep_extra)
+			opt[i].Enable(m == SyncMode::Mirror);
+		if(BOOL_OPTIONS[i].field == &SyncFlags::skip_source_only)
+			opt[i].Enable(m != SyncMode::Merge);
+	}
+	preview = CommandLineText(FlagArgs(Get()));
 }
 
 void SetupDlg::FlagsPane::Set(const SyncFlags& f)
 {
 	mode <<= (int)f.mode;
-	list_only <<= f.list_only;
-	fft <<= f.fft;
-	dst <<= f.dst;
-	xo <<= f.xo;
-	xn <<= f.xn;
-	xc <<= f.xc;
-	xx <<= f.xx;
-	xl <<= f.xl;
-	xj <<= f.xj;
-	is <<= f.is;
-	xf <<= f.xf;
-	xd <<= f.xd;
-	retries <<= f.retries;
-	wait <<= f.wait;
-	threads <<= f.threads;
+	for(int i = 0; i < BOOL_OPTION_COUNT; i++)
+		opt[i] <<= f.*BOOL_OPTIONS[i].field;
+	for(int i = 0; i < INT_OPTION_COUNT; i++)
+		num[i] <<= f.*INT_OPTIONS[i].field;
+	xf <<= f.exclude_files;
+	xd <<= f.exclude_dirs;
 	Sync();
 }
 
@@ -188,21 +136,12 @@ SyncFlags SetupDlg::FlagsPane::Get() const
 {
 	SyncFlags f;
 	f.mode = (SyncMode)(int)~mode;
-	f.list_only = list_only;
-	f.fft = fft;
-	f.dst = dst;
-	f.xo = xo;
-	f.xn = xn;
-	f.xc = xc;
-	f.xx = xx;
-	f.xl = xl;
-	f.xj = xj;
-	f.is = is;
-	f.xf = ~xf;
-	f.xd = ~xd;
-	f.retries = Nvl((int)~retries, 3);
-	f.wait = Nvl((int)~wait, 5);
-	f.threads = Nvl((int)~threads, 8);
+	for(int i = 0; i < BOOL_OPTION_COUNT; i++)
+		f.*BOOL_OPTIONS[i].field = opt[i];
+	for(int i = 0; i < INT_OPTION_COUNT; i++)
+		f.*INT_OPTIONS[i].field = Nvl((int)~num[i], f.*INT_OPTIONS[i].field);
+	f.exclude_files = ~xf;
+	f.exclude_dirs = ~xd;
 	return f;
 }
 

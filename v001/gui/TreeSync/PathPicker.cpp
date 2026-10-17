@@ -2,17 +2,12 @@
 // mount sets the path to it; "..." browses from the current path.
 #include "TreeSync.h"
 
-#ifdef PLATFORM_WIN32
-static const char *MOUNT_LABEL = "Drive";
-#else
-static const char *MOUNT_LABEL = "Mount";
-#endif
 
 PathPicker::PathPicker()
 {
 	Add(lbl_disk.SetLabel("Disk").LeftPosZ(0, 40).TopPosZ(0, 19));
 	Add(disk.HSizePosZ(42, 0).TopPosZ(0, 19));
-	Add(lbl_mount.SetLabel(MOUNT_LABEL).LeftPosZ(0, 40).TopPosZ(24, 19));
+	Add(lbl_mount.SetLabel("Mount").LeftPosZ(0, 40).TopPosZ(24, 19));
 	Add(mount.HSizePosZ(42, 0).TopPosZ(24, 19));
 	Add(lbl_path.SetLabel("Path").LeftPosZ(0, 40).TopPosZ(48, 19));
 	Add(path.HSizePosZ(42, 28).TopPosZ(48, 19));

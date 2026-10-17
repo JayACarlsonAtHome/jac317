@@ -11,7 +11,7 @@ TreePanel::TreePanel()
 
 TreeSyncWindow::TreeSyncWindow()
 {
-	Title(IsRoot() ? "TreeSync [" + RootName() + "]" : String("TreeSync"));
+	Title(IsRoot() ? "TreeSync [root]" : "TreeSync");
 	AddFrame(menu);
 	AddFrame(status);
 	menu.Set([this](Bar& bar) { MainMenu(bar); });
@@ -30,7 +30,7 @@ TreeSyncWindow::TreeSyncWindow()
 	};
 
 	LoadTrees();
-	status = String(IsRoot() ? "Ready" : "Not running as " + RootName() + ": limited to " + HomeDir()) +
+	status = String(IsRoot() ? "Ready" : "Not running as root: limited to " + HomeDir()) +
 	         (TS_CONTRACTS_NATIVE ? " (native contracts)" : "");
 	Sizeable().Zoomable();
 	SetRect(0, 0, Zx(1000), Zy(620));
@@ -70,17 +70,15 @@ void TreeSyncWindow::LoadTrees()
 {
 	source_panel.picker.Set(setup.source.path);
 	source_panel.picker.Remote(setup.source.remote);
-	source_panel.tree.Load("Source", setup.source, setup.flags.xj);
+	source_panel.tree.Load("Source", setup.source, setup.flags.skip_links);
 	target_panel.picker.Set(setup.target.path);
 	target_panel.picker.Remote(setup.target.remote);
-	target_panel.tree.Load("Target", setup.target, setup.flags.xj);
+	target_panel.tree.Load("Target", setup.target, setup.flags.skip_links);
 }
 
 void TreeSyncWindow::ShowStatus()
 {
-	status = setup.source.path + " -> " +
-	         (setup.target.remote ? setup.target.user + "@" + setup.target.host + ":" : String()) +
-	         setup.target.path + "   " + setup.flags.ToString();
+	status = CommandLineText(ToArgs(setup));
 }
 
 void TreeSyncWindow::EditSetup()
@@ -102,8 +100,34 @@ void TreeSyncWindow::EditSetup()
 	ShowStatus();
 }
 
+void TreeSyncWindow::SetSetup(const SyncSetup& s)
+{
+	setup = s;
+	LoadTrees();
+	ShowStatus();
+}
+
 GUI_APP_MAIN
 {
+	SyncSetup setup;
+	String error;
+	switch(ParseCommandLine(CommandLine(), setup, error)) {
+	case PARSE_HELP:
+		Cout() << Usage();
+		return;
+	case PARSE_ERROR:
+		Cerr() << ToLower(GetExeTitle()) << ": " << error << "\nTry '--help' for more information.\n";
+		SetExitCode(2);
+		return;
+	}
 	WarnNotRoot();
-	TreeSyncWindow().Run();
+	for(TreeEndpoint *e : { &setup.source, &setup.target })
+		if(!e->remote && !PathAllowed(e->path)) {
+			RefusePath(e->path);
+			e->path.Clear();
+		}
+	TreeSyncWindow w;
+	if(CommandLine().GetCount())
+		w.SetSetup(setup);
+	w.Run();
 }

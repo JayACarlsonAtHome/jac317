@@ -1,20 +1,14 @@
 // Disks and mount points for the path picker.
-// Linux: physical disks from /sys/block; mounts from /proc/self/mounts, each traced
+// Physical disks come from /sys/block; mounts from /proc/self/mounts, each traced
 // back to its disk through partitions and device-mapper (LVM, LUKS) slaves.
-// Windows: no disk list; the drive letters are the mounts.
-// std::filesystem does the path work; it cannot enumerate mounts or drive letters,
-// so those come from getmntent (Linux) and U++ FileSystemInfo (Windows).
+// std::filesystem does the path work; it cannot enumerate mounts, so getmntent does.
 #include "TreeSync.h"
 
 #include <fstream>
 
-#ifdef PLATFORM_POSIX
 #include <mntent.h>
-#endif
 
 namespace fs = std::filesystem;
-
-#ifdef PLATFORM_POSIX
 
 static String ReadSys(const fs::path& p)
 {
@@ -110,28 +104,6 @@ Vector<MountInfo> ListMounts()
 	Sort(list, [](const MountInfo& a, const MountInfo& b) { return a.dir < b.dir; });
 	return list;
 }
-
-#else
-
-Vector<DiskInfo> ListDisks()
-{
-	return Vector<DiskInfo>();
-}
-
-Vector<MountInfo> ListMounts()
-{
-	Vector<MountInfo> list;
-	for(const FileSystemInfo::FileInfo& fi : StdFileSystemInfo().Find(Null)) {
-		MountInfo& mi = list.Add();
-		mi.dir = fi.filename;
-		mi.label = fi.filename;
-		if(fi.root_desc.GetCount())
-			mi.label << "  " << fi.root_desc;
-	}
-	return list;
-}
-
-#endif
 
 // True when p is dir itself or somewhere below it (/home is not under /hom).
 bool IsUnder(const String& p, const String& dir)

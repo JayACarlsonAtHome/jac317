@@ -6,7 +6,7 @@
 #   ./build.sh --compiler gcc              # gcc-toolset-15 g++, bm/GCC15.bm
 #   ./build.sh --compiler gcc --release    # optimized build
 #
-# Output: v001/gui/out/<compiler>/TreeSync (gitignored).
+# Output: v001/gui/out/<compiler>/treesync (gitignored).
 # Both build methods pass -std=c++26; U++'s stock ones pass -std=c++17.
 set -eu
 
@@ -50,4 +50,4 @@ done
 OUT="$HERE/out/$COMPILER"
 mkdir -p "$OUT"
 echo "Building $PKG with $COMPILER ($BM)"
-"$UMK" "$HERE,$UPPSRC" "$PKG" "$BM" $MODE "$OUT/$PKG"
+"$UMK" "$HERE,$UPPSRC" "$PKG" "$BM" $MODE "$OUT/treesync"

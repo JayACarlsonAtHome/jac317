@@ -1,14 +1,11 @@
 // Path handling that survives long paths and awkward names (spaces, UTF-8).
 //
-// - ToFs / FromFs convert between U++ String (UTF-8) and std::filesystem::path
-//   through u8string, so non-ASCII names survive on Windows too. On Windows, long
-//   absolute paths get the \\?\ prefix, which lifts the 260-character MAX_PATH limit.
+// - ToFs / FromFs convert between U++ String (UTF-8) and std::filesystem::path.
 // - ListFolder on Linux opens a folder one component at a time with openat, so a
 //   path longer than PATH_MAX (4096 bytes) can still be listed.
 // - Paths are never passed through a shell, so spaces need no quoting here.
 #include "TreeSync.h"
 
-#ifdef PLATFORM_POSIX
 #include <dirent.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -16,42 +13,18 @@
 #include <cerrno>
 #include <climits>
 #include <cstring>
-#endif
 
 namespace fs = std::filesystem;
 
 fs::path ToFs(const String& p)
 {
-	std::u8string u(reinterpret_cast<const char8_t *>(p.Begin()), p.GetCount());
-#ifdef PLATFORM_WIN32
-	fs::path fp = fs::path(u).make_preferred();
-	std::wstring w = fp.native();
-	if(fp.is_absolute() && w.size() >= 248 && !w.starts_with(L"\\\\?\\")) {
-		if(w.starts_with(L"\\\\"))
-			w = L"\\\\?\\UNC\\" + w.substr(2);   // \\server\share\...
-		else
-			w = L"\\\\?\\" + w;
-	}
-	return fs::path(w);
-#else
-	return fs::path(u);
-#endif
+	return fs::path(p.ToStd());
 }
 
 String FromFs(const fs::path& p)
 {
-	std::u8string u = p.u8string();
-	String s(reinterpret_cast<const char *>(u.data()), (int)u.size());
-#ifdef PLATFORM_WIN32
-	if(s.StartsWith("\\\\?\\UNC\\"))
-		s = "\\\\" + s.Mid(8);
-	else if(s.StartsWith("\\\\?\\"))
-		s = s.Mid(4);
-#endif
-	return s;
+	return String(p.native());
 }
-
-#ifdef PLATFORM_POSIX
 
 // Opens dir for reading. Short paths go straight to open(); longer ones are walked
 // one component at a time, O_PATH for the folders on the way (needs only search
@@ -96,25 +69,6 @@ bool ListFolder(const String& dir, Vector<FolderEntry>& out, String& error)
 	closedir(d);
 	return true;
 }
-
-#else
-
-bool ListFolder(const String& dir, Vector<FolderEntry>& out, String& error)
-{
-	std::error_code ec;
-	for(const fs::directory_entry& e : fs::directory_iterator(ToFs(dir), ec)) {
-		std::error_code ec2;
-		FolderEntry& f = out.Add();
-		f.name = FromFs(e.path().filename());
-		f.is_link = e.is_symlink(ec2);
-		f.is_dir = e.is_directory(ec2);
-	}
-	if(ec)
-		error = ec.message();
-	return !ec;
-}
-
-#endif
 
 // Tidies a path typed or pasted into a path field. Spaces at either end are kept:
 // they are legal (if horrible) in file names. Handles, in order:

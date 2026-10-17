@@ -12,6 +12,7 @@ file
 	PathPicker.cpp,
 	Root.cpp,
 	FsPath.cpp,
+	Options.cpp,
 	main.cpp;
 
 mainconfig
