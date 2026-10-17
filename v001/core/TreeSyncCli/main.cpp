@@ -12,6 +12,7 @@
 
 #include <csignal>
 #include <format>
+#include <pthread.h>
 #include <thread>
 #include <unistd.h>
 
@@ -47,6 +48,18 @@ static void Status(const String& s)
 	status_shown = true;
 }
 
+// --stop-on-eof: waits for stdin to close, then stops like Ctrl+C. It is never
+// joined (it sits in read() until the end), so it is a plain pthread: a std::thread
+// keeps its state on U++'s heap, and the debug leak check would report it at exit.
+static void *WatchStdin(void *)
+{
+	char c;
+	while(read(0, &c, 1) > 0)
+		;
+	OnSignal(0);
+	return nullptr;
+}
+
 CONSOLE_APP_MAIN
 {
 	Vector<String> args = clone(CommandLine());
@@ -76,13 +89,11 @@ CONSOLE_APP_MAIN
 	sa.sa_handler = OnSignal;
 	sigaction(SIGINT, &sa, nullptr);
 	sigaction(SIGTERM, &sa, nullptr);
-	if(stop_on_eof)
-		std::thread([] {
-			char c;
-			while(read(0, &c, 1) > 0)
-				;
-			OnSignal(0);
-		}).detach();
+	if(stop_on_eof) {
+		pthread_t t;
+		if(pthread_create(&t, nullptr, WatchStdin, nullptr) == 0)
+			pthread_detach(t);
+	}
 
 	SyncReport report;
 	report.stop = &stop_requested;

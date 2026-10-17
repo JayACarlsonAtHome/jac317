@@ -170,8 +170,11 @@ GUI_APP_MAIN
 			RefusePath(e->path);
 			e->path.Clear();
 		}
-	TreeSyncWindow w;
-	if(CommandLine().GetCount())
-		w.SetSetup(setup);
-	w.Run();
+	{
+		TreeSyncWindow w;
+		if(CommandLine().GetCount())
+			w.SetSetup(setup);
+		w.Run();
+	}   // the trees are gone: their remote workers are told to finish
+	DirTree::WaitForWorkers(3);
 }

@@ -9,10 +9,18 @@
 #include <condition_variable>
 #include <deque>
 #include <mutex>
+#include <pthread.h>
 
 // Shared between the tree (GUI thread) and its worker. The worker is detached, so
 // a slow connect never blocks closing the window; `alive` (GUI thread only) tells
 // late results that the tree they were for is gone or was reloaded.
+struct DirTree::RemoteJob {
+	std::shared_ptr<Remote> r;
+	DirTree                *tree;
+	TreeEndpoint            e;
+	String                  known_hosts;
+};
+
 struct DirTree::Remote {
 	std::mutex                          m;
 	std::condition_variable             cv;
@@ -20,6 +28,14 @@ struct DirTree::Remote {
 	bool                                quit = false;
 	bool                                alive = true;
 };
+
+static std::atomic<int> live_workers;
+
+void DirTree::WaitForWorkers(double seconds)
+{
+	for(int i = 0; live_workers > 0 && i < seconds * 50; i++)
+		std::this_thread::sleep_for(std::chrono::milliseconds(20));
+}
 
 DirTree::DirTree()
 {
@@ -68,22 +84,43 @@ void DirTree::Load(const char *caption, const TreeEndpoint& e, bool follow, cons
 	// Remote node keys are "/" + rel, so the root ("/") is never an empty, Null key.
 	auto r = std::make_shared<Remote>();
 	remote = r;
-	std::thread([r, this, e = clone(e), known_hosts] {
-		SftpFs fs(e, known_hosts, false);
+	auto job = new RemoteJob{ r, this, clone(e), known_hosts };
+	live_workers++;
+	pthread_t t;
+	if(pthread_create(&t, nullptr, RemoteWorker, job) == 0)
+		pthread_detach(t);
+	else {
+		delete job;
+		live_workers--;
+		Connected(false, "cannot start a thread for the remote tree");
+	}
+}
+
+// The worker owns its job and frees everything itself before it counts itself
+// out, so WaitForWorkers really means "all freed". A plain pthread for the same
+// reason: std::thread frees its own state only after the function has returned.
+void *DirTree::RemoteWorker(void *arg)
+{
+	struct Done { ~Done() { live_workers--; } } done;   // destroyed last
+	One<RemoteJob> job((RemoteJob *)arg);
+	std::shared_ptr<Remote> r = job->r;
+	DirTree *tree = job->tree;
+	{
+		SftpFs fs(job->e, job->known_hosts, false);
 		String error;
 		bool ok = fs.Connect(error);
-		PostCallback([r, this, ok, error] {
+		Upp::PostCallback([r, tree, ok, error] {
 			if(r->alive)
-				Connected(ok, error);
+				tree->Connected(ok, error);
 		});
 		for(;;) {
-			std::pair<int, String> job;
+			std::pair<int, String> item;
 			{
 				std::unique_lock<std::mutex> lock(r->m);
 				r->cv.wait(lock, [&] { return r->quit || !r->queue.empty(); });
 				if(r->quit)
-					return;
-				job = r->queue.front();
+					break;
+				item = r->queue.front();
 				r->queue.pop_front();
 			}
 			Vector<FolderEntry> entries;
@@ -91,13 +128,16 @@ void DirTree::Load(const char *caption, const TreeEndpoint& e, bool follow, cons
 			if(!ok)
 				err = "not connected";
 			else
-				fs.List(job.second, entries, err);
-			PostCallback([r, this, id = job.first, entries = pick(entries), err]() mutable {
+				fs.List(item.second, entries, err);
+			Upp::PostCallback([r, tree, id = item.first, entries = pick(entries), err]() mutable {
 				if(r->alive)
-					Listed(id, entries, err);
+					tree->Listed(id, entries, err);
 			});
 		}
-	}).detach();
+	}
+	job.Clear();
+	r.reset();
+	return nullptr;
 }
 
 void DirTree::Connected(bool ok, const String& error)

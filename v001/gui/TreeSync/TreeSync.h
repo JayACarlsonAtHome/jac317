@@ -90,7 +90,9 @@ void   RefusePath(const String& p);
 // +/- keys. Remote folders are listed by a worker thread (DirTree.cpp).
 class DirTree : public TreeCtrl {
 	struct Remote;
+	struct RemoteJob;
 	std::shared_ptr<Remote> remote;
+	static void *RemoteWorker(void *job);
 	bool   follow_links = false;
 	bool   is_remote = false;
 	String root_label;
@@ -106,6 +108,9 @@ public:
 	DirTree();
 	~DirTree();
 	void Load(const char *caption, const TreeEndpoint& e, bool follow_links, const String& known_hosts);
+	// At exit: give remote workers up to `seconds` to close their connections and
+	// free their memory (a worker in the middle of a network call may take longer).
+	static void WaitForWorkers(double seconds);
 	void CollapseAll();
 	bool Key(dword key, int count) override;
 };

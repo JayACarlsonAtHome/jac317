@@ -595,6 +595,29 @@ static void TestThreads(const String& root)
 	EXPECT(r3.failed == 0 && TreeHash(src, check) == TreeHash(dst1, check), "1 thread: same result");
 }
 
+// treesync-cli run the way the GUI runs it (--stop-on-eof, stdin held open):
+// it must exit cleanly, without U++'s debug "Heap leaks detected!".
+static void TestCliLikeGui(const String& root)
+{
+	String cli = AppendFileName(GetExeFolder(), "treesync-cli");
+	if(!FileExists(cli)) {
+		Cout() << "(skipped: no treesync-cli next to this test, e.g. in the ThreadSanitizer build)\n";
+		return;
+	}
+	Put(root + "/gui-src/a.txt", "a\n");
+	String cmd = "(sleep 1) | '" + cli + "' --source='" + root + "/gui-src' --target='" + root +
+	             "/gui-dst' --db='" + root + "/sync.db' --stop-on-eof --gui-progress 2>&1; echo EXIT=$?";
+	String out;
+	if(FILE *f = popen(cmd, "r")) {
+		char buf[4096];
+		while(size_t n = fread(buf, 1, sizeof(buf), f))
+			out.Cat(buf, (int)n);
+		pclose(f);
+	}
+	EXPECT(out.Find("Heap leaks") < 0, "treesync-cli --stop-on-eof: no heap leak report");
+	EXPECT(out.Find("EXIT=0") >= 0, "treesync-cli --stop-on-eof exits with 0: " + out.Right(80));
+}
+
 static void TestBandwidthAndPriority(const String& root)
 {
 	String src = root + "/bw-src", db = root + "/sync.db";
@@ -663,6 +686,7 @@ CONSOLE_APP_MAIN
 	TestEngineMerge(eroot);
 	TestEngineRefusals(eroot);
 	TestThreads(eroot);
+	TestCliLikeGui(eroot);
 	TestBandwidthAndPriority(eroot);   // last: it lowers this process's priority
 	int efd = open(GetFileFolder(eroot), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
 	RemoveAt(efd, GetFileName(eroot));
