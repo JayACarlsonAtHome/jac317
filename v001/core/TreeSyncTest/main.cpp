@@ -204,6 +204,15 @@ static void TestOptions()
 	SyncSetup s;
 	String err;
 	EXPECT(ParseCommandLine(Vector<String>{ "--help" }, s, err) == PARSE_HELP, "--help");
+
+	// Owners are one choice: --numeric-ids switches owner copying on, and switching
+	// it off leaves no numbers.
+	SyncSetup o1;
+	ParseCommandLine(Vector<String>{ "--no-preserve-owner", "--numeric-ids" }, o1, err);
+	EXPECT(o1.flags.preserve_owner && o1.flags.numeric_ids, "--numeric-ids means owners by number");
+	SyncSetup o2;
+	ParseCommandLine(Vector<String>{ "--numeric-ids", "--no-preserve-owner" }, o2, err);
+	EXPECT(!o2.flags.preserve_owner && !o2.flags.numeric_ids, "--no-preserve-owner: no owners at all");
 }
 
 static void TestMessages()

@@ -69,15 +69,23 @@ SetupDlg::FlagsPane::FlagsPane()
 	mode.Add((int)SyncMode::Mirror, "Mirror");
 	mode.Add((int)SyncMode::Merge, "Merge (both ways)");
 	mode.Tip("--copy, --mirror or --merge");
-	int lw = W("Mode") + Zx(12);
+	int lw = max(W("Mode"), W("Owners")) + Zx(12);
 	Add(lbl_mode.SetLabel("Mode").LeftPos(m, lw).TopPos(m, h));
 	Add(mode.HSizePos(m + lw, m).TopPos(m, h));
+	owners.Add(0, "Don't copy");
+	owners.Add(1, "By name (needs root)");
+	owners.Add(2, "By number (needs root)");
+	owners.Tip("--no-preserve-owner, --preserve-owner, or --numeric-ids");
+	Add(lbl_owners.SetLabel("Owners").LeftPos(m, lw).TopPos(m + row, h));
+	Add(owners.HSizePos(m + lw, m).TopPos(m + row, h));
 
 	// Switches in two columns. Dry run is left out: in the GUI the Sync menu decides.
 	Vector<int> shown;
 	int col_w = 0;
 	for(int i = 0; i < BOOL_OPTION_COUNT; i++) {
-		if(BOOL_OPTIONS[i].field == &SyncFlags::dry_run) {
+		// Dry run: the Sync menu decides. Owners: the Owners choice above.
+		if(BOOL_OPTIONS[i].field == &SyncFlags::dry_run || BOOL_OPTIONS[i].field == &SyncFlags::preserve_owner ||
+		   BOOL_OPTIONS[i].field == &SyncFlags::numeric_ids) {
 			Add(opt[i]);   // kept for Set/Get, never shown
 			opt[i].Hide();
 			continue;
@@ -86,7 +94,7 @@ SetupDlg::FlagsPane::FlagsPane()
 		col_w = max(col_w, W(BOOL_OPTIONS[i].text) + box);
 	}
 	int half = (shown.GetCount() + 1) / 2;
-	int y = m + row + Zy(6);
+	int y = m + 2 * row + Zy(6);
 	for(int k = 0; k < shown.GetCount(); k++) {
 		int i = shown[k];
 		const BoolOption& o = BOOL_OPTIONS[i];
@@ -136,6 +144,17 @@ SetupDlg::FlagsPane::FlagsPane()
 	for(int i = 0; i < INT_OPTION_COUNT; i++)
 		num[i] << [this, i] { ShowHelp(INT_OPTIONS[i].text, INT_OPTIONS[i].help); Sync(); };
 	mode << [this] { ShowHelp("Mode", HELP_MODE[clamp((int)~mode, 0, 2)]); Sync(); };
+	owners << [this] {
+		int o = ~owners;
+		for(int i = 0; i < BOOL_OPTION_COUNT; i++) {
+			if(BOOL_OPTIONS[i].field == &SyncFlags::preserve_owner)
+				opt[i] <<= o != 0;
+			if(BOOL_OPTIONS[i].field == &SyncFlags::numeric_ids)
+				opt[i] <<= o == 2;
+		}
+		ShowHelp("Owners", HELP_OWNERS);
+		Sync();
+	};
 	xf << [this] { ShowHelp("Exclude files", HELP_EXCLUDE_FILES); Sync(); };
 	xd << [this] { ShowHelp("Exclude folders", HELP_EXCLUDE_DIRS); Sync(); };
 	ShowHelp("Help", "Click an option to see what it does. Hover over it to see its command-line name.");
@@ -167,6 +186,7 @@ void SetupDlg::FlagsPane::Sync()
 void SetupDlg::FlagsPane::Set(const SyncFlags& f)
 {
 	mode <<= (int)f.mode;
+	owners <<= !f.preserve_owner ? 0 : f.numeric_ids ? 2 : 1;
 	for(int i = 0; i < BOOL_OPTION_COUNT; i++)
 		opt[i] <<= f.*BOOL_OPTIONS[i].field;
 	for(int i = 0; i < INT_OPTION_COUNT; i++)

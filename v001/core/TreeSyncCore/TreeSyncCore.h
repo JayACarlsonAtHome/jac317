@@ -88,6 +88,7 @@ struct IntOption {
 extern const char *HELP_MODE[3];          // Copy, Mirror, Merge
 extern const char *HELP_EXCLUDE_FILES;
 extern const char *HELP_EXCLUDE_DIRS;
+extern const char *HELP_OWNERS;           // the Owners choice: off, by name, by number
 
 constexpr int BOOL_OPTION_COUNT = 16;
 constexpr int INT_OPTION_COUNT = 6;

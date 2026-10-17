@@ -104,6 +104,14 @@ const char *HELP_MODE[3] = {
 	"Merge: changes go both ways. A file changed on only one side is copied to the other; a file "
 	"changed on both sides since the last sync is a conflict and left alone. Nothing is removed.",
 };
+const char *HELP_OWNERS =
+	"Who the copies belong to. Setting an owner needs root on the side being written; without "
+	"it, copies belong to whoever runs TreeSync.\n"
+	"Don't copy: copies belong to whoever runs TreeSync.\n"
+	"By name (normal): each copy gets the same owner and group names as the original. User 'jay' "
+	"stays 'jay' even when that user has a different number on the other machine.\n"
+	"By number: the raw user and group numbers are copied. Only for machines that number their "
+	"users the same way; otherwise files can end up owned by the wrong user. (--numeric-ids)";
 const char *HELP_EXCLUDE_FILES =
 	"File names to leave out, with * and ? as wildcards, separated by ';'. Example: *.tmp;Thumbs.db";
 const char *HELP_EXCLUDE_DIRS =
@@ -259,6 +267,13 @@ int ParseCommandLine(const Vector<String>& args, SyncSetup& s, String& error)
 				if(!flag_only())
 					return PARSE_ERROR;
 				s.flags.*o.field = on;
+				// Owners are one choice: off, by name, or by number. --numeric-ids
+				// means "by number" and so switches owner copying on; switching owner
+				// copying off leaves no numbers to copy.
+				if(o.field == &SyncFlags::numeric_ids && on)
+					s.flags.preserve_owner = true;
+				if(o.field == &SyncFlags::preserve_owner && !on)
+					s.flags.numeric_ids = false;
 				done = true;
 			}
 		}
