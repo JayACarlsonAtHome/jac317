@@ -717,7 +717,11 @@ bool RunStreaming(Runner& r, TreeFs *side[2], const String& key, bool fresh, Str
 
 	Streamer s(r);
 	s.estimate = side[0]->EntryEstimate();
-	if(flags.wipe_target) {
+	// A resumed run emptied the target when it started: doing it again would throw
+	// away what it has copied since.
+	if(flags.wipe_target && result.resumed)
+		report.WhenLine("not emptying the target again: this run already did when it started");
+	else if(flags.wipe_target) {
 		String why;
 		if(!WipeAllowed(side[1]->RootPath(), why)) {
 			error = why;

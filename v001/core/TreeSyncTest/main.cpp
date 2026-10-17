@@ -793,6 +793,35 @@ static void TestWipe(const String& root)
 	EXPECT(!FileExists(dst + "/old folder/x.txt") && !FileExists(dst + ".old/old folder/x.txt.1") &&
 	       TreeHash(src, check) == TreeHash(dst, check), "without safe delete the old contents are deleted");
 
+	// Stopped part-way and resumed: the resumed run must not empty the target again
+	// (that would move the files it already copied into .old).
+	String src2 = root + "/w2-src", dst2 = root + "/w2-dst";
+	for(int i = 0; i < 60; i++)
+		Put(Format("%s/f%02d.txt", src2, i), Big(5000 + i, i));
+	Put(dst2 + "/junk.txt", "junk\n");
+	SyncSetup w = Setup(src2, dst2, db);
+	w.flags.wipe_target = true;
+	w.flags.threads = 1;
+	std::atomic<bool> halt = false;
+	std::atomic<int> done = 0;
+	SyncResult r1, r2;
+	Sync(w, r1, nullptr, &halt, [&](const CopyProgress& p) {
+		if(p.done >= p.size && ++done >= 10)
+			halt = true;
+	});
+	halt = false;
+	Vector<String> wl;
+	Sync(w, r2, &wl, &halt);
+	bool said = false;
+	for(const String& l : wl)
+		said = said || l.Find("not emptying the target again") >= 0;
+	int moved_again = 0;
+	for(int i = 0; i < 60; i++)
+		moved_again += FileExists(Format("%s.old/f%02d.txt", dst2, i));
+	EXPECT(r1.stopped && r2.resumed && said && moved_again == 0 && FileExists(dst2 + ".old/junk.txt") &&
+	       TreeHash(src2, check) == TreeHash(dst2, check),
+	       Format("resumed wipe run does not wipe again (%d copied files moved to .old)", moved_again));
+
 	String why;
 	EXPECT(!WipeAllowed("/", why) && !WipeAllowed("/home", why) && !WipeAllowed("/etc/", why) &&
 	       !WipeAllowed(HomeDir(), why) && WipeAllowed(root + "/w-dst", why), "wipe refused for / /home /etc and home");
