@@ -65,6 +65,8 @@ Output goes to `v001/out/<compiler>/treesync` (and `treesync-test`). U++'s stock
 
 **In the GUI**: File > Build and test.. does the same from a window, like jac313's Jac313Runner: choose gcc, clang or both, Debug or Release, the tests and ThreadSanitizer; it runs `build.sh` once per step, streams the output, and ends with start : stop : duration per step (kept in `Build-Results.txt` in the logs folder). `treesync --build-run` does a build with the saved choices without clicking (a developer aid).
 
+**Comparing compilers**: tick *Compare the compilers* (and *Clean build* for fair build times) and the Results screen shows gcc next to clang, rows that differ marked: build time, test results, program sizes, versions, the C++26 feature macros, benchmarks of TreeSync's own hot paths (SHA-256, progress lines, path sorting; `treesync-cli --bench`), and `import std;`, whether it works and how its compile time compares with `#include` on `v001/probe/import_std.cpp`. The facts come from `./compare.sh --compiler gcc|clang`. Both compilers here can `import std;`; see [`v001/docs/findings/import_std_gcc15_clang21.md`](v001/docs/findings/import_std_gcc15_clang21.md). Benchmarks of a Debug build measure unoptimized code; choose Release to compare what the optimizers make of it.
+
 `treesync --screenshot=DIR` (a developer aid) draws the main window and each Setup tab into PNG files without showing anything, so the layout can be checked without a screen.
 
 The tests build a scratch tree under `$TMPDIR` with awkward names and a folder chain deeper than `PATH_MAX`. They also check option round trips (including shell quoting through a real `sh`), the home-only limit, and the progress-line layout. The scratch tree is removed afterwards.

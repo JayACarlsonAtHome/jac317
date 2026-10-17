@@ -7,6 +7,8 @@
 #   ./build.sh --compiler gcc --release    # optimized build
 #   ./build.sh --compiler gcc --test       # also build and run the core tests
 #   ./build.sh --compiler clang --tsan     # build and run the tests under ThreadSanitizer
+#   ./build.sh --compiler gcc --clean      # compile everything, not only what changed
+#                                          # (fair build times when comparing compilers)
 #
 # Packages: core/TreeSyncCore (engine, no GUI), core/TreeSyncCli (the engine in a
 # terminal), gui/TreeSync (GUI on top), core/TreeSyncTest (tests of the core).
@@ -19,6 +21,7 @@ COMPILER=clang
 MODE=-bsH
 TEST=0
 TSAN=0
+CLEAN=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -26,10 +29,13 @@ while [ $# -gt 0 ]; do
     --release)  MODE=-brsH; shift ;;
     --test)     TEST=1; shift ;;
     --tsan)     TSAN=1; shift ;;
-    -h|--help)  sed -n '3,15p' "$0"; exit 0 ;;
+    --clean)    CLEAN=1; shift ;;
+    -h|--help)  sed -n '3,17p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+
+[ "$CLEAN" = 1 ] && MODE="${MODE}a"   # umk -a: rebuild all
 
 case "$COMPILER" in
   clang) BM="$HERE/bm/CLANG26.bm" ;;

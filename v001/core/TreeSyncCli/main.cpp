@@ -78,6 +78,12 @@ static void *WatchStdin(void *)
 CONSOLE_APP_MAIN
 {
 	Vector<String> args = clone(CommandLine());
+	// Developer switches for comparing compilers (the Build window's compare step):
+	// facts about this build, one "key<TAB>value" per line.
+	if(args.GetCount() == 1 && (args[0] == "--toolchain" || args[0] == "--bench")) {
+		Cout() << (args[0] == "--toolchain" ? ToolchainFacts() : BenchFacts());
+		return;
+	}
 	bool stop_on_eof = false, compare_ids = false;
 	static bool gui_progress = false;
 	for(int i = args.GetCount() - 1; i >= 0; i--)

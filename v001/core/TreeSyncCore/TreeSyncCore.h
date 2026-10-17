@@ -220,6 +220,11 @@ String ResultsLine(int64 start, int64 stop, const String& what, int result, cons
 
 // Toolchain.cpp: compiler, library and C++26 feature report.
 String ToolchainReport();
+String ToolchainFacts();   // "key<TAB>value" per line, for comparing compilers
+
+// Bench.cpp: how fast this build does TreeSync's own work, "key<TAB>value" per line:
+// SHA-256 throughput, progress-line formatting, path sorting. Best of 3 rounds.
+String BenchFacts();
 
 // Root.cpp. The messages are plain text, one paragraph per line; the GUI shows
 // them in a dialog and also prints them to the terminal.

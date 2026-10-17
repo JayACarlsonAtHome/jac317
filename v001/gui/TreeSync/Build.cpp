@@ -5,7 +5,12 @@
 //
 //   Screen 1  Options + Start   (choices saved to ~/.config/treesync/build)
 //   Screen 2  Running           (each step's state, elapsed time, live output, Stop)
-//   Screen 3  Results           (start : stop : duration per step, the j5c Results.txt layout)
+//   Screen 3  Results           (start : stop : duration per step, the j5c Results.txt layout;
+//                                with Compare, a table of the compilers side by side)
+//
+// Compare runs compare.sh per compiler after the builds: versions, C++26 features,
+// import std (works? compile times against #include), benchmarks of the built
+// program, sizes; plus each build's time and test result. Rows that differ are marked.
 #include "TreeSync.h"
 
 #include <signal.h>
@@ -27,7 +32,9 @@ namespace {
 
 struct BuildStep : Moveable<BuildStep> {
 	String         title;
-	Vector<String> args;          // for build.sh
+	Vector<String> args;          // for build.sh, or compare.sh
+	String         compiler;      // gcc or clang
+	bool           compare = false;
 	int64          started = 0, stopped = 0;
 	int            code = -1;     // exit code; -1 not run yet
 	String         checks;        // "passed: 214/214 checks" when the tests ran
@@ -43,7 +50,7 @@ class BuildWindow : public TopWindow {
 	LabelBox  compiler_box, build_box, toolchain_box;
 	Label     compiler_label, type_label;
 	Switch    compiler, type;
-	Option    tests, tsan;
+	Option    tests, tsan, clean, compare;
 	LineEdit  toolchain;
 	Label     command;
 	Button    start, close1;
@@ -55,6 +62,8 @@ class BuildWindow : public TopWindow {
 	Button    stop;
 
 	// Screen 3
+	Splitter  split3;
+	ArrayCtrl compare_list;
 	LineEdit  results;
 	Button    back, close3;
 
@@ -64,6 +73,7 @@ class BuildWindow : public TopWindow {
 	bool              stopping = false;
 	int64             all_started = 0;
 	String            partial;   // output after the last newline
+	ArrayMap<String, VectorMap<String, String>> facts;   // compiler -> what -> value
 
 	void Screen(int n)  { s1.Show(n == 1); s2.Show(n == 2); s3.Show(n == 3); }
 	void Plan();
@@ -77,6 +87,8 @@ class BuildWindow : public TopWindow {
 	void StepDone();
 	void Finish();
 	void Stop();
+	void ShowCompare();
+	String CompareText();
 
 public:
 	bool auto_run = false;             // --build-run: start at once, close when done
@@ -102,7 +114,7 @@ BuildWindow::BuildWindow()
 	compiler.Add("gcc", "gcc 15 (gcc-toolset-15)").Add("clang", "clang 21").Add("both", "both, one after the other");
 	s1.Add(compiler.HSizePosZ(20, 20).TopPosZ(28, 22));
 
-	s1.Add(build_box.SetLabel("Build").HSizePosZ(8, 8).TopPosZ(66, 100));
+	s1.Add(build_box.SetLabel("Build").HSizePosZ(8, 8).TopPosZ(66, 150));
 	s1.Add(type_label.SetText("Type:").LeftPosZ(20, 60).TopPosZ(86, 22));
 	type.Add("debug", "Debug").Add("release", "Release (optimized)");
 	s1.Add(type.LeftPosZ(80, 400).TopPosZ(86, 22));
@@ -110,12 +122,16 @@ BuildWindow::BuildWindow()
 	s1.Add(tests.LeftPosZ(20, 600).TopPosZ(112, 22));
 	tsan.SetLabel("Then run the tests under ThreadSanitizer (clang; finds data races between threads)");
 	s1.Add(tsan.LeftPosZ(20, 700).TopPosZ(136, 22));
+	clean.SetLabel("Clean build: compile everything, not only what changed (fair build times)");
+	s1.Add(clean.LeftPosZ(20, 700).TopPosZ(160, 22));
+	compare.SetLabel("Compare the compilers: versions, C++26 features, import std, speed, size");
+	s1.Add(compare.LeftPosZ(20, 700).TopPosZ(184, 22));
 
-	s1.Add(toolchain_box.SetLabel("This program was built with").HSizePosZ(8, 8).VSizePosZ(172, 96));
+	s1.Add(toolchain_box.SetLabel("This program was built with").HSizePosZ(8, 8).VSizePosZ(222, 96));
 	toolchain.SetReadOnly();
 	toolchain.SetFont(Monospace());
 	toolchain <<= ToolchainReport();
-	s1.Add(toolchain.HSizePosZ(16, 16).VSizePosZ(192, 104));
+	s1.Add(toolchain.HSizePosZ(16, 16).VSizePosZ(242, 104));
 
 	command.SetFont(Monospace());
 	s1.Add(command.HSizePosZ(8, 8).BottomPosZ(44, 44));
@@ -138,7 +154,13 @@ BuildWindow::BuildWindow()
 	// Screen 3: results
 	results.SetReadOnly();
 	results.SetFont(Monospace());
-	s3.Add(results.HSizePosZ(8, 8).VSizePosZ(8, 44));
+	compare_list.AddColumn("What", 30);
+	compare_list.AddColumn("gcc", 35);
+	compare_list.AddColumn("clang", 35);
+	compare_list.NoCursor().EvenRowColor();
+	split3.Vert(compare_list, results);
+	split3.SetPos(6500);
+	s3.Add(split3.HSizePosZ(8, 8).VSizePosZ(8, 44));
 	s3.Add(back.SetLabel("Back").LeftPosZ(8, 100).BottomPosZ(8, 28));
 	s3.Add(close3.SetLabel("Close").RightPosZ(8, 100).BottomPosZ(8, 28));
 
@@ -146,6 +168,8 @@ BuildWindow::BuildWindow()
 	type << [this] { ShowCommand(); };
 	tests << [this] { ShowCommand(); };
 	tsan << [this] { ShowCommand(); };
+	clean << [this] { ShowCommand(); };
+	compare << [this] { ShowCommand(); };
 	start << [this] { Start(); };
 	close1 << [this] { Close(); };
 	close3 << [this] { Close(); };
@@ -179,15 +203,30 @@ void BuildWindow::Plan()
 		if(c != "both" && c != cc)
 			continue;
 		BuildStep& s = steps.Add();
+		s.compiler = cc;
 		s.args << "--compiler" << cc;
 		if(release)
 			s.args << "--release";
 		if(tests)
 			s.args << "--test";
-		s.title = String(cc) + (release ? " release" : " debug") + (tests ? " build + tests" : " build");
+		if(clean)
+			s.args << "--clean";
+		s.title = String(cc) + (release ? " release" : " debug") + (clean ? " clean" : "") +
+		          (tests ? " build + tests" : " build");
 	}
+	if(compare)
+		for(const char *cc : { "gcc", "clang" }) {
+			if(c != "both" && c != cc)
+				continue;
+			BuildStep& s = steps.Add();
+			s.compiler = cc;
+			s.compare = true;
+			s.args << "--compiler" << cc;
+			s.title = String("compare ") + cc + ": features, import std, speed, size";
+		}
 	if(tsan) {
 		BuildStep& s = steps.Add();
+		s.compiler = "clang";
 		s.args << "--compiler" << "clang" << "--tsan";
 		if(release)
 			s.args << "--release";
@@ -200,7 +239,7 @@ void BuildWindow::ShowCommand()
 	Plan();
 	String text;
 	for(const BuildStep& s : steps)
-		text << (text.GetCount() ? "\n" : "") << "build.sh " << Join(s.args, " ");
+		text << (text.GetCount() ? "\n" : "") << (s.compare ? "compare.sh " : "build.sh ") << Join(s.args, " ");
 	command = text;
 	start.Enable(BuildScript().GetCount() && steps.GetCount());
 }
@@ -211,6 +250,8 @@ void BuildWindow::Load()
 	type <<= "debug";
 	tests = true;
 	tsan = false;
+	clean = false;
+	compare = false;
 	for(String line : Split(LoadFile(BuildSettingsPath()), '\n')) {
 		String key = line.Left(max(line.Find('='), 0)), value = line.Mid(line.Find('=') + 1);
 		if(key == "compiler" && (value == "gcc" || value == "clang" || value == "both"))
@@ -221,6 +262,10 @@ void BuildWindow::Load()
 			tests = value == "1";
 		else if(key == "tsan")
 			tsan = value == "1";
+		else if(key == "clean")
+			clean = value == "1";
+		else if(key == "compare")
+			compare = value == "1";
 	}
 }
 
@@ -229,7 +274,8 @@ void BuildWindow::Save()
 	String path = BuildSettingsPath();
 	RealizePath(path);
 	SaveFile(path, "compiler=" + AsString(~compiler) + "\ntype=" + AsString(~type) +
-	               "\ntests=" + AsString((int)tests) + "\ntsan=" + AsString((int)tsan) + "\n");
+	               "\ntests=" + AsString((int)tests) + "\ntsan=" + AsString((int)tsan) +
+	               "\nclean=" + AsString((int)clean) + "\ncompare=" + AsString((int)compare) + "\n");
 }
 
 void BuildWindow::Start()
@@ -243,6 +289,7 @@ void BuildWindow::Start()
 		steps_list.Add(s.title, "waiting", "", "");
 	output.Clear();
 	results.Clear();
+	facts.Clear();
 	stopping = false;
 	all_started = (int64)time(nullptr);
 	step = -1;
@@ -258,11 +305,11 @@ void BuildWindow::NextStep()
 		return;
 	}
 	BuildStep& s = steps[step];
-	String script = BuildScript();
+	String script = s.compare ? AppendFileName(GetFileFolder(BuildScript()), "compare.sh") : BuildScript();
 	Vector<String> args;
 	args << "bash" << script;
 	args.Append(s.args);
-	Out("\n== " + s.title + ": build.sh " + Join(s.args, " ") + "\n");
+	Out("\n== " + s.title + ": " + GetFileName(script) + " " + Join(s.args, " ") + "\n");
 	s.started = (int64)time(nullptr);
 	steps_list.Set(step, 1, "running");
 	partial.Clear();
@@ -310,10 +357,17 @@ void BuildWindow::Out(const String& text)
 	partial << text;
 	int nl = partial.ReverseFind('\n');
 	if(nl >= 0) {
-		for(const String& line : Split(partial.Left(nl), '\n', false))
-			if(step >= 0 && step < steps.GetCount() &&
-			   (line.StartsWith("passed: ") || line.StartsWith("FAILED: ")) && line.Find("checks") > 0)
+		for(const String& line : Split(partial.Left(nl), '\n', false)) {
+			if(step < 0 || step >= steps.GetCount())
+				continue;
+			if((line.StartsWith("passed: ") || line.StartsWith("FAILED: ")) && line.Find("checks") > 0)
 				steps[step].checks = TrimBoth(line);
+			if(line.StartsWith("@cmp\t")) {   // compare.sh: what<TAB>value
+				Vector<String> f = Split(line.Mid(5), '\t', false);
+				if(f.GetCount() >= 2)
+					facts.GetAdd(steps[step].compiler).GetAdd(f[0]) = f[1];
+			}
+		}
 		partial = partial.Mid(nl + 1);
 	}
 	output.Insert(output.GetLength(), text.ToWString());
@@ -332,6 +386,13 @@ void BuildWindow::StepDone()
 	steps_list.Set(step, 3, s.checks);
 	if(s.code != 0)
 		steps_list.SetLineColor(step, Color(255, 215, 215));
+	if(compare && !s.compare && FindIndex(s.args, String("--tsan")) < 0) {   // the build itself, for the table
+		VectorMap<String, String>& f = facts.GetAdd(s.compiler);
+		f.GetAdd(String("build") + (clean ? " (clean)" : " (changes only)") + ": time (s)") = AsString(s.stopped - s.started);
+		f.GetAdd("build: result") = s.code == 0 ? String("good") : "FAILED (exit " + AsString(s.code) + ")";
+		if(s.checks.GetCount())
+			f.GetAdd("tests") = s.checks;
+	}
 	NextStep();
 }
 
@@ -355,6 +416,10 @@ void BuildWindow::Finish()
 	for(const BuildStep& s : steps)
 		rebuilt_me = rebuilt_me || (s.code == 0 && s.args.GetCount() >= 2 && s.args[1] == here &&
 		                            FindIndex(s.args, String("--tsan")) < 0);
+	ShowCompare();
+	if(facts.GetCount())
+		text << "\n\n" << CompareText();
+	String kept = text;   // for Build-Results.txt: without the note below
 	if(rebuilt_me)
 		text << "\n\nThis program (" << here << ") was rebuilt: close TreeSync and start it again to use the new build.";
 	results <<= text;
@@ -364,10 +429,9 @@ void BuildWindow::Finish()
 	bool fresh = !FileExists(path);
 	FileAppend fa(path);
 	if(fa) {
-		String body = text.Mid(text.Find("=\n") + 2);   // the step lines, without the header
 		if(fresh)
 			fa << "\n" << ResultsHeader(all_started);
-		fa << body.Left(body.Find("\n\nThis program") >= 0 ? body.Find("\n\nThis program") : body.GetCount()) << "\n";
+		fa << kept.Mid(kept.Find("=\n") + 2) << "\n";   // the step lines (and table), without the header
 	}
 	if(auto_run) {   // --build-run: say how it went and close
 		Cout() << text << "\n";
@@ -376,6 +440,49 @@ void BuildWindow::Finish()
 	}
 	running = good ? "Done: all good." : stopping ? "Stopped." : "Done, with failures: see the red steps.";
 	Screen(3);
+}
+
+// The compilers side by side: every "what" any of them reported, in the order first
+// seen; rows whose values differ are marked.
+void BuildWindow::ShowCompare()
+{
+	compare_list.Clear();
+	split3.Zoom(facts.IsEmpty() ? 1 : -1);
+	if(facts.IsEmpty())
+		return;
+	Index<String> rows;
+	for(const VectorMap<String, String>& f : facts)
+		for(const String& k : f.GetKeys())
+			rows.FindAdd(k);
+	const char *cols[] = { "gcc", "clang" };
+	for(const String& r : rows) {
+		Vector<Value> line;
+		line.Add(r.StartsWith("feature:") ? r.Mid(8) : r);
+		Index<String> values;
+		for(const char *c : cols) {
+			int q = facts.Find(c);
+			String v = q >= 0 ? facts[q].Get(r, "") : String();
+			line.Add(v);
+			if(q >= 0)
+				values.FindAdd(v);
+		}
+		compare_list.Add(line);
+		if(values.GetCount() > 1)
+			compare_list.SetLineColor(compare_list.GetCount() - 1, Color(255, 240, 190));
+	}
+}
+
+// The same table as text, for Build-Results.txt; "*" marks a difference.
+String BuildWindow::CompareText()
+{
+	String t = " Compare                                  : gcc                                      : clang\n";
+	for(int i = 0; i < compare_list.GetCount(); i++) {
+		auto pad = [](const String& s, int w) { return s.GetCount() >= w ? s : s + String(' ', w - s.GetCount()); };
+		bool differs = facts.GetCount() > 1 && compare_list.Get(i, 1) != compare_list.Get(i, 2);
+		t << (differs ? "*" : " ") << pad(AsString(compare_list.Get(i, 0)), 40) << " : "
+		  << pad(AsString(compare_list.Get(i, 1)), 40) << " : " << AsString(compare_list.Get(i, 2)) << "\n";
+	}
+	return t;
 }
 
 void BuildWindow::Stop()

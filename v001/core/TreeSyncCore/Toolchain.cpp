@@ -147,3 +147,21 @@ String ToolchainReport()
 	r << "Missing:   " << Join(missing, "\n           ") << "\n";
 	return r;
 }
+
+// The same, one fact per line as "key<TAB>value", for comparing compilers
+// (treesync-cli --toolchain, and the Build window's compare step).
+String ToolchainFacts()
+{
+	String r;
+	r << "compiler\t" << COMPILER << "\n";
+#ifdef _GLIBCXX_RELEASE
+	r << "library\tlibstdc++ " << _GLIBCXX_RELEASE << " (" << __GLIBCXX__ << ")\n";
+#elif defined(_LIBCPP_VERSION)
+	r << "library\tlibc++ " << _LIBCPP_VERSION << "\n";
+#endif
+	r << "standard\t" << (int64)__cplusplus << "\n";
+	r << "contracts\t" << (TS_CONTRACTS_NATIVE ? "native" : "fallback") << "\n";
+	for(const Feature& f : Features())
+		r << "feature:" << f.name << "\t" << (f.value ? AsString(f.value) : String("-")) << "\n";
+	return r;
+}
