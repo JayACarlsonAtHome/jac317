@@ -281,6 +281,11 @@ static void TestProgress()
 		EXPECT(l.ToWString().GetCount() == 100, "line is 100 columns: " + l);
 	}
 	EXPECT(ProgressLine(lines[2]).Find("the file name.txt") >= 0, "long name keeps its end");
+	CopyProgress half = { 1, 2, "half way.bin", 500, 1000, 1.0 };
+	String withbar = ProgressLine(half, 100, true);
+	Cout() << withbar << "\n";
+	EXPECT(withbar.ToWString().GetCount() == 100, "line with thermometer is 100 columns");
+	EXPECT(withbar.Find(" 50% [==========          ]") >= 0, "thermometer half full at 50%");
 	EXPECT(ProgressLine(lines[1]).Find(" 25% ") >= 0, "partial file shows 25%");
 	EXPECT(ProgressLine(lines[3]).Find("00m21s") >= 0, "elapsed time");
 	Cout() << "\n";

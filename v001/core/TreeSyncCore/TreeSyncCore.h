@@ -150,9 +150,11 @@ struct CopyProgress {
 	int64  done = 0;       // bytes copied so far
 	int64  size = 0;       // bytes in total
 	double seconds = 0;    // elapsed
+	int    id = 0;         // which copy (its step in the run), to tell parallel copies apart
 };
 
-String ProgressLine(const CopyProgress& p, int width = 100);
+// bar: a text thermometer after the percentage, for a file still in progress.
+String ProgressLine(const CopyProgress& p, int width = 100, bool bar = false);
 
 // Toolchain.cpp: compiler, library and C++26 feature report.
 String ToolchainReport();

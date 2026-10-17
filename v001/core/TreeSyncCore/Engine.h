@@ -95,6 +95,7 @@ struct SyncReport {
 	Event<const String&>       WhenLine;      // a finished line: keep it
 	Event<const String&>       WhenStatus;    // a passing status: may overwrite
 	Event<const CopyProgress&> WhenProgress;  // copy progress; done == size when a file finishes
+	Event<int64, int64>        WhenOverall;   // bytes of the run's copies done, of total
 	const std::atomic<bool>   *stop = nullptr;
 	Throttle                  *throttle = nullptr;   // set by RunSync for --bwlimit
 

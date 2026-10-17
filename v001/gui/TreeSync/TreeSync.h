@@ -124,6 +124,12 @@ class TreeSyncWindow : public TopWindow {
 	Splitter  split, vsplit;
 	TreePanel source_panel, target_panel;
 	LineEdit  log;
+
+	// Thermometers: the whole run, and one row per file being copied right now.
+	ParentCtrl        progress_pane;
+	ProgressIndicator overall;
+	Label             overall_text;
+	ArrayCtrl         active;
 	SyncSetup setup;
 
 	// SyncRun.cpp: treesync-cli as a child process.
@@ -133,6 +139,7 @@ class TreeSyncWindow : public TopWindow {
 	std::thread reader;
 
 	void Log(const String& line);
+	void ShowProgress(const String& line);   // an @file or @overall line from treesync-cli
 	void StartSync(bool dry_run);
 	void StopSync();
 	void SyncFinished(int code);

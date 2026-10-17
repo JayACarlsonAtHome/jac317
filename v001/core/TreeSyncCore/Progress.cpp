@@ -31,7 +31,7 @@ static String FitName(const String& name, int width)
 	return w.ToString() + String(' ', width - w.GetCount());
 }
 
-String ProgressLine(const CopyProgress& p, int width)
+String ProgressLine(const CopyProgress& p, int width, bool bar)
 {
 	TS_PRE(p.count >= 0 && p.index >= 0 && p.index <= p.count);
 	std::string total = std::to_string(p.count);
@@ -39,7 +39,13 @@ String ProgressLine(const CopyProgress& p, int width)
 	index.insert(0, total.size() - min(total.size(), index.size()), ' ');
 	std::string counter = "[" + index + "/" + total + "] ";
 	int pct = p.size > 0 ? (int)min<int64>(100, p.done * 100 / p.size) : 100;
-	std::string tail = std::format(" {:>3}% | {:>12} | {:>10} | {:>7}", pct,
+	std::string thermo;
+	if(bar) {
+		const int W = 20;
+		int fill = pct * W / 100;
+		thermo = " [" + std::string(fill, '=') + std::string(W - fill, ' ') + "]";
+	}
+	std::string tail = std::format(" {:>3}%{} | {:>12} | {:>10} | {:>7}", pct, thermo,
 	                               Rate(p.done, p.seconds).ToStd(), FormatBytes(p.done).ToStd(),
 	                               Elapsed(p.seconds));
 	int name_width = max(10, width - (int)counter.size() - (int)tail.size());

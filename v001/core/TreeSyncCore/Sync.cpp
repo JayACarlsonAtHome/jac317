@@ -88,8 +88,27 @@ struct Runner {
 	Runner(Db& db, SyncReport& report, SyncResult& result, const SyncSetup& setup)
 	:	db(db), report(report), result(result), setup(setup), flags(setup.flags) {}
 
+	// Overall progress: finished files plus how far the ones in flight have got.
+	int64                   overall_total = 0, overall_finished = 0;
+	VectorMap<int, int64>   in_flight;   // copy id -> bytes done
+
 	void Line(const String& s)              { Lock l(mx); report.WhenLine(s); }
-	void Progress(const CopyProgress& p)    { Lock l(mx); report.WhenProgress(p); }
+
+	void Progress(const CopyProgress& p)
+	{
+		Lock l(mx);
+		report.WhenProgress(p);
+		if(p.done >= p.size) {
+			in_flight.RemoveKey(p.id);
+			overall_finished += p.size;
+		}
+		else
+			in_flight.GetAdd(p.id) = p.done;
+		int64 done = overall_finished;
+		for(int64 d : in_flight)
+			done += d;
+		report.WhenOverall(min(done, overall_total), overall_total);
+	}
 
 	void SetState(int seq, const char *state, int64 bytes = 0, const String& error = Null)
 	{
@@ -115,12 +134,16 @@ struct Runner {
 	}
 
 	// --preserve-owner, and the side being written can take owners (root there).
-	bool Owners(Ctx& c, int side)
+	// uid/gid: the owner to copy. Without root, a local copy of the user's own file
+	// gets the right owner anyway: no note for that.
+	bool Owners(Ctx& c, int side, int64 uid, int64 gid)
 	{
 		if(!flags.preserve_owner)
 			return false;
 		Lock l(mx);
 		if(!c.fs[side]->CanChown()) {
+			if(c.fs[side]->IsLocal() && c.fs[1 - side]->IsLocal() && uid == (int64)getuid() && gid == (int64)getgid())
+				return false;
 			if(!owner_note[side])
 				report.WhenLine("owners not copied to " + c.fs[side]->Name() +
 				                ": that needs root there (--no-preserve-owner hides this note)");
@@ -158,11 +181,10 @@ struct Runner {
 	// Sets the owner of something just created (folder or local symlink) from the source.
 	void CopyOwner(Ctx& c, int dir, const String& rel)
 	{
-		if(!Owners(c, 1 - dir))
-			return;
 		Entry src;
 		String error;
-		if(!c.fs[dir]->Stat(rel, false, src, error) || src.uid < 0)
+		if(!flags.preserve_owner || !c.fs[dir]->Stat(rel, false, src, error) || src.uid < 0 ||
+		   !Owners(c, 1 - dir, src.uid, src.gid))
 			return;
 		FileAttrs fa;
 		MapOwner(c, dir, src.uid, src.gid, fa);
@@ -238,6 +260,7 @@ struct Runner {
 		bool count_read = !from.IsLocal();
 		bool count_write = !to.IsLocal() || from.IsLocal();
 		const int64 SLICE = 1 << 20;
+		Clock::time_point last_shown = Clock::now();
 		for(int64 idx = next; idx < count; idx++) {
 			if(report.Stopping()) {
 				error = "stopped";
@@ -257,6 +280,14 @@ struct Runner {
 					return false;
 				if(count_write)
 					report.Count(n);
+				// Within a chunk too, about four times a second, so a thermometer
+				// moves smoothly even when one chunk takes many seconds.
+				if(Since(last_shown) >= 0.25 && off + k + n < size) {
+					p.done = off + k + n;
+					p.seconds = Since(t0);
+					Progress(p);
+					last_shown = Clock::now();
+				}
 			}
 			if(report.Stopping()) {
 				error = "stopped";
@@ -326,6 +357,7 @@ struct Runner {
 		}
 
 		CopyProgress p;
+		p.id = s.seq;
 		p.index = ++copy_index;
 		p.count = copy_count;
 		p.name = e.rel;
@@ -378,7 +410,7 @@ struct Runner {
 			FileAttrs fa;
 			fa.mode = now.mode;
 			fa.mtime_ns = now.mtime_ns;
-			if(now.uid >= 0 && Owners(c, 1 - a.dir))
+			if(now.uid >= 0 && Owners(c, 1 - a.dir, now.uid, now.gid))
 				MapOwner(c, a.dir, now.uid, now.gid, fa);
 			String warn;
 			if(!out->SetAttrs(fa, warn))
@@ -561,6 +593,10 @@ struct Runner {
 			      : s.a.kind == ActionKind::Delete ? 3 : 0;
 			phase[p].Add(&s);
 		}
+		for(int p = 1; p <= 2; p++)
+			for(const Step *s : phase[p])
+				if(s->a.from.type == 'f')
+					overall_total += s->a.from.size;
 		bool going = true;
 		for(int p = 0; p < 4 && going; p++)
 			if(p == 1)
@@ -570,6 +606,8 @@ struct Runner {
 					if(!(going = RunStep(main, *s)))
 						break;
 		result.stopped = !going;
+		if(going)   // hard links copy no bytes: the run is complete all the same
+			report.WhenOverall(overall_total, overall_total);
 
 		Stmt(db, "UPDATE runs SET state = ?, finished = ? WHERE id = ?")
 			.Text(1, result.stopped ? "stopped" : result.failed ? "failed" : "done")

@@ -3,10 +3,15 @@
 // Ctrl+C twice: quit at once.
 // --stop-on-eof (used by the GUI): stop the same way when stdin is closed. The GUI
 // can always close a pipe, even when pkexec made this a root process it may not signal.
+// --gui-progress (used by the GUI): also print progress as tagged lines,
+//   @file <TAB> id <TAB> done <TAB> size <TAB> seconds <TAB> index <TAB> count <TAB> name
+//   @overall <TAB> done <TAB> total
+// which the GUI turns into thermometers instead of log lines.
 // Exit codes: 0 in sync, 1 failures or conflicts, 2 usage or setup error, 3 stopped.
 #include <TreeSyncCore/TreeSyncCore.h>
 
 #include <csignal>
+#include <format>
 #include <thread>
 #include <unistd.h>
 
@@ -46,9 +51,10 @@ CONSOLE_APP_MAIN
 {
 	Vector<String> args = clone(CommandLine());
 	bool stop_on_eof = false, compare_ids = false;
+	static bool gui_progress = false;
 	for(int i = args.GetCount() - 1; i >= 0; i--)
-		if(args[i] == "--stop-on-eof" || args[i] == "--compare-ids") {
-			(args[i] == "--compare-ids" ? compare_ids : stop_on_eof) = true;
+		if(args[i] == "--stop-on-eof" || args[i] == "--compare-ids" || args[i] == "--gui-progress") {
+			(args[i] == "--compare-ids" ? compare_ids : args[i] == "--stop-on-eof" ? stop_on_eof : gui_progress) = true;
 			args.Remove(i);
 		}
 
@@ -83,10 +89,21 @@ CONSOLE_APP_MAIN
 	report.WhenLine = [](const String& s) { Print(s); };
 	report.WhenStatus = [](const String& s) { Status(s); };
 	report.WhenProgress = [](const CopyProgress& p) {
+		if(gui_progress) {
+			String name = p.name;
+			name.Replace("\t", " ");
+			name.Replace("\n", " ");
+			Cout() << std::format("@file\t{}\t{}\t{}\t{:.2f}\t{}\t{}\t", p.id, p.done, p.size, p.seconds,
+			                      p.index, p.count) << name << "\n";
+		}
 		if(p.done >= p.size)
 			Print(ProgressLine(p));
 		else
-			Status(ProgressLine(p));
+			Status(ProgressLine(p, 100, true));
+	};
+	report.WhenOverall = [](int64 done, int64 total) {
+		if(gui_progress)
+			Cout() << std::format("@overall\t{}\t{}\n", done, total);
 	};
 
 	if(compare_ids) {

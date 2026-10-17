@@ -20,6 +20,36 @@ void TreeSyncWindow::Log(const String& line)
 	log.SetCursor(log.GetLength());
 }
 
+// @file id done size seconds index count name / @overall done total, tab-separated.
+void TreeSyncWindow::ShowProgress(const String& line)
+{
+	Vector<String> f = Split(line, '\t', false);
+	if(f[0] == "@overall" && f.GetCount() >= 3) {
+		int64 done = ScanInt64(f[1]), total = ScanInt64(f[2]);
+		overall.Set(total > 0 ? (int)(done * 1000 / total) : 1000, 1000);
+		overall_text = FormatBytes(done) + " of " + FormatBytes(total);
+		return;
+	}
+	if(f[0] != "@file" || f.GetCount() < 8)
+		return;
+	int id = ScanInt(f[1]);
+	int64 done = ScanInt64(f[2]), size = ScanInt64(f[3]);
+	double seconds = ScanDouble(f[4]);
+	int row = active.Find(id);
+	if(done >= size) {   // finished: its line is in the log
+		if(row >= 0)
+			active.Remove(row);
+		return;
+	}
+	String rate = seconds > 0 ? FormatBytes((int64)(done / seconds)) + "/s" : String();
+	String what = Format("[%s/%s] ", f[5], f[6]) + f[7];
+	int permille = size > 0 ? (int)(done * 1000 / size) : 0;
+	if(row < 0)
+		active.Add(id, what, permille, rate, FormatBytes(size));
+	else
+		active.Set(row, Vector<Value>{ id, what, permille, rate, FormatBytes(size) });
+}
+
 void TreeSyncWindow::StartSync(bool dry_run)
 {
 	if(child > 0)
@@ -38,6 +68,7 @@ void TreeSyncWindow::StartSync(bool dry_run)
 	args.Add(cli);
 	args.Append(ToArgs(s));
 	args.Add("--stop-on-eof");
+	args.Add("--gui-progress");
 
 	int out[2], in[2];
 	if(pipe2(out, O_CLOEXEC) != 0 || pipe2(in, O_CLOEXEC) != 0) {
@@ -68,6 +99,9 @@ void TreeSyncWindow::StartSync(bool dry_run)
 	child_stdin = in[1];
 	Log(String(as_root ? "[as root] " : "") + CommandLineText(ToArgs(s)));
 	status = "Running...";
+	active.Clear();
+	overall.Set(0, 1000);
+	overall_text = "";
 
 	// Reader thread: lines go to the log on the GUI thread; exit status at the end.
 	int fd = out[0];
@@ -87,7 +121,10 @@ void TreeSyncWindow::StartSync(bool dry_run)
 			while((nl = pending.Find('\n')) >= 0) {
 				String line = pending.Left(nl);
 				pending.Remove(0, nl + 1);
-				PostCallback([this, line] { Log(line); });
+				if(line.StartsWith("@file\t") || line.StartsWith("@overall\t"))
+					PostCallback([this, line] { ShowProgress(line); });
+				else
+					PostCallback([this, line] { Log(line); });
 			}
 		}
 		close(fd);
@@ -119,6 +156,7 @@ void TreeSyncWindow::SyncFinished(int code)
 	                 : code == 2 ? "could not run" : code == 3 ? "stopped; Run again to resume"
 	                 : code == 126 || code == 127 ? "pkexec refused or was cancelled" : "ended abnormally";
 	Log(Format("treesync-cli exit code %d: %s", code, what));
+	active.Clear();
 	status = Format("Last run: %s", what);
 	LoadTrees();
 }

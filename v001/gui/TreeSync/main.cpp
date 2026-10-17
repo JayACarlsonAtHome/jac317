@@ -18,8 +18,24 @@ TreeSyncWindow::TreeSyncWindow()
 	AddFrame(status);
 	menu.Set([this](Bar& bar) { MainMenu(bar); });
 	split.Horz(source_panel, target_panel);
-	vsplit.Vert(split, log);
-	vsplit.SetPos(7000);
+
+	progress_pane.Add(overall.HSizePosZ(4, 220).TopPosZ(4, 18));
+	progress_pane.Add(overall_text.RightPosZ(4, 210).TopPosZ(4, 18));
+	progress_pane.Add(active.HSizePosZ(4, 4).VSizePosZ(26, 2));
+	overall.Set(0, 1000);
+	active.AddKey();                                   // copy id
+	active.AddColumn("Copying", 50);
+	active.AddColumn("", 30).SetDisplay(ProgressDisplay());   // 0..1000
+	active.AddColumn("Rate", 12).HeaderTab().AlignRight();
+	active.AddColumn("Size", 12).HeaderTab().AlignRight();
+	active.NoCursor().NoGrid();
+
+	vsplit.Vert();
+	vsplit.Add(split);
+	vsplit.Add(progress_pane);
+	vsplit.Add(log);
+	vsplit.SetPos(5800, 0);
+	vsplit.SetPos(7600, 1);
 	log.SetReadOnly();
 	log.SetFont(Monospace());
 	Add(vsplit.SizePos());
