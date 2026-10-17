@@ -1,5 +1,4 @@
-// Setup screen: tree paths, remote login, and sync switches. Stub: the values
-// are collected and handed back, but nothing connects or scans yet.
+// Setup screen: tree paths, remote login (keys only), and sync switches.
 #include "TreeSync.h"
 
 SetupDlg::EndpointPane::EndpointPane()
@@ -17,15 +16,13 @@ SetupDlg::EndpointPane::EndpointPane()
 	row(lbl_host, "Host", host, 200);
 	row(lbl_port, "Port", port, 60);
 	row(lbl_user, "User", user, 200);
-	Add(use_key.SetLabel("Use SSH key").LeftPosZ(100, 200).TopPosZ(y, 19));
-	y += 26;
 	row(lbl_key, "Key file", key_file, 300);
-	row(lbl_pass, "Password", password, 200);
+	key_file.Tip("Optional. Empty: ssh-agent, then ~/.ssh/id_ed25519, id_ecdsa, id_rsa");
+	Add(lbl_keys.SetLabel("Keys only, no passwords: set up passwordless SSH first "
+	                      "(ssh-copy-id user@host).").LeftPosZ(100, 360).TopPosZ(y, 19));
 
 	port.MinMax(1, 65535);
-	password.Password();
 	remote << [this] { Sync(); };
-	use_key << [this] { Sync(); };
 	Set(TreeEndpoint());
 }
 
@@ -33,10 +30,8 @@ void SetupDlg::EndpointPane::Sync()
 {
 	bool r = remote;
 	path.Remote(r);
-	for(Ctrl *c : { (Ctrl *)&host, (Ctrl *)&port, (Ctrl *)&user, (Ctrl *)&use_key })
+	for(Ctrl *c : { (Ctrl *)&host, (Ctrl *)&port, (Ctrl *)&user, (Ctrl *)&key_file, (Ctrl *)&lbl_keys })
 		c->Enable(r);
-	key_file.Enable(r && use_key);
-	password.Enable(r && !use_key);
 }
 
 void SetupDlg::EndpointPane::Set(const TreeEndpoint& e)
@@ -46,9 +41,7 @@ void SetupDlg::EndpointPane::Set(const TreeEndpoint& e)
 	host <<= e.host;
 	port <<= e.port;
 	user <<= e.user;
-	use_key <<= e.use_key;
 	key_file <<= e.key_file;
-	password <<= e.password;
 	Sync();
 }
 
@@ -60,9 +53,7 @@ TreeEndpoint SetupDlg::EndpointPane::Get() const
 	e.host = ~host;
 	e.port = Nvl((int)~port, 22);
 	e.user = ~user;
-	e.use_key = use_key;
 	e.key_file = ~key_file;
-	e.password = ~password;
 	return e;
 }
 

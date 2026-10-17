@@ -82,7 +82,7 @@ static void EndpointArgs(const char *side, const TreeEndpoint& e, Vector<String>
 		args.Add("--" + s + "-user=" + e.user);
 	if(e.port != 22)
 		args.Add("--" + s + "-port=" + AsString(e.port));
-	if(e.use_key && e.key_file.GetCount())
+	if(e.key_file.GetCount())
 		args.Add("--" + s + "-key=" + e.key_file);
 }
 
@@ -228,8 +228,8 @@ int ParseCommandLine(const Vector<String>& args, SyncSetup& s, String& error)
 			TreeEndpoint& e = String(side) == "source" ? s.source : s.target;
 			String key = name.StartsWith(side) ? name.Mid(strlen(side)) : String("?");
 			if(key == "-password") {
-				error = "passwords are not accepted on the command line (other users can see them in 'ps'); "
-				        "use --" + String(side) + "-key or the setup screen";
+				error = "TreeSync has no password login: set up passwordless SSH (a key) for this "
+				        "host first, then use ssh-agent, ~/.ssh/id_*, or --" + String(side) + "-key";
 				return PARSE_ERROR;
 			}
 			if(key != "" && key != "-host" && key != "-user" && key != "-port" && key != "-key")
@@ -246,7 +246,6 @@ int ParseCommandLine(const Vector<String>& args, SyncSetup& s, String& error)
 				e.user = value;
 			else if(key == "-key") {
 				e.key_file = CleanPath(value);
-				e.use_key = true;
 			}
 			else if(!ParseInt(value, 1, 65535, e.port)) {
 				error = "--" + name + " must be a port number from 1 to 65535";
@@ -276,8 +275,8 @@ String Usage()
 	  << "  --SIDE-user=USER       remote login\n"
 	  << "  --SIDE-port=PORT       SSH port (default 22)\n"
 	  << "  --SIDE-key=FILE        SSH key file\n"
-	  << "  Login order: --SIDE-key, a password (setup screen, or treesync-cli\n"
-	  << "  --password-stdin), ssh-agent, then ~/.ssh/id_ed25519, id_ecdsa, id_rsa.\n"
+	  << "  Keys only, no passwords: set up passwordless SSH first. Tried in order:\n"
+	  << "  --SIDE-key, ssh-agent, then ~/.ssh/id_ed25519, id_ecdsa, id_rsa.\n"
 	  << "  The host key must already be in known_hosts (connect once with ssh).\n\n"
 	  << "Mode (default --mirror):\n";
 	for(const auto& m : MODES)

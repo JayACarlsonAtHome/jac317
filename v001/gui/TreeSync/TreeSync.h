@@ -43,15 +43,13 @@ public:
 // Second screen: tree parameters and remote login for both sides, plus flags.
 class SetupDlg : public TopWindow {
 	struct EndpointPane : ParentCtrl {
-		Label      lbl_host, lbl_port, lbl_user, lbl_key, lbl_pass;
+		Label      lbl_host, lbl_port, lbl_user, lbl_key, lbl_keys;
 		PathPicker path;
 		Option     remote;
 		EditString host;
 		EditInt    port;
 		EditString user;
-		Option     use_key;
 		EditString key_file;
-		EditString password;
 
 		EndpointPane();
 		void Sync();

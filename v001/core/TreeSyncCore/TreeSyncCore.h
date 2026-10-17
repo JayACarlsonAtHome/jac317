@@ -26,9 +26,9 @@ struct TreeEndpoint {
 	String host;
 	int    port = 22;
 	String user;
-	bool   use_key = true;
-	String key_file;
-	String password;   // held in memory only, never written to the SQLite cache
+	String key_file;   // optional: a specific key; otherwise ssh-agent, then ~/.ssh/id_*
+	// No password field on purpose: TreeSync logs in with keys only, so a remote
+	// side needs passwordless SSH set up beforehand.
 };
 
 // Copy:   copy new/changed files source -> target, never delete    (--copy,   robocopy /E)

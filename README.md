@@ -141,13 +141,13 @@ The switches are modelled on robocopy. TreeSync adds `--merge`, which copies cha
 | `--SIDE=PATH` | Tree root; SIDE is `source` or `target` | |
 | `--SIDE-host`, `-user`, `-port`, `-key` | Remote login for that side | |
 
-Passwords are not accepted on the command line, because other users can see them with `ps`. Use `--SIDE-key` or the setup screen.
+There is no password login: remote sides use SSH keys only, so passwordless SSH must be set up beforehand (`ssh-copy-id user@host`, then check that `ssh user@host` does not ask for a password).
 
 Content is compared by SHA-256. File size and time decide whether a cached hash can be reused and, in Merge mode, which side is newer, so `--fat-file-times` and `--dst-tolerance` still matter.
 
 ## Status
 
-Working for local trees and over SFTP, with `treesync-cli` and the GUI: scan with a hash cache, Copy / Mirror / Merge, verified copies, hard links, symlinks, resumable runs and big files. Tested against a Fedora 44 server in both directions. Not yet: password login from the GUI, copying with several threads, and live per-chunk progress in the GUI log.
+Working for local trees and over SFTP, with `treesync-cli` and the GUI: scan with a hash cache, Copy / Mirror / Merge, verified copies, hard links, symlinks, resumable runs and big files. Tested against a Fedora 44 server in both directions. Not yet: copying with several threads, and live per-chunk progress in the GUI log.
 
 ## Sharing the machine
 
@@ -184,7 +184,7 @@ lists users and groups whose numbers differ, numbers that mean different account
 treesync-cli --source=/data --target-host=server --target-user=jay --target=/backup/data --mirror --no-dry-run
 ```
 
-- **Login**: in the order ssh uses: `--SIDE-key`, ssh-agent, `~/.ssh/id_ed25519` / `id_ecdsa` / `id_rsa`, then a password.
+- **Login**: keys only, no passwords; set up passwordless SSH first (`ssh-keygen -t ed25519` if needed, then `ssh-copy-id user@host`). Tried in the order ssh uses: `--SIDE-key`, ssh-agent, then `~/.ssh/id_ed25519` / `id_ecdsa` / `id_rsa`.
 - **Host key**: must already be in `known_hosts` (connect once with `ssh` to check and accept it). An unknown or changed key is refused, with its fingerprint in the message.
 - **Copies**: always use the chunked copy, so a stopped remote copy resumes part-way through the file. Each copy is read back over the connection and checked against the source's SHA-256 before it is renamed into place, atomically, with OpenSSH's `posix-rename`.
 - **Browsing**: the GUI lists remote folders over SFTP as you expand them, in a background thread so a slow server never freezes the window; errors (unknown host key, permission denied) show in the tree. Browsing runs as the GUI's user, so with Sync > Run as root the sync itself may see folders the browser cannot.

@@ -272,8 +272,8 @@ bool SftpFs::Connect(String& error)
 	if(!CheckHostKey(m.session, e.host, e.port, m.known_hosts, error))
 		return false;
 
-	// Login, in the order ssh uses: the given key, ssh-agent, the usual key files,
-	// then a password.
+	// Login with keys only, in the order ssh uses: the given key, ssh-agent, then the
+	// usual key files. No passwords: passwordless SSH must be set up beforehand.
 	Vector<String> tried;
 	bool ok = false;
 	auto key_login = [&](const String& key) {
@@ -294,13 +294,16 @@ bool SftpFs::Connect(String& error)
 			if(FileExists(key) && (ok = key_login(key)))
 				break;
 		}
-	if(!ok && e.password.GetCount()) {
-		tried.Add("password");
-		ok = libssh2_userauth_password(m.session, user, e.password) == 0;
-	}
 	if(!ok) {
-		error = Format("cannot log in to %s@%s:%d (tried: %s)", user, e.host, e.port,
-		               tried.GetCount() ? Join(tried, ", ") : String("nothing: no key, agent or password"));
+		String who = user + "@" + e.host;
+		error = Format("cannot log in to %s:%d (tried: %s).\n"
+		               "TreeSync needs passwordless SSH. Set up a key first:\n"
+		               "  ssh-keygen -t ed25519    (if you have no key yet)\n"
+		               "  ssh-copy-id %s\n"
+		               "and check that \"ssh %s\" logs in without asking for a password.",
+		               who, e.port, tried.GetCount() ? Join(tried, ", ") : String("no key or ssh-agent found"),
+		               e.port == 22 ? who : Format("-p %d %s", e.port, who),
+		               e.port == 22 ? who : Format("-p %d %s", e.port, who));
 		return false;
 	}
 
