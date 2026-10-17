@@ -1,0 +1,13 @@
+description "TreeSync - sync two directory trees by SHA-256 (stub)\n";
+
+uses
+	CtrlLib;
+
+file
+	Contracts.h,
+	TreeSync.h,
+	SetupDlg.cpp,
+	main.cpp;
+
+mainconfig
+	"" = "GUI WAYLAND";
