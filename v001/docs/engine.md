@@ -25,12 +25,18 @@ Every step the engine takes is written to a local SQLite database before the nex
 2. Skip actions already marked `done`.
 3. Before continuing an action, check that the source file is the same file planned earlier (same identity, see below). If it changed, re-hash it and re-plan that one action.
 4. **Small files:** an action left `in_progress` is redone from the start. Copies are written to `NAME.treesync-part` in the target folder, flushed to disk, then renamed over `NAME`. So the target never holds a half-written file under its real name, and a restart only has to delete the leftover `.treesync-part`.
-5. **Big files** (default 1 GiB and up, adjustable): copied in chunks (default 64 MiB), each read once, hashed, written to the `.treesync-part` file at its offset, flushed, then recorded in `chunks` as done. A restart re-checks the last finished chunk (in case the final write was torn) and continues with the next one. Nothing already copied is copied again.
+5. **Big files** (default 1 GiB and up, adjustable): copied in chunks (default 64 MiB), each read once, chunk-hashed, written to the `.treesync-part` file at its offset, flushed, then recorded in `chunks` as done. A restart re-checks the last finished chunk (in case the final write was torn) and continues with the next one. Nothing already copied is copied again.
 
 ## Hashes
 
-- **File hash:** SHA-256 of the list of chunk hashes, with the chunk size fixed in the database. This lets a big file's hash be finished after a restart without re-reading the whole file. Note: this differs from `sha256sum` output, but it is the same on both sides, which is what the comparison needs.
-- **Folder hash:** SHA-256 of the sorted list of (name, type, hash) for everything inside it. Equal folder hashes mean the whole subtree can be skipped.
+Two kinds, each doing one job:
+
+- **Chunk hashes, while copying:** each chunk of a big file is hashed as it is copied and recorded in `chunks`. They exist so a stopped copy can resume: a restart re-checks the last finished chunk against its recorded hash and continues from there. They are working data, not the file's identity.
+- **Real hash, when the copy is finished:** a plain SHA-256 of the whole file, the same value `sha256sum` prints. This is the hash stored in `files`, compared between the two sides, and used for folder hashes. Once a copy completes, the target `.treesync-part` file is read back and hashed. Only if that matches the source's real hash is it renamed into place. So every copy is verified against what is actually on the target disk.
+- The source's real hash comes from the scan, or from the cache in `files` when the file is unchanged (see Inodes).
+- If the real hash of the copy does not match, the action is marked `failed`, the `.treesync-part` file is kept for inspection, and the error is reported. Nothing is renamed over the target.
+
+**Folder hash:** SHA-256 of the sorted list of (name, type, real hash) for everything inside it. Equal folder hashes mean the whole subtree can be skipped.
 
 ## Inodes
 
@@ -44,7 +50,7 @@ Every step the engine takes is written to a local SQLite database before the nex
 
 - **Small files:** `cp --preserve=all --reflink=auto --sparse=auto -- SRC DST`, one file at a time, started with `posix_spawn` (an argument list, never a shell). Each `cp` runs inside the target folder with short relative names, so deep trees work.
 - **Big files:** TreeSync's own chunked copy (`pread`, SHA-256, `pwrite` at the chunk's offset), because `cp` cannot resume part-way through a file.
-- **Afterwards:** times, permissions and owner are set to match the source (owner only as root), then `.treesync-part` is renamed into place.
+- **Afterwards:** the `.treesync-part` file is read back for its real SHA-256 and checked against the source. Then times, permissions and owner are set to match the source (owner only as root), and it is renamed into place.
 - **Progress:** each file and each chunk reports through the core, so the terminal prints dnf-style lines and the GUI shows the same steps.
 
 ## Stopping
