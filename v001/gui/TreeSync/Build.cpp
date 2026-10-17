@@ -127,14 +127,14 @@ BuildWindow::BuildWindow()
 	compare.SetLabel("Compare the compilers: versions, C++26 features, import std, speed, size");
 	s1.Add(compare.LeftPosZ(20, 700).TopPosZ(184, 22));
 
-	s1.Add(toolchain_box.SetLabel("This program was built with").HSizePosZ(8, 8).VSizePosZ(222, 96));
+	s1.Add(toolchain_box.SetLabel("This program was built with").HSizePosZ(8, 8).VSizePosZ(222, 132));
 	toolchain.SetReadOnly();
 	toolchain.SetFont(Monospace());
 	toolchain <<= ToolchainReport();
-	s1.Add(toolchain.HSizePosZ(16, 16).VSizePosZ(242, 104));
+	s1.Add(toolchain.HSizePosZ(16, 16).VSizePosZ(242, 140));
 
 	command.SetFont(Monospace());
-	s1.Add(command.HSizePosZ(8, 8).BottomPosZ(44, 44));
+	s1.Add(command.HSizePosZ(8, 8).BottomPosZ(42, 84));   // up to 5 steps, one line each
 	s1.Add(start.SetLabel("Start").RightPosZ(116, 100).BottomPosZ(8, 28));
 	s1.Add(close1.SetLabel("Close").RightPosZ(8, 100).BottomPosZ(8, 28));
 
@@ -157,7 +157,7 @@ BuildWindow::BuildWindow()
 	compare_list.AddColumn("What", 30);
 	compare_list.AddColumn("gcc", 35);
 	compare_list.AddColumn("clang", 35);
-	compare_list.NoCursor().EvenRowColor();
+	compare_list.NoCursor();   // no row shading: only differences are coloured
 	split3.Vert(compare_list, results);
 	split3.SetPos(6500);
 	s3.Add(split3.HSizePosZ(8, 8).VSizePosZ(8, 44));
@@ -523,6 +523,19 @@ void BuildWindow::Snap(const String& folder)
 	            ResultsLine(t, t + 192, "gcc debug build + tests", 0, "Good", "passed: 214/214 checks") + "\n" +
 	            ResultsLine(t + 192, t + 400, "clang debug build + tests", 0, "Good", "passed: 214/214 checks") + "\n" +
 	            LogStamp(t, t + 400) + "End of build: all good";
+	facts.Clear();
+	for(int i = 0; i < 2; i++) {
+		VectorMap<String, String>& f = facts.GetAdd(i ? "clang" : "gcc");
+		f.Add("build (clean): time (s)", i ? "21" : "37");
+		f.Add("tests", "passed: 214/214 checks");
+		f.Add("size: treesync (MiB)", i ? "33.3" : "40.3");
+		f.Add("feature:__cpp_structured_bindings", i ? "202411" : "202403");
+		f.Add("feature:__cpp_pack_indexing", "202311");
+		f.Add("bench:sha256 MiB/s", i ? "158" : "174");
+		f.Add("probe: import std works", "yes");
+		f.Add("probe: import std compile (s)", i ? "0.26" : "0.58");
+	}
+	ShowCompare();
 	Screen(3);
 	SaveScreenshot(*this, AppendFileName(folder, "build-results.png"));
 	Screen(1);
