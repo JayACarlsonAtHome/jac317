@@ -352,6 +352,8 @@ struct Streamer {
 				Folder& fd = folders.GetAdd(rel);
 				fd.names.Add(f.name);
 				fd.pending++;
+				if(e.type == 'f')
+					r.unchecked++;
 				if(later_link)
 					links.Add(pick(it));
 			}
@@ -387,6 +389,7 @@ struct Streamer {
 		while(stack.GetCount() && !r.report.Stopping())
 			ScanFolder(c, stack.Pop(), stack, walked);
 		Stage(0, entries, estimate, String(), true);
+		r.counting = false;
 		{
 			std::lock_guard<std::mutex> l(qm);
 			scan_done = true;
@@ -462,6 +465,8 @@ struct Streamer {
 	void Process(Ctx& c, Item& it)
 	{
 		Entry& e = it.e;
+		if(e.type == 'f')   // decided below: copied (copy_count) or not
+			r.unchecked--;
 		Entry t;
 		String error = "no such file";
 		bool exists = !assume_empty && c.fs[1]->Stat(e.rel, false, t, error);
@@ -726,6 +731,7 @@ bool RunStreaming(Runner& r, TreeFs *side[2], const String& key, bool fresh, Str
 	report.WhenLine(Format("streaming: pre-scan, copy (%d threads), post-scan at the same time",
 	                       workers.GetCount() + 1));
 
+	r.counting = true;
 	std::thread pre_t([&] { s.PreScan(pre); });
 	std::thread post_t([&] { s.PostScan(post); });
 	std::vector<std::thread> work_t;

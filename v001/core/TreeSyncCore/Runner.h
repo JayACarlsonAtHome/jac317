@@ -69,6 +69,8 @@ struct Runner {
 	String            ids[2];
 	int64             run = 0;
 	std::atomic<int>  copy_count = 0;
+	std::atomic<int>  unchecked = 0;     // streaming: files queued, not compared with the target yet
+	std::atomic<bool> counting = false;  // streaming: the pre-scan is still finding files
 	std::atomic<int>  copy_index = 0;
 	Clock::time_point started = Clock::now();
 	String            old_roots[2];  // --safe-delete: where each side's deleted/replaced files go
@@ -127,8 +129,13 @@ struct Runner {
 
 	void Line(const String& s)              { Lock l(mx); report.WhenLine(s); }
 
-	void Progress(const CopyProgress& p)
+	// The file counter: files decided to copy, plus those not checked yet (each may
+	// still turn out the same as the target's); "+" while more are being found.
+	void Progress(const CopyProgress& cp)
 	{
+		CopyProgress p = cp;
+		p.count = max(p.index, copy_count + unchecked);
+		p.more = counting;
 		Lock l(mx);
 		report.WhenProgress(p);
 		if(p.done >= p.size && !p.verifying) {

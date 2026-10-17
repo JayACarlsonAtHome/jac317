@@ -175,13 +175,14 @@ String                CleanPath(String p);
 // Progress.cpp: one dnf5-style line per copied file, plus a "Total" line.
 struct CopyProgress {
 	int    index = 0;      // this file, 1-based
-	int    count = 0;      // files in the run
+	int    count = 0;      // files in the run (while streaming: decided plus still to check)
 	String name;           // path relative to the tree root, or "Total"
 	int64  done = 0;       // bytes copied so far
 	int64  size = 0;       // bytes in total
 	double seconds = 0;    // elapsed
 	int    id = 0;         // which copy (its step in the run), to tell parallel copies apart
 	bool   verifying = false;   // done counts bytes read back and checked, not written
+	bool   more = false;   // count still growing: the pre-scan is still finding files
 };
 
 // bar: a text thermometer after the percentage, for a file still in progress.

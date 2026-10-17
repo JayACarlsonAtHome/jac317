@@ -667,10 +667,17 @@ static void TestStreaming(const String& root)
 	auto t0 = std::chrono::steady_clock::now();
 	std::atomic<double> first_copy = -1, scan_end = -1;
 	int64 found = 0, checked = 0;
+	int ahead = 0, bad_count = 0, last_count = -1;
 	auto since = [&] { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(); };
 	report.WhenProgress = [&](const CopyProgress& p) {
 		if(p.done >= p.size && first_copy < 0)
 			first_copy = since();
+		if(p.done >= p.size && !p.verifying) {   // the file counter: calls are serialized
+			ahead += p.count > p.index;
+			bad_count += p.index > p.count;
+			if(p.index == 2000)
+				last_count = p.count;
+		}
 	};
 	report.WhenStage = [&](const StageProgress& st) {
 		if(st.stage == 0 && st.finished)
@@ -683,6 +690,8 @@ static void TestStreaming(const String& root)
 	EXPECT(RunSync(s, report, r, err), "streaming run: " + err);
 	EXPECT(first_copy >= 0 && scan_end >= 0 && first_copy < scan_end,
 	       Format("first copy finished (%.3f s) before the pre-scan did (%.3f s)", (double)first_copy, (double)scan_end));
+	EXPECT(ahead > 0 && bad_count == 0, Format("file counter runs ahead of the copies (%d of 2000 files)", ahead));
+	EXPECT(last_count == 2000, Format("last file shows 2000/2000 (count %d)", last_count));
 	EXPECT(found == 41 && checked == found, Format("post-scan checked all %d folders (%d)", found, checked));
 	EXPECT(!FileExists(dst + "/d07/e1/extra in the target.txt") &&
 	       FileExists(dst + ".old/d07/e1/extra in the target.txt"), "post-scan moved the extra file out");

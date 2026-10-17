@@ -111,7 +111,7 @@ CONSOLE_APP_MAIN
 			name.Replace("\t", " ");
 			name.Replace("\n", " ");
 			Cout() << std::format("@file\t{}\t{}\t{}\t{:.2f}\t{}\t{}\t", p.id, p.done, p.size, p.seconds,
-			                      p.index, p.count) << name << (p.verifying ? "\tverify" : "") << "\n";
+			                      p.index, std::to_string(p.count) + (p.more ? "+" : "")) << name << (p.verifying ? "\tverify" : "") << "\n";
 		}
 		if(p.done >= p.size && !p.verifying)
 			Print(ProgressLine(p));

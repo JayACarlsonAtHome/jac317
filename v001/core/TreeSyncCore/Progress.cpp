@@ -34,7 +34,7 @@ static String FitName(const String& name, int width)
 String ProgressLine(const CopyProgress& p, int width, bool bar)
 {
 	TS_PRE(p.count >= 0 && p.index >= 0 && p.index <= p.count);
-	std::string total = std::to_string(p.count);
+	std::string total = std::to_string(p.count) + (p.more ? "+" : "");
 	std::string index = std::to_string(p.index);
 	index.insert(0, total.size() - min(total.size(), index.size()), ' ');
 	std::string counter = "[" + index + "/" + total + "] ";
