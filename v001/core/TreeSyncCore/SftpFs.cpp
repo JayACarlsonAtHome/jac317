@@ -187,6 +187,14 @@ static int ConnectTcp(const String& host, int port, String& error)
 		// delayed ACKs stall each one by tens of milliseconds.
 		int one = 1;
 		setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+		// Keep-alive: on a long run some connections sit idle for minutes (pre-scan,
+		// post-scan); probes keep firewalls and NAT from dropping them and notice a
+		// dead server: first probe after 60 s idle, then every 15 s, give up after 4.
+		int idle = 60, interval = 15, count = 4;
+		setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one));
+		setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle));
+		setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &interval, sizeof(interval));
+		setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &count, sizeof(count));
 	}
 	freeaddrinfo(res);
 	if(fd < 0 && error.IsEmpty())

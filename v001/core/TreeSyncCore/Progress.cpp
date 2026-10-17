@@ -40,6 +40,8 @@ String ProgressLine(const CopyProgress& p, int width, bool bar)
 	std::string counter = "[" + index + "/" + total + "] ";
 	int pct = p.size > 0 ? (int)min<int64>(100, p.done * 100 / p.size) : 100;
 	std::string thermo;
+	if(p.verifying)
+		thermo = " verify";
 	if(bar) {
 		const int W = 20;
 		int fill = pct * W / 100;

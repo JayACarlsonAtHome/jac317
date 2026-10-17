@@ -181,6 +181,7 @@ struct CopyProgress {
 	int64  size = 0;       // bytes in total
 	double seconds = 0;    // elapsed
 	int    id = 0;         // which copy (its step in the run), to tell parallel copies apart
+	bool   verifying = false;   // done counts bytes read back and checked, not written
 };
 
 // bar: a text thermometer after the percentage, for a file still in progress.

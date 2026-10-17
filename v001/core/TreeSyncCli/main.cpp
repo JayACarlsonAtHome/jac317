@@ -4,7 +4,7 @@
 // --stop-on-eof (used by the GUI): stop the same way when stdin is closed. The GUI
 // can always close a pipe, even when pkexec made this a root process it may not signal.
 // --gui-progress (used by the GUI): also print progress as tagged lines,
-//   @file <TAB> id <TAB> done <TAB> size <TAB> seconds <TAB> index <TAB> count <TAB> name
+//   @file <TAB> id <TAB> done <TAB> size <TAB> seconds <TAB> index <TAB> count <TAB> name [<TAB> verify]
 //   @overall <TAB> done <TAB> total
 //   @stage <TAB> stage <TAB> done <TAB> total <TAB> finished <TAB> detail   (0 pre-scan, 2 post-scan)
 // which the GUI turns into thermometers instead of log lines.
@@ -111,9 +111,9 @@ CONSOLE_APP_MAIN
 			name.Replace("\t", " ");
 			name.Replace("\n", " ");
 			Cout() << std::format("@file\t{}\t{}\t{}\t{:.2f}\t{}\t{}\t", p.id, p.done, p.size, p.seconds,
-			                      p.index, p.count) << name << "\n";
+			                      p.index, p.count) << name << (p.verifying ? "\tverify" : "") << "\n";
 		}
-		if(p.done >= p.size)
+		if(p.done >= p.size && !p.verifying)
 			Print(ProgressLine(p));
 		else
 			Status(ProgressLine(p, 100, true));

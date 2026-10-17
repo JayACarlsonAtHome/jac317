@@ -131,11 +131,11 @@ struct Runner {
 	{
 		Lock l(mx);
 		report.WhenProgress(p);
-		if(p.done >= p.size) {
+		if(p.done >= p.size && !p.verifying) {
 			in_flight.RemoveKey(p.id);
 			overall_finished += p.size;
 		}
-		else
+		else if(!p.verifying)   // the overall bar counts bytes written
 			in_flight.GetAdd(p.id) = p.done;
 		int64 done = overall_finished;
 		for(int64 d : in_flight)
@@ -279,9 +279,11 @@ struct Runner {
 		bool count_write = !to.IsLocal() || from.IsLocal();   // --bwlimit: network, or local writes
 		bool count_back = !to.IsLocal();
 
-		// SHA-256 of [off, off + len) of a file, in slices; feeds `also` too.
+		Clock::time_point last_shown = Clock::now();
+		// SHA-256 of [off, off + len) of a file, in slices; feeds `also` too. show: the
+		// read-back of a chunk just written, so the file's bar moves while it is checked.
 		auto hash_range = [&](TreeFile& f, int64 off, int64 len, bool count, Sha256Stream *also,
-		                      String& hash) -> bool {
+		                      String& hash, bool show = false) -> bool {
 			Sha256Stream sha;
 			for(int64 k = 0; k < len; k += SLICE) {
 				int64 n = min(SLICE, len - k);
@@ -292,6 +294,14 @@ struct Runner {
 				sha.Put(buf, (int)n);
 				if(also)
 					also->Put(buf, (int)n);
+				if(show && Since(last_shown) >= 0.25) {
+					p.verifying = true;
+					p.done = off + k + n;
+					p.seconds = Since(t0);
+					Progress(p);
+					p.verifying = false;
+					last_shown = Clock::now();
+				}
 			}
 			hash = sha.FinishString();
 			return true;
@@ -336,7 +346,6 @@ struct Runner {
 			}
 		}
 
-		Clock::time_point last_shown = Clock::now();
 		for(int64 idx = next; idx < count; idx++) {
 			if(report.Stopping()) {
 				error = "stopped";
@@ -377,7 +386,7 @@ struct Runner {
 				out->Flush();
 			// 3. read the chunk back and check it against what was read
 			String sent = chunk_sha.FinishString(), back;
-			if(!hash_range(*out, off, len, count_back, &dst_sha, back))
+			if(!hash_range(*out, off, len, count_back, &dst_sha, back, true))
 				return false;
 			if(back != sent) {
 				error = Format("verify failed: chunk %d of %s reads back differently; kept as %s", idx + 1, rel, part);

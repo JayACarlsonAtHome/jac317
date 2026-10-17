@@ -36,6 +36,7 @@ TreeSyncWindow::TreeSyncWindow()
 	active.AddColumn("", 30).SetDisplay(ProgressDisplay());   // 0..1000
 	active.AddColumn("Rate", 12).HeaderTab().AlignRight();
 	active.AddColumn("Size", 12).HeaderTab().AlignRight();
+	active.AddColumn("Time", 8).HeaderTab().AlignRight();
 	active.NoCursor().NoGrid();
 
 	bottom.Vert(progress_pane, log);

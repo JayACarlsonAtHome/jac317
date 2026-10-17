@@ -47,7 +47,7 @@ void TreeSyncWindow::Drain()
 	for(const String& line : lines) {
 		if(line.StartsWith("@file\t")) {
 			Vector<String> f = Split(line, '\t', false);
-			if(f.GetCount() >= 4 && ScanInt64(f[2]) >= ScanInt64(f[3]))
+			if(f.GetCount() >= 4 && ScanInt64(f[2]) >= ScanInt64(f[3]) && !(f.GetCount() >= 9 && f[8] == "verify"))
 				finished.Add(line);
 			else if(f.GetCount() >= 2)
 				latest.GetAdd("file " + f[1]) = line;
@@ -124,8 +124,36 @@ void TreeSyncWindow::DemoProgress()
 }
 
 // One stage box: a bar (done of total; empty while the total is unknown) and a line.
+static String MinSec(double s)
+{
+	int n = (int)s;
+	return Format("%d:%02d", n / 60, n % 60);
+}
+
+void TreeSyncWindow::Tick()
+{
+	if(child <= 0)
+		return;
+	auto now = std::chrono::steady_clock::now();
+	for(int i = 0; i < active.GetCount(); i++) {
+		int q = copy_started.Find((int)active.Get(i, 0));
+		if(q >= 0)
+			active.Set(i, 5, MinSec(std::chrono::duration<double>(now - copy_started[q]).count()));
+	}
+	double quiet = std::chrono::duration<double>(now - last_progress).count();
+	if(quiet >= 3 && active.GetCount())
+		stage_text[1] = Format("Still working, please wait: %d file%s in progress, no new progress for %d s. "
+		                       "Big files over a slow link can take minutes; nothing is stuck while this counts.",
+		                       active.GetCount(), active.GetCount() == 1 ? "" : "s", (int)quiet);
+	else
+		stage_text[1] = copy_text;
+	SetTimeCallback(1000, [this] { Tick(); }, 77);
+}
+
 void TreeSyncWindow::StageShow(int stage, int64 done, int64 total, const String& text)
 {
+	if(stage == 1)
+		copy_text = text;
 	stage_bar[stage].Set(total > 0 ? (int)(min(done, total) * 1000 / total) : 0, 1000);
 	stage_text[stage] = text;
 }
@@ -135,6 +163,7 @@ void TreeSyncWindow::StageShow(int stage, int64 done, int64 total, const String&
 void TreeSyncWindow::ShowProgress(const String& line)
 {
 	Vector<String> f = Split(line, '\t', false);
+	last_progress = std::chrono::steady_clock::now();
 	if(f[0] == "@overall" && f.GetCount() >= 3) {
 		int64 done = ScanInt64(f[1]), total = ScanInt64(f[2]);
 		StageShow(1, done, total, FormatBytes(done) + " of " + FormatBytes(total) + " so far");
@@ -160,19 +189,24 @@ void TreeSyncWindow::ShowProgress(const String& line)
 	int id = ScanInt(f[1]);
 	int64 done = ScanInt64(f[2]), size = ScanInt64(f[3]);
 	double seconds = ScanDouble(f[4]);
+	bool verifying = f.GetCount() >= 9 && f[8] == "verify";
 	int row = active.Find(id);
-	if(done >= size) {   // finished: its line is in the log
+	if(done >= size && !verifying) {   // finished: its line is in the log
 		if(row >= 0)
 			active.Remove(row);
+		copy_started.RemoveKey(id);
 		return;
 	}
-	String rate = seconds > 0 ? FormatBytes((int64)(done / seconds)) + "/s" : String();
-	String what = Format("[%s/%s] ", f[5], f[6]) + f[7];
+	if(copy_started.Find(id) < 0)
+		copy_started.Add(id, std::chrono::steady_clock::now());
+	String elapsed = MinSec(std::chrono::duration<double>(std::chrono::steady_clock::now() - copy_started.Get(id)).count());
+	String rate = verifying ? String("checking") : seconds > 0 ? FormatBytes((int64)(done / seconds)) + "/s" : String();
+	String what = Format("[%s/%s] ", f[5], f[6]) + f[7] + (verifying ? "   (verifying the copy)" : "");
 	int permille = size > 0 ? (int)(done * 1000 / size) : 0;
 	if(row < 0)
-		active.Add(id, what, permille, rate, FormatBytes(size));
+		active.Add(id, what, permille, rate, FormatBytes(size), elapsed);
 	else
-		active.Set(row, Vector<Value>{ id, what, permille, rate, FormatBytes(size) });
+		active.Set(row, Vector<Value>{ id, what, permille, rate, FormatBytes(size), elapsed });
 }
 
 // What a real run will do to the target, in plain words, before it starts.
@@ -260,9 +294,12 @@ void TreeSyncWindow::StartSync(bool dry_run)
 	Log(String(as_root ? "[as root] " : "") + CommandLineText(ToArgs(s)));
 	status = "Running...";
 	active.Clear();
+	copy_started.Clear();
 	for(int i = 0; i < 3; i++)
 		StageShow(i, 0, 0, String());
 	ProgressVisible(true);
+	last_progress = std::chrono::steady_clock::now();
+	SetTimeCallback(1000, [this] { Tick(); }, 77);
 
 	// Reader thread: lines go to the log on the GUI thread; exit status at the end.
 	int fd = out[0];
@@ -320,7 +357,9 @@ void TreeSyncWindow::SyncFinished(int code)
 	                 : code == 2 ? "could not run" : code == 3 ? "stopped; Run again to resume"
 	                 : code == 126 || code == 127 ? "pkexec refused or was cancelled" : "ended abnormally";
 	Log(Format("treesync-cli exit code %d: %s", code, what));
+	KillTimeCallback(77);
 	active.Clear();
+	copy_started.Clear();
 	ProgressVisible(false);
 	status = Format("Last run: %s", what);
 	LoadTrees();

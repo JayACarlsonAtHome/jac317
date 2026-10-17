@@ -166,6 +166,14 @@ class TreeSyncWindow : public TopWindow {
 	ArrayCtrl         active;
 
 	void StageShow(int stage, int64 done, int64 total, const String& text);
+
+	// "Still working": a 1-second ticker while a sync runs. It keeps each file's Time
+	// counting and, when no progress has come for a few seconds, says so in the
+	// Copy box, so a big file on a slow link never looks stuck.
+	std::chrono::steady_clock::time_point last_progress;
+	VectorMap<int, std::chrono::steady_clock::time_point> copy_started;   // copy id -> first seen
+	String copy_text;            // the Copy box's own line, before any "still working" note
+	void Tick();
 	SyncSetup setup;
 
 	// SyncRun.cpp: treesync-cli as a child process.
