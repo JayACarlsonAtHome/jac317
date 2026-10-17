@@ -400,8 +400,15 @@ void BuildWindow::CheckRequirements()
 		fix.Disable();
 		return;
 	}
+	// Visible even though it takes a fraction of a second: "Checking...", then the
+	// result with the time it was checked, so a second press shows it ran again.
+	req_status = "Checking...";
+	req_status.SetInk(SColorText());
+	check_again.Disable();
+	Ctrl::ProcessEvents();
 	String out;
 	int code = Sys("bash " + ShellQuote(AppendFileName(GetFileFolder(script), "bootstrap.sh")) + " --check", out);
+	check_again.Enable();
 	Vector<String> missing, optional;
 	int count = 0;
 	for(const String& line : Split(out, '\n')) {
@@ -420,7 +427,8 @@ void BuildWindow::CheckRequirements()
 		             (optional.GetCount() ? " (optional, missing: " + Join(optional, "; ") + ")" : String());
 	else
 		req_status = "Missing: " + Join(missing, "; ");
-	req_status.SetInk(req_ok ? SColorText() : LtRed());
+	req_status = req_status.GetText() + "  (checked " + ClockTime((int64)time(nullptr)) + ")";
+	req_status.SetInk(req_ok ? Color(0, 128, 0) : LtRed());
 	req_status.Tip(req_ok ? String() : "Missing: " + Join(missing, "\n"));
 	fix.Enable(!req_ok || optional.GetCount());
 }
