@@ -147,7 +147,7 @@ Content is compared by SHA-256. File size and time decide whether a cached hash 
 
 ## Status
 
-Working for local trees and over SFTP, with `treesync-cli` and the GUI: scan with a hash cache, Copy / Mirror / Merge, verified copies, hard links, symlinks, resumable runs and big files. Tested against a Fedora 44 server in both directions. Not yet: browsing remote trees in the GUI, password login from the GUI, copying with several threads, and live per-chunk progress in the GUI log.
+Working for local trees and over SFTP, with `treesync-cli` and the GUI: scan with a hash cache, Copy / Mirror / Merge, verified copies, hard links, symlinks, resumable runs and big files. Tested against a Fedora 44 server in both directions. Not yet: password login from the GUI, copying with several threads, and live per-chunk progress in the GUI log.
 
 ## Sharing the machine
 
@@ -187,15 +187,18 @@ treesync-cli --source=/data --target-host=server --target-user=jay --target=/bac
 - **Login**: in the order ssh uses: `--SIDE-key`, ssh-agent, `~/.ssh/id_ed25519` / `id_ecdsa` / `id_rsa`, then a password.
 - **Host key**: must already be in `known_hosts` (connect once with `ssh` to check and accept it). An unknown or changed key is refused, with its fingerprint in the message.
 - **Copies**: always use the chunked copy, so a stopped remote copy resumes part-way through the file. Each copy is read back over the connection and checked against the source's SHA-256 before it is renamed into place, atomically, with OpenSSH's `posix-rename`.
+- **Browsing**: the GUI lists remote folders over SFTP as you expand them, in a background thread so a slow server never freezes the window; errors (unknown host key, permission denied) show in the tree. Browsing runs as the GUI's user, so with Sync > Run as root the sync itself may see folders the browser cannot.
 - **Limits of SFTP**: no inode numbers and whole-second times, so the remote hash cache matches on size and time; no hard links, so hard-linked files are written out as separate copies (the log says so).
 
 ## Inspiration
 
 TreeSync was inspired by **robocopy**, Microsoft's Robust File Copy for Windows: its switches (`/MIR`, `/FFT`, `/XO`, `/XF` and the rest) were the starting point for TreeSync's options, and the robocopy equivalents are listed for reference. No robocopy code was used or copied. TreeSync is written from scratch, for Linux, and made the way its author wanted it: GNU-style long options, SHA-256 comparison, verified copies, resumable runs, safe delete, and a GUI that shows what is going on.
 
+The look owes a lot to the classic file managers: **Norton Commander**, whose two side-by-side panels set the pattern, the **Windows File Manager** with its folder tree and `+`/`-` to open and close folders, and **Midnight Commander**, which carried the two-panel idea to Linux. **Norton Utilities**, the disk tools from the same family, stand for the spirit of it: software that looks after your data. Thanks to all of them.
+
 Two other tools shaped smaller details, again as ideas only: **rsync** (the option names `--bwlimit` and `--numeric-ids`) and **Fedora's dnf5** (the style of the progress lines).
 
-TreeSync is not affiliated with or endorsed by Microsoft or the rsync and dnf projects. Robocopy is a Microsoft product; the names are used only to describe where ideas came from.
+TreeSync is not affiliated with or endorsed by Microsoft, Symantec/Gen Digital, or the Midnight Commander, rsync and dnf projects. Robocopy and the Windows File Manager are Microsoft products, and Norton Commander and Norton Utilities are Norton products; the names are used only to describe where ideas came from.
 
 ## License
 

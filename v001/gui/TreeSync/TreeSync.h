@@ -88,15 +88,26 @@ public:
 void   WarnNotRoot();
 void   RefusePath(const String& p);
 
-// Browsable view of one tree, with [+]/[-] expanders and +/- keys.
+// Browsable view of one tree, local or over SFTP, with [+]/[-] expanders and
+// +/- keys. Remote folders are listed by a worker thread (DirTree.cpp).
 class DirTree : public TreeCtrl {
-	bool follow_links = false;
+	struct Remote;
+	std::shared_ptr<Remote> remote;
+	bool   follow_links = false;
+	bool   is_remote = false;
+	String root_label;
 
 	void LoadChildren(int id);
+	void Fill(int id, const String& parent_key, const Vector<FolderEntry>& entries);
+	void Request(int id, const String& rel);
+	void Connected(bool ok, const String& error);
+	void Listed(int id, const Vector<FolderEntry>& entries, const String& error);
+	void StopRemote();
 
 public:
 	DirTree();
-	void Load(const char *caption, const TreeEndpoint& e, bool follow_links);
+	~DirTree();
+	void Load(const char *caption, const TreeEndpoint& e, bool follow_links, const String& known_hosts);
 	void CollapseAll();
 	bool Key(dword key, int count) override;
 };

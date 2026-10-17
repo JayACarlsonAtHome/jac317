@@ -98,10 +98,10 @@ void TreeSyncWindow::LoadTrees()
 {
 	source_panel.picker.Set(setup.source.path);
 	source_panel.picker.Remote(setup.source.remote);
-	source_panel.tree.Load("Source", setup.source, setup.flags.follow_links);
+	source_panel.tree.Load("Source", setup.source, setup.flags.follow_links, setup.known_hosts);
 	target_panel.picker.Set(setup.target.path);
 	target_panel.picker.Remote(setup.target.remote);
-	target_panel.tree.Load("Target", setup.target, setup.flags.follow_links);
+	target_panel.tree.Load("Target", setup.target, setup.flags.follow_links, setup.known_hosts);
 }
 
 void TreeSyncWindow::ShowStatus()

@@ -728,6 +728,37 @@ bool SftpFs::LoadIds(IdTable& t, String& error)
 	return true;
 }
 
+bool SftpFs::List(const String& rel, Vector<FolderEntry>& out, String& error)
+{
+	Impl& m = *impl;
+	String path = m.P(rel);
+	LIBSSH2_SFTP_HANDLE *h = libssh2_sftp_open_ex(m.sftp, path, path.GetCount(), 0, 0, LIBSSH2_SFTP_OPENDIR);
+	if(!h) {
+		error = m.Err("cannot read folder " + path);
+		return false;
+	}
+	char name[1024];
+	LIBSSH2_SFTP_ATTRIBUTES a;
+	int n;
+	while((n = libssh2_sftp_readdir_ex(h, name, sizeof(name), nullptr, 0, &a)) > 0) {
+		String s(name, n);
+		if(s == "." || s == "..")
+			continue;
+		FolderEntry& f = out.Add();
+		f.name = s;
+		f.is_link = LIBSSH2_SFTP_S_ISLNK(a.permissions);
+		f.is_dir = LIBSSH2_SFTP_S_ISDIR(a.permissions);
+		if(f.is_link) {   // like local listings: is_dir says what the link points to
+			LIBSSH2_SFTP_ATTRIBUTES t;
+			f.is_dir = m.Attrs(path == "/" ? "/" + s : path + "/" + s, true, t) && LIBSSH2_SFTP_S_ISDIR(t.permissions);
+		}
+	}
+	if(n < 0)
+		error = m.Err("error while reading folder " + path);
+	libssh2_sftp_close_handle(h);
+	return n >= 0;
+}
+
 String SftpFs::RootPath() const
 {
 	return impl->root;

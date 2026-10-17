@@ -216,6 +216,8 @@ public:
 	virtual bool   Rename(const String& from, const String& to, String& error) = 0; // replaces to
 	virtual bool   HardLink(const String& existing, const String& rel, String& error) = 0;
 	virtual bool   LoadIds(IdTable& t, String& error) = 0;
+	// One folder's entries, for browsing (no hashing). is_dir follows symlinks.
+	virtual bool   List(const String& rel, Vector<FolderEntry>& out, String& error) = 0;
 	// --safe-delete: moves rel to dest (an absolute path, same filesystem), creating
 	// its folders; if dest is taken, dest.1, dest.2, ... Gone already counts as done.
 	virtual bool   MoveOut(const String& rel, const String& dest, String& moved_to, String& error) = 0;
@@ -249,6 +251,8 @@ public:
 	bool   Rename(const String& from, const String& to, String& error) override;
 	bool   HardLink(const String& existing, const String& rel, String& error) override;
 	bool   LoadIds(IdTable& t, String& error) override   { return LoadLocalIds(t, error); }
+	bool   List(const String& rel, Vector<FolderEntry>& out, String& error) override
+	                                                     { return ListFolder(rel.IsEmpty() ? root : AppendFileName(root, rel), out, error); }
 	bool   MoveOut(const String& rel, const String& dest, String& moved_to, String& error) override;
 	String RootPath() const override                     { return root; }
 	bool   CanChown() const override                     { return IsRoot(); }
@@ -286,6 +290,7 @@ public:
 	bool   Rename(const String& from, const String& to, String& error) override;
 	bool   HardLink(const String& existing, const String& rel, String& error) override;
 	bool   LoadIds(IdTable& t, String& error) override;
+	bool   List(const String& rel, Vector<FolderEntry>& out, String& error) override;
 	bool   MoveOut(const String& rel, const String& dest, String& moved_to, String& error) override;
 	String RootPath() const override;
 	bool   CanChown() const override;
