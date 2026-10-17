@@ -37,28 +37,26 @@ done
 
 [ "$CLEAN" = 1 ] && MODE="${MODE}a"   # umk -a: rebuild all
 
+. "$HERE/tools.sh"
+
+# The compiler: gcc 15+ or clang 21+, wherever this machine has it. The build methods
+# in bm/ name RHEL's paths; a copy with the compiler found here goes in out/bm/.
 case "$COMPILER" in
-  clang) BM="$HERE/bm/CLANG26.bm" ;;
-  gcc)   BM="$HERE/bm/GCC15.bm" ;;
+  clang) CXX=$(find_clang); SRC_BM="$HERE/bm/CLANG26.bm" ;;
+  gcc)   CXX=$(find_gcc);   SRC_BM="$HERE/bm/GCC15.bm" ;;
   *) echo "--compiler must be gcc or clang" >&2; exit 2 ;;
 esac
+[ -n "$CXX" ] || { echo "no $COMPILER new enough (gcc 15+ / clang 21+); run ./bootstrap.sh" >&2; exit 1; }
+mkdir -p "$HERE/out/bm"
+local_bm() {   # local_bm SOURCE.bm -> out/bm/SOURCE.bm with COMPILER = the one found
+  local out="$HERE/out/bm/$(basename "$1")"
+  sed "s|^COMPILER = .*|COMPILER = \"$CXX\";|" "$1" > "$out"
+  echo "$out"
+}
+BM=$(local_bm "$SRC_BM")
 
-# Find the GFS mount (RHEL: /run/media, Mint: /media, servers: /mnt).
-GFS=""
-for g in /run/media/jay/GFS /media/jay/GFS /mnt/GFS; do
-  [ -d "$g/upp/uppsrc" ] && { GFS="$g"; break; }
-done
-
-# umk + uppsrc: RHEL-built umk first, then $HOME/u++, then Mint's.
-UMK=""; UPPSRC=""
-for u in "$GFS/upp-bin/rhel/umk" "$HOME/u++/umk" "$GFS/upp-bin/mint/umk"; do
-  [ -x "$u" ] && { UMK="$u"; break; }
-done
-for s in "$GFS/upp/uppsrc" "$HOME/u++/uppsrc"; do
-  [ -d "$s" ] && { UPPSRC="$s"; break; }
-done
-[ -n "$UMK" ]    || { echo "umk not found" >&2; exit 1; }
-[ -n "$UPPSRC" ] || { echo "uppsrc not found" >&2; exit 1; }
+read -r UMK UPPSRC <<< "$(find_upp)"
+[ -n "${UMK:-}" ] && [ -n "${UPPSRC:-}" ] || { echo "U++ (umk + uppsrc) not found; run ./bootstrap.sh" >&2; exit 1; }
 
 # ThreadSanitizer: clang only; U++'s own allocator replaces operator new, which
 # TSan also intercepts, so USEMALLOC switches U++ to the system allocator.
@@ -66,8 +64,8 @@ if [ "$TSAN" = 1 ]; then
   [ "$COMPILER" = clang ] || { echo "--tsan needs --compiler clang" >&2; exit 2; }
   OUT="$HERE/out/clang-tsan"
   mkdir -p "$OUT"
-  echo "Building TreeSyncTest with clang + ThreadSanitizer (bm/CLANG26-TSAN.bm)"
-  "$UMK" "$HERE/core,$HERE/gui,$UPPSRC" TreeSyncTest "$HERE/bm/CLANG26-TSAN.bm" $MODE +USEMALLOC "$OUT/treesync-test"
+  echo "Building TreeSyncTest with $CXX + ThreadSanitizer"
+  "$UMK" "$HERE/core,$HERE/gui,$UPPSRC" TreeSyncTest "$(local_bm "$HERE/bm/CLANG26-TSAN.bm")" $MODE +USEMALLOC "$OUT/treesync-test"
   TSAN_OPTIONS="halt_on_error=1" "$OUT/treesync-test"
   exit $?
 fi
@@ -77,12 +75,12 @@ mkdir -p "$OUT"
 ASSEMBLY="$HERE/core,$HERE/gui,$UPPSRC"
 
 # The programs are always built, so --test never leaves them older than the tests.
-echo "Building TreeSyncCli with $COMPILER ($BM)"
+echo "Building TreeSyncCli with $CXX"
 "$UMK" "$ASSEMBLY" TreeSyncCli "$BM" $MODE "$OUT/treesync-cli"
-echo "Building TreeSync with $COMPILER ($BM)"
+echo "Building TreeSync with $CXX"
 "$UMK" "$ASSEMBLY" TreeSync "$BM" $MODE "$OUT/treesync"
 if [ "$TEST" = 1 ]; then
-  echo "Building TreeSyncTest with $COMPILER ($BM)"
+  echo "Building TreeSyncTest with $CXX"
   "$UMK" "$ASSEMBLY" TreeSyncTest "$BM" $MODE "$OUT/treesync-test"
   "$OUT/treesync-test"
 fi

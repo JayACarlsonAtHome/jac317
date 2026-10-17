@@ -18,12 +18,14 @@ while [ $# -gt 0 ]; do
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-GCC_DIR=/opt/rh/gcc-toolset-15/root/usr
+. "$HERE/tools.sh"
 case "$COMPILER" in
-  gcc)   CXX="$GCC_DIR/bin/g++"; FLAGS="" ;;
-  clang) CXX=clang++; FLAGS="--gcc-install-dir=$GCC_DIR/lib/gcc/x86_64-redhat-linux/15" ;;
+  gcc)   CXX=$(find_gcc) ;;
+  clang) CXX=$(find_clang) ;;
   *) echo "--compiler must be gcc or clang" >&2; exit 2 ;;
 esac
+[ -n "$CXX" ] || { echo "no $COMPILER new enough"; exit 1; }
+FLAGS=""
 OUT="$HERE/out/$COMPILER"
 fact() { printf '@cmp\t%s\t%s\n' "$1" "$2"; }
 secs() { local t0=$(date +%s.%N); "$@" > "$PROBE/last.txt" 2>&1; local rc=$?; ELAPSED=$(printf '%.2f' "$(echo "$(date +%s.%N) - $t0" | bc)"); return $rc; }
@@ -43,7 +45,7 @@ fi
 # import std: build the std module from libstdc++'s bits/std.cc, then the probe.
 PROBE="$OUT/probe"
 rm -rf "$PROBE"; mkdir -p "$PROBE"; cd "$PROBE"
-STD_CC="$GCC_DIR/include/c++/15/bits/std.cc"
+STD_CC=$(find_std_cc "$CXX")   # the std module source of the libstdc++ this compiler uses
 if secs $CXX -std=c++26 $FLAGS "$HERE/probe/import_std.cpp" -o textual && ./textual > /dev/null; then
   fact "probe: #include compile (s)" "$ELAPSED"
 else
@@ -53,8 +55,8 @@ if [ "$COMPILER" = gcc ]; then
   secs $CXX -std=c++26 -fmodules -fsearch-include-path -c bits/std.cc -o std.o; rc=$?; std_t=$ELAPSED
   [ $rc = 0 ] && secs $CXX -std=c++26 -fmodules -DTS_IMPORT_STD "$HERE/probe/import_std.cpp" std.o -o modules
 else
-  secs clang++ -std=c++26 $FLAGS -Wno-reserved-module-identifier --precompile -x c++-module "$STD_CC" -o std.pcm; rc=$?; std_t=$ELAPSED
-  [ $rc = 0 ] && secs clang++ -std=c++26 $FLAGS -DTS_IMPORT_STD -fmodule-file=std=std.pcm "$HERE/probe/import_std.cpp" std.pcm -o modules
+  secs $CXX -std=c++26 $FLAGS -Wno-reserved-module-identifier --precompile -x c++-module "$STD_CC" -o std.pcm; rc=$?; std_t=$ELAPSED
+  [ $rc = 0 ] && secs $CXX -std=c++26 $FLAGS -DTS_IMPORT_STD -fmodule-file=std=std.pcm "$HERE/probe/import_std.cpp" std.pcm -o modules
 fi
 rc=$?
 if [ "$rc" = 0 ] && ./modules > /dev/null; then

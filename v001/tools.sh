@@ -1,0 +1,51 @@
+# Finds the tools TreeSync builds with; sourced by build.sh, compare.sh and bootstrap.sh.
+# Each function prints what it found (or nothing) and never fails the caller.
+#
+#   find_gcc      a g++ that is gcc 15 or newer (gcc-toolset-15 on RHEL, g++-15, g++)
+#   find_clang    a clang++ that is clang 21 or newer (clang++, clang++-21, -22, ...)
+#   find_upp      "UMK UPPSRC": umk and its uppsrc, as a pair from one U++ install
+#   find_std_cc   COMPILER: the std module source (bits/std.cc) of the libstdc++ it uses
+#
+# UPP_DIR (a U++ folder holding umk and uppsrc) is tried before the usual places;
+# with UPP_ONLY=1 it is the only place (to test a fresh install next to an old one).
+
+major_of() {   # major version of a compiler, or 0
+  "$1" -dumpversion 2>/dev/null | cut -d. -f1 | grep -E '^[0-9]+$' || echo 0
+}
+
+find_gcc() {
+  for c in /opt/rh/gcc-toolset-1[5-9]/root/usr/bin/g++ g++-16 g++-15 g++; do
+    p=$(command -v "$c" 2>/dev/null) || continue
+    [ "$(major_of "$p")" -ge 15 ] && { echo "$p"; return; }
+  done
+}
+
+find_clang() {
+  for c in clang++ clang++-23 clang++-22 clang++-21; do
+    p=$(command -v "$c" 2>/dev/null) || continue
+    [ "$(major_of "$p")" -ge 21 ] && { echo "$p"; return; }
+  done
+}
+
+find_upp() {
+  local g u s
+  if [ "${UPP_ONLY:-0}" = 1 ]; then
+    [ -x "${UPP_DIR:-}/umk" ] && [ -d "$UPP_DIR/uppsrc/Core" ] && echo "$UPP_DIR/umk $UPP_DIR/uppsrc"
+    return
+  fi
+  for g in /run/media/jay/GFS /media/jay/GFS /mnt/GFS; do
+    [ -d "$g/upp/uppsrc" ] && { GFS="$g"; break; }
+  done
+  for u in ${UPP_DIR:+"$UPP_DIR/umk"} ${GFS:+"$GFS/upp-bin/rhel/umk"} "$HOME/u++/umk" ${GFS:+"$GFS/upp-bin/mint/umk"}; do
+    [ -x "$u" ] || continue
+    for s in ${UPP_DIR:+"$UPP_DIR/uppsrc"} ${GFS:+"$GFS/upp/uppsrc"} "$HOME/u++/uppsrc"; do
+      [ -d "$s/Core" ] && { echo "$u $s"; return; }
+    done
+  done
+}
+
+find_std_cc() {
+  local inc
+  inc=$(echo | "$1" -std=c++26 -xc++ -E -v - 2>&1 | grep -E '^ /.*/c\+\+/[0-9]+$' | head -1 | tr -d ' ')
+  [ -n "$inc" ] && [ -f "$inc/bits/std.cc" ] && echo "$inc/bits/std.cc"
+}

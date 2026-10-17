@@ -34,7 +34,17 @@ TreeSync is three things at once:
 ## Language and build
 
 - **C++26** (`-std=c++26`), plus U++ for the GUI.
-- **Compilers**: GCC 14+ or Clang 21+. On RHEL 9 the system GCC 11 is too old, so use `gcc-toolset-15` (`scl enable gcc-toolset-15 bash`) or `clang++`.
+- **Compilers**: GCC 15+ and Clang 21+. On RHEL 9 the system GCC 11 is too old; `gcc-toolset-15` is found by itself (`v001/tools.sh` looks in the usual places on RHEL, Fedora and Mint).
+
+### Bootstrap: a fresh machine
+
+```bash
+cd v001
+./bootstrap.sh              # check, install what is missing (asks first), fetch U++ if needed, build, test
+./bootstrap.sh --dry-run    # only say what it would do
+```
+
+Like jac313's bootstrap: it detects the Linux family (RHEL, Fedora, Mint/Ubuntu), checks each requirement listed in [`v001/setup/recipes.conf`](v001/setup/recipes.conf) (GCC 15+, Clang 21+, GTK 3 and the libraries U++ GUIs build with, make/git/curl, and for tests bc and OpenSSH), shows the install commands for what is missing and runs them after a yes (most need sudo). If there is no U++ it fetches the latest U++ release for POSIX into `~/u++` and builds its `umk`, without sudo. Then it builds and tests with each compiler and ends with start : stop : duration per step, also kept in `Bootstrap-Results.txt` in the logs folder. Safe to run again. New requirements or families are a line in `recipes.conf`, not code.
 - **Contracts**: preconditions and assertions are written with C++26 contracts where the compiler supports them (`__cpp_contracts`). Otherwise they fall back to runtime assertion checks through a small macro wrapper, so the code does not need to change once compilers catch up.
 
 ### Layout
