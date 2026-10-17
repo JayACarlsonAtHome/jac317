@@ -19,10 +19,18 @@ TreeSyncWindow::TreeSyncWindow()
 	menu.Set([this](Bar& bar) { MainMenu(bar); });
 	split.Horz(source_panel, target_panel);
 
-	progress_pane.Add(overall.HSizePosZ(4, 220).TopPosZ(4, 18));
-	progress_pane.Add(overall_text.RightPosZ(4, 210).TopPosZ(4, 18));
-	progress_pane.Add(active.HSizePosZ(4, 4).VSizePosZ(26, 2));
-	overall.Set(0, 1000);
+	const char *stage_name[3] = { "Pre-scan: source", "Copy", "Post-scan: target" };
+	for(int i = 0; i < 3; i++) {
+		ParentCtrl& p = stage_pane[i];
+		p.Add(stage_box[i].SetLabel(stage_name[i]).SizePos());
+		p.Add(stage_bar[i].HSizePosZ(8, 8).TopPosZ(18, 16));
+		p.Add(stage_text[i].HSizePosZ(8, 8).TopPosZ(36, 18));
+		stage_bar[i].Set(0, 1000);
+		stages.Add(p);
+	}
+	stages.Horz();
+	progress_pane.Add(stages.HSizePosZ(2, 2).TopPosZ(0, 60));
+	progress_pane.Add(active.HSizePosZ(4, 4).VSizePosZ(62, 2));
 	active.AddKey();                                   // copy id
 	active.AddColumn("Copying", 50);
 	active.AddColumn("", 30).SetDisplay(ProgressDisplay());   // 0..1000
@@ -30,11 +38,11 @@ TreeSyncWindow::TreeSyncWindow()
 	active.AddColumn("Size", 12).HeaderTab().AlignRight();
 	active.NoCursor().NoGrid();
 
-	bottom.Add(progress_pane);
-	bottom.Add(log);
+	bottom.Vert(progress_pane, log);
+	bottom.SetPos(6500);
 	ProgressVisible(false);
 	vsplit.Vert(split, bottom);
-	vsplit.SetPos(6500);
+	vsplit.SetPos(5500);
 	log.SetReadOnly();
 	log.SetFont(Monospace());
 	Add(vsplit.SizePos());
@@ -121,10 +129,10 @@ void TreeSyncWindow::LoadTrees()
 
 void TreeSyncWindow::ProgressVisible(bool on)
 {
-	int h = on ? Zy(130) : 0;
-	progress_pane.HSizePos().TopPos(0, h);
-	progress_pane.Show(on);
-	log.HSizePos().VSizePos(h, 0);
+	if(on)
+		bottom.NoZoom();
+	else
+		bottom.Zoom(1);   // the log only
 }
 
 Vector<String> WithoutDryRun(Vector<String> args)
@@ -202,6 +210,8 @@ GUI_APP_MAIN
 			TreeSyncWindow w;
 			w.SetSetup(setup);
 			SaveScreenshot(w, AppendFileName(shots, "main.png"));
+			w.DemoProgress();
+			SaveScreenshot(w, AppendFileName(shots, "main-running.png"));
 			SetupDlg dlg;
 			dlg.Set(setup);
 			dlg.Screenshots(shots);

@@ -20,14 +20,49 @@ void TreeSyncWindow::Log(const String& line)
 	log.SetCursor(log.GetLength());
 }
 
-// @file id done size seconds index count name / @overall done total, tab-separated.
+void TreeSyncWindow::DemoProgress()
+{
+	ProgressVisible(true);
+	for(const char *l : {
+		"@stage\t0\t31540\t51381\t0\tzig-x86_64-linux/lib/std/os",
+		"@overall\t734003200\t1288490188",
+		"@file\t12\t52428800\t134217728\t1.7\t12\t140\tzig-x86_64-linux/zig",
+		"@file\t15\t1048576\t4194304\t0.2\t15\t140\tzig-x86_64-linux/lib/zig.h",
+		"@file\t16\t3145728\t3355443\t0.4\t16\t140\tzig-x86_64-linux.tar.xz",
+		"@stage\t2\t96\t412\t0\tzig-x86_64-linux/lib/std/crypto" })
+		ShowProgress(l);
+}
+
+// One stage box: a bar (done of total; empty while the total is unknown) and a line.
+void TreeSyncWindow::StageShow(int stage, int64 done, int64 total, const String& text)
+{
+	stage_bar[stage].Set(total > 0 ? (int)(min(done, total) * 1000 / total) : 0, 1000);
+	stage_text[stage] = text;
+}
+
+// @file id done size seconds index count name / @overall done total /
+// @stage stage done total finished detail, tab-separated.
 void TreeSyncWindow::ShowProgress(const String& line)
 {
 	Vector<String> f = Split(line, '\t', false);
 	if(f[0] == "@overall" && f.GetCount() >= 3) {
 		int64 done = ScanInt64(f[1]), total = ScanInt64(f[2]);
-		overall.Set(total > 0 ? (int)(done * 1000 / total) : 1000, 1000);
-		overall_text = FormatBytes(done) + " of " + FormatBytes(total);
+		StageShow(1, done, total, FormatBytes(done) + " of " + FormatBytes(total) + " so far");
+		return;
+	}
+	if(f[0] == "@stage" && f.GetCount() >= 6) {
+		int stage = ScanInt(f[1]);
+		int64 done = ScanInt64(f[2]), total = ScanInt64(f[3]);
+		bool finished = f[4] == "1";
+		String detail = f.GetCount() > 5 ? f[5] : String();
+		if(stage == 0)
+			StageShow(0, done, finished ? done : total,
+			          finished ? Format("done: %s entries", AsString(done))
+			                   : AsString(done) + (total ? " of ~" + AsString(total) : String()) + " entries  " + detail);
+		else if(stage == 2)
+			StageShow(2, done, total,
+			          finished ? Format("done: %s folders checked", AsString(done))
+			                   : Format("%s of %s folders  ", AsString(done), AsString(total)) + detail);
 		return;
 	}
 	if(f[0] != "@file" || f.GetCount() < 8)
@@ -128,8 +163,8 @@ void TreeSyncWindow::StartSync(bool dry_run)
 	Log(String(as_root ? "[as root] " : "") + CommandLineText(ToArgs(s)));
 	status = "Running...";
 	active.Clear();
-	overall.Set(0, 1000);
-	overall_text = "";
+	for(int i = 0; i < 3; i++)
+		StageShow(i, 0, 0, String());
 	ProgressVisible(true);
 
 	// Reader thread: lines go to the log on the GUI thread; exit status at the end.
@@ -150,7 +185,7 @@ void TreeSyncWindow::StartSync(bool dry_run)
 			while((nl = pending.Find('\n')) >= 0) {
 				String line = pending.Left(nl);
 				pending.Remove(0, nl + 1);
-				if(line.StartsWith("@file\t") || line.StartsWith("@overall\t"))
+				if(line.StartsWith("@file\t") || line.StartsWith("@overall\t") || line.StartsWith("@stage\t"))
 					PostCallback([this, line] { ShowProgress(line); });
 				else
 					PostCallback([this, line] { Log(line); });

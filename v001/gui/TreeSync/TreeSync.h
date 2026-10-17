@@ -145,11 +145,17 @@ class TreeSyncWindow : public TopWindow {
 
 	// Thermometers: the whole run, and one row per file being copied right now.
 	// They sit above the log and are shown only while a sync runs.
-	ParentCtrl        bottom;
+	Splitter          bottom;          // progress above the log; only the log when idle
+	// Three boxes, one per stage of a streamed run, then the files being copied.
 	ParentCtrl        progress_pane;
-	ProgressIndicator overall;
-	Label             overall_text;
+	Splitter          stages;
+	ParentCtrl        stage_pane[3];
+	LabelBox          stage_box[3];
+	ProgressIndicator stage_bar[3];   // [1] is the copy box: bytes of the run
+	Label             stage_text[3];
 	ArrayCtrl         active;
+
+	void StageShow(int stage, int64 done, int64 total, const String& text);
 	SyncSetup setup;
 
 	// SyncRun.cpp: treesync-cli as a child process.
@@ -176,6 +182,7 @@ class TreeSyncWindow : public TopWindow {
 
 public:
 	void SetSetup(const SyncSetup& s);
+	void DemoProgress();   // --screenshot: the progress boxes with sample values
 	void Close() override;
 
 	TreeSyncWindow();
