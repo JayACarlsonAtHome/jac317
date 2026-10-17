@@ -2,7 +2,7 @@
 // --long-name value, and --no-long-name for switches that default on.
 // One table drives parsing, the command line shown in the GUI, and --help.
 // Each switch notes its robocopy equivalent for reference.
-#include "TreeSync.h"
+#include "TreeSyncCore.h"
 
 #include <charconv>
 

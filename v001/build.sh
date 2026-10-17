@@ -1,25 +1,29 @@
 #!/usr/bin/env bash
 #
-# TreeSync GUI build. Builds with ONE selected compiler, like jac313's --compiler:
+# TreeSync build. Builds with ONE selected compiler, like jac313's --compiler:
 #
 #   ./build.sh --compiler clang            # clang++ 21+, bm/CLANG26.bm (default)
 #   ./build.sh --compiler gcc              # gcc-toolset-15 g++, bm/GCC15.bm
 #   ./build.sh --compiler gcc --release    # optimized build
+#   ./build.sh --compiler gcc --test       # build and run the core tests instead
 #
-# Output: v001/gui/out/<compiler>/treesync (gitignored).
+# Packages: core/TreeSyncCore (engine, no GUI), gui/TreeSync (GUI on top),
+# core/TreeSyncTest (console tests of the core).
+# Output: v001/out/<compiler>/treesync or treesync-test (gitignored).
 # Both build methods pass -std=c++26; U++'s stock ones pass -std=c++17.
 set -eu
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-PKG=TreeSync
 COMPILER=clang
 MODE=-bsH
+TEST=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --compiler) COMPILER="${2:-}"; shift 2 ;;
     --release)  MODE=-brsH; shift ;;
-    -h|--help)  sed -n '3,10p' "$0"; exit 0 ;;
+    --test)     TEST=1; shift ;;
+    -h|--help)  sed -n '3,13p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -49,5 +53,13 @@ done
 
 OUT="$HERE/out/$COMPILER"
 mkdir -p "$OUT"
-echo "Building $PKG with $COMPILER ($BM)"
-"$UMK" "$HERE,$UPPSRC" "$PKG" "$BM" $MODE "$OUT/treesync"
+ASSEMBLY="$HERE/core,$HERE/gui,$UPPSRC"
+
+if [ "$TEST" = 1 ]; then
+  echo "Building TreeSyncTest with $COMPILER ($BM)"
+  "$UMK" "$ASSEMBLY" TreeSyncTest "$BM" $MODE "$OUT/treesync-test"
+  "$OUT/treesync-test"
+else
+  echo "Building TreeSync with $COMPILER ($BM)"
+  "$UMK" "$ASSEMBLY" TreeSync "$BM" $MODE "$OUT/treesync"
+fi

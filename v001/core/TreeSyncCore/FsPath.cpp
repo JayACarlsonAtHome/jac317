@@ -4,7 +4,7 @@
 // - ListFolder on Linux opens a folder one component at a time with openat, so a
 //   path longer than PATH_MAX (4096 bytes) can still be listed.
 // - Paths are never passed through a shell, so spaces need no quoting here.
-#include "TreeSync.h"
+#include "TreeSyncCore.h"
 
 #include <dirent.h>
 #include <fcntl.h>

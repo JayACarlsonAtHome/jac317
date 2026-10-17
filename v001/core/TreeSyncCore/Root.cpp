@@ -1,7 +1,7 @@
 // Privilege check. TreeSync is meant to run as root: a sync often meets files the
 // current user cannot read or replace. Without root it still runs, but local trees
 // are limited to the user's home directory.
-#include "TreeSync.h"
+#include "TreeSyncCore.h"
 
 #include <unistd.h>
 
@@ -33,20 +33,15 @@ bool PathAllowed(const String& p)
 	return IsRoot() || p.IsEmpty() || IsUnder(Resolved(p), HomeDir());
 }
 
-void WarnNotRoot()
+String NotRootMessage()
 {
-	if(IsRoot())
-		return;
-	Exclamation(
-		"[* TreeSync is not running as root.]&&"
-		"It will still work, but only inside your home directory:&"
-		"[C " + DeQtf(HomeDir()) + "]&&"
-		"To sync other folders, run TreeSync as root.");
+	return "TreeSync is not running as root.\n"
+	       "It will still work, but only inside your home directory: " + HomeDir() + "\n"
+	       "To sync other folders, run TreeSync as root.";
 }
 
-void RefusePath(const String& p)
+String RefusedPathMessage(const String& p)
 {
-	Exclamation(
-		"[C " + DeQtf(p) + "] is outside your home directory.&&"
-		"Without root, TreeSync only works inside [C " + DeQtf(HomeDir()) + "].");
+	return p + " is outside your home directory.\n"
+	       "Without root, TreeSync only works inside " + HomeDir() + ".";
 }

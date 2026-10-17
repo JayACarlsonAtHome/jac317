@@ -1,0 +1,13 @@
+description "TreeSync engine side: settings, options, paths, disks (no GUI)\n";
+
+uses
+	Core;
+
+file
+	TreeSyncCore.h,
+	Contracts.h,
+	Options.cpp,
+	FsPath.cpp,
+	Disks.cpp,
+	Root.cpp,
+	Progress.cpp;

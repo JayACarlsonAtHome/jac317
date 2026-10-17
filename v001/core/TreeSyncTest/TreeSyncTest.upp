@@ -1,0 +1,10 @@
+description "Console tests for TreeSyncCore\n";
+
+uses
+	TreeSyncCore;
+
+file
+	main.cpp;
+
+mainconfig
+	"" = "";

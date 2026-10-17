@@ -1,18 +1,15 @@
-description "TreeSync - sync two directory trees by SHA-256 (stub)\n";
+description "TreeSync GUI - on top of TreeSyncCore\n";
 
 uses
-	CtrlLib;
+	CtrlLib,
+	TreeSyncCore;
 
 file
-	Contracts.h,
 	TreeSync.h,
 	SetupDlg.cpp,
 	DirTree.cpp,
-	Disks.cpp,
 	PathPicker.cpp,
-	Root.cpp,
-	FsPath.cpp,
-	Options.cpp,
+	Messages.cpp,
 	main.cpp;
 
 mainconfig

@@ -27,18 +27,47 @@ TreeSync keeps two directory trees in sync. The trees can be on the same machine
 - **Compilers**: GCC 14+ or Clang 21+. On RHEL 9 the system GCC 11 is too old, so use `gcc-toolset-15` (`scl enable gcc-toolset-15 bash`) or `clang++`.
 - **Contracts**: preconditions and assertions are written with C++26 contracts where the compiler supports them (`__cpp_contracts`). Otherwise they fall back to runtime assertion checks through a small macro wrapper, so the code does not need to change once compilers catch up.
 
-### Building the GUI
+### Layout
+
+TreeSync is a GUI on top of working code:
+
+| Package | Role |
+|---|---|
+| `v001/core/TreeSyncCore` | The engine side: settings, options, paths, disks, privileges, progress lines. U++ Core only, no GUI library, so it can never depend on the GUI. |
+| `v001/gui/TreeSync` | The GUI. It shows what the core is doing and passes settings to it. |
+| `v001/core/TreeSyncTest` | Console tests of the core. |
+
+### Building and testing
 
 Like jac313, TreeSync builds with one selected compiler at a time:
 
 ```bash
-cd v001/gui
+cd v001
 ./build.sh --compiler clang            # clang 21+, bm/CLANG26.bm (default)
 ./build.sh --compiler gcc              # gcc-toolset-15, bm/GCC15.bm
 ./build.sh --compiler gcc --release
+./build.sh --compiler gcc --test       # build and run the core tests
 ```
 
-Output goes to `v001/gui/out/<compiler>/treesync`. U++'s stock build methods pass `-std=c++17` after any package options, so TreeSync ships its own build methods in `v001/gui/bm/` that pass `-std=c++26`. A `static_assert` stops the build if C++26 is not in effect.
+Output goes to `v001/out/<compiler>/treesync` (and `treesync-test`). U++'s stock build methods pass `-std=c++17` after any package options, so TreeSync ships its own build methods in `v001/bm/` that pass `-std=c++26`. A `static_assert` stops the build if C++26 is not in effect.
+
+The tests build a scratch tree under `$TMPDIR` with awkward names and a folder chain deeper than `PATH_MAX`. They also check option round trips (including shell quoting through a real `sh`), the home-only limit, and the progress-line layout. The scratch tree is removed afterwards.
+
+## Seeing what happens
+
+The point of the GUI is to see what is going on. So the engine reports each step as it happens (scan, hash, compare, copy, skip, conflict) instead of handing the whole job to a tool that only prints a summary.
+
+- **Terminal**: one line per copied file, in the style of Fedora's dnf5, then a total:
+
+  ```
+  [  3/108] photos/2024/beach day.jpg                       100% |   12.4 MiB/s |    3.1 MiB |  00m00s
+  [  4/108] music/Sigur Rós/Ágætis byrjun/01 Intro.flac      25% |    2.0 MiB/s |    1.0 MiB |  00m00s
+  [108/108] Total                                           100% |   14.0 MiB/s |  300.2 MiB |  00m21s
+  ```
+
+- **GUI**: the same steps, shown against the trees. Warnings appear in a dialog and are also printed to the terminal.
+
+**Copy plan** (not built yet): the engine copies one file at a time with `cp --preserve=all --reflink=auto --sparse=auto -- SRC DST`, started with `posix_spawn` (an argument list, never a shell, so spaces are safe). It runs `cp` inside the destination folder with short relative names, so deep trees work, and checks the SHA-256 afterwards. Running `cp` per file is what gives per-file progress. `rsync` would also work, but it hides the per-file steps the GUI is meant to show.
 
 ## Long paths and awkward names
 

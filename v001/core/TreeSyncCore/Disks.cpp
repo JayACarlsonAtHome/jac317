@@ -2,7 +2,7 @@
 // Physical disks come from /sys/block; mounts from /proc/self/mounts, each traced
 // back to its disk through partitions and device-mapper (LVM, LUKS) slaves.
 // std::filesystem does the path work; it cannot enumerate mounts, so getmntent does.
-#include "TreeSync.h"
+#include "TreeSyncCore.h"
 
 #include <fstream>
 
@@ -60,7 +60,7 @@ Vector<DiskInfo> ListDisks()
 			d.label << "  " << model;
 		int64 sectors = ScanInt64(ReadSys(e.path() / "size"));
 		if(!IsNull(sectors) && sectors > 0)
-			d.label << "  (" << TrimBoth(FormatFileSize(sectors * 512)) << ")";
+			d.label << "  (" << FormatBytes(sectors * 512) << ")";
 		if(ReadSys(e.path() / "removable") == "1")
 			d.label << "  removable";
 	}
@@ -97,12 +97,25 @@ Vector<MountInfo> ListMounts()
 		std::error_code ec;
 		fs::space_info sp = fs::space(ToFs(dir), ec);
 		if(!ec)
-			mi.label << ", " << TrimBoth(FormatFileSize((int64)sp.capacity));
+			mi.label << ", " << FormatBytes((int64)sp.capacity);
 		mi.label << ")";
 	}
 	endmntent(f);
 	Sort(list, [](const MountInfo& a, const MountInfo& b) { return a.dir < b.dir; });
 	return list;
+}
+
+// 1024-based, one decimal, IEC units as dnf uses them: "953.9 GiB".
+String FormatBytes(int64 n)
+{
+	static const char *unit[] = { "B", "KiB", "MiB", "GiB", "TiB", "PiB" };
+	double v = (double)n;
+	int u = 0;
+	while(v >= 1024 && u < 5) {
+		v /= 1024;
+		u++;
+	}
+	return u ? Format("%.1f %s", v, unit[u]) : Format("%d B", (int)n);
 }
 
 // True when p is dir itself or somewhere below it (/home is not under /hom).
