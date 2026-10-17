@@ -15,6 +15,7 @@ file
 	Progress.cpp,
 	Toolchain.cpp,
 	Engine.h,
+	Runner.h,
 	Db.cpp,
 	Scan.cpp,
 	Plan.cpp,
@@ -22,4 +23,5 @@ file
 	LocalFs.cpp,
 	SftpFs.cpp,
 	Ids.cpp,
-	Sync.cpp;
+	Sync.cpp,
+	Stream.cpp;

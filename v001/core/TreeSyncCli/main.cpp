@@ -6,6 +6,7 @@
 // --gui-progress (used by the GUI): also print progress as tagged lines,
 //   @file <TAB> id <TAB> done <TAB> size <TAB> seconds <TAB> index <TAB> count <TAB> name
 //   @overall <TAB> done <TAB> total
+//   @stage <TAB> stage <TAB> done <TAB> total <TAB> finished <TAB> detail   (0 pre-scan, 2 post-scan)
 // which the GUI turns into thermometers instead of log lines.
 // Exit codes: 0 in sync, 1 failures or conflicts, 2 usage or setup error, 3 stopped.
 #include <TreeSyncCore/TreeSyncCore.h>
@@ -111,6 +112,18 @@ CONSOLE_APP_MAIN
 			Print(ProgressLine(p));
 		else
 			Status(ProgressLine(p, 100, true));
+	};
+	report.WhenStage = [](const StageProgress& s) {
+		if(gui_progress) {
+			String d = s.detail;
+			d.Replace("\t", " ");
+			d.Replace("\n", " ");
+			Cout() << std::format("@stage\t{}\t{}\t{}\t{}\t", s.stage, s.done, s.total, s.finished ? 1 : 0)
+			       << d << "\n";
+		}
+		if(s.finished)
+			Print(s.stage == 0 ? Format("pre-scan done: %s entries", AsString(s.done))
+			                   : Format("post-scan done: %s folders checked", AsString(s.done)));
 	};
 	report.WhenOverall = [](int64 done, int64 total) {
 		if(gui_progress)

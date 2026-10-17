@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS actions (
 	size INTEGER, sha256 TEXT, dev INTEGER, ino INTEGER, mtime_ns INTEGER, ctime_ns INTEGER,
 	mode INTEGER, note TEXT, state TEXT, bytes INTEGER, error TEXT, replaces INTEGER DEFAULT 0,
 	PRIMARY KEY (run, seq));
+CREATE INDEX IF NOT EXISTS actions_rel ON actions (run, rel);
 CREATE TABLE IF NOT EXISTS chunks (
 	run INTEGER, seq INTEGER, idx INTEGER, offset INTEGER, length INTEGER, sha256 TEXT,
 	PRIMARY KEY (run, seq, idx));

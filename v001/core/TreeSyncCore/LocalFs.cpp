@@ -4,6 +4,7 @@
 
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <unistd.h>
 #include <cerrno>
 #include <cstring>
@@ -85,6 +86,24 @@ bool LocalFs::Stat(const String& rel, bool follow, Entry& e, String& error)
 		}
 		return true;
 	});
+}
+
+// The inodes in use on the filesystem: an estimate of the entry count when the tree
+// is the whole mount (its parent is on another device), else 0 (unknown).
+int64 LocalFs::EntryEstimate()
+{
+	int fd = OpenDir(root);
+	if(fd < 0)
+		return 0;
+	struct stat self, parent;
+	struct statvfs vfs;
+	int64 n = 0;
+	if(fstat(fd, &self) == 0 && fstatat(fd, "..", &parent, 0) == 0 &&
+	   (self.st_dev != parent.st_dev || self.st_ino == parent.st_ino) &&
+	   fstatvfs(fd, &vfs) == 0 && vfs.f_files > 0)
+		n = vfs.f_files - vfs.f_ffree;
+	close(fd);
+	return n;
 }
 
 bool LocalFs::StableIds()

@@ -90,12 +90,22 @@ public:
 	Throttle(int64 bytes_per_second, const std::atomic<bool> *stop);
 };
 
+// Where a streamed run is: 0 pre-scan (entries found, of an estimate if known),
+// 2 post-scan (folders checked, of folders found). Copying is WhenOverall.
+struct StageProgress {
+	int    stage = 0;
+	int64  done = 0, total = 0;   // total 0: not known
+	bool   finished = false;
+	String detail;               // the folder being worked on
+};
+
 // What the engine tells the terminal or the GUI as it works.
 struct SyncReport {
 	Event<const String&>       WhenLine;      // a finished line: keep it
 	Event<const String&>       WhenStatus;    // a passing status: may overwrite
 	Event<const CopyProgress&> WhenProgress;  // copy progress; done == size when a file finishes
 	Event<int64, int64>        WhenOverall;   // bytes of the run's copies done, of total
+	Event<const StageProgress&> WhenStage;    // pre-scan and post-scan of a streamed run
 	const std::atomic<bool>   *stop = nullptr;
 	Throttle                  *throttle = nullptr;   // set by RunSync for --bwlimit
 
@@ -154,6 +164,10 @@ const char *KindName(ActionKind k);
 
 // Mirror/Copy need only the scans; Merge also uses the hashes both sides had after
 // the last sync (rel -> hash) to tell which side changed.
+// The time switches (--skip-older, --skip-newer, --skip-changed, with --fat-file-times
+// and --dst-tolerance): true when s (source) should not replace d (target).
+bool TimeSkip(const SyncFlags& flags, const Entry& s, const Entry& d);
+
 Vector<Action> PlanSync(const Vector<Entry>& src, const Vector<Entry>& dst, const SyncFlags& flags,
                         const VectorMap<String, String>& last_synced);
 
@@ -230,6 +244,7 @@ public:
 	virtual bool   Chown(const String& rel, int64 uid, int64 gid, String& error) = 0;   // never follows symlinks
 	virtual String Name() const = 0;         // for reports: "local" or user@host
 	virtual bool   StableIds()               { return false; }   // inode numbers usable by the hash cache
+	virtual int64  EntryEstimate()           { return 0; }       // likely entry count (statvfs), 0 = unknown
 	virtual ~TreeFs() {}
 };
 
@@ -242,6 +257,7 @@ public:
 	String Id() const override           { return root; }
 	bool   IsLocal() const override      { return true; }
 	bool   StableIds() override;
+	int64  EntryEstimate() override;
 	bool   CanHardLink() const override  { return true; }
 	bool   RootExists() override;
 	bool   MakeRoot(String& error) override;

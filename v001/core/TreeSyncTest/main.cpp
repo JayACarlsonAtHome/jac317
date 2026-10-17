@@ -582,7 +582,7 @@ static void TestThreads(const String& root)
 	       Format("resumed with 8 threads: %d of %d done, %d failed", r2.done, r2.planned, r2.failed));
 	bool said = false;
 	for(const String& l : lines)
-		said = said || l == "copying with 8 threads";
+		said = said || l.Find("copy (8 threads)") >= 0;
 	EXPECT(said, "reports 8 copy threads");
 	EXPECT(TreeHash(src, check) == TreeHash(dst, check), "8 threads: target tree hash equals source");
 
@@ -593,6 +593,45 @@ static void TestThreads(const String& root)
 	SyncResult r3;
 	Sync(one, r3);
 	EXPECT(r3.failed == 0 && TreeHash(src, check) == TreeHash(dst1, check), "1 thread: same result");
+}
+
+// The streaming engine: copies start while the pre-scan is still walking, and the
+// post-scan checks every folder the pre-scan found.
+static void TestStreaming(const String& root)
+{
+	String src = root + "/st-src", dst = root + "/st-dst", db = root + "/sync.db", check = root + "/check.db";
+	for(int i = 0; i < 2000; i++)
+		Put(Format("%s/d%02d/e%d/f%d.txt", src, i % 20, i % 2, i), Big(200 + i % 50, i));
+	Put(dst + "/d07/e1/extra in the target.txt", "extra\n");
+
+	SyncSetup s = Setup(src, dst, db);
+	s.flags.threads = 4;
+	SyncReport report;
+	String err;
+	SyncResult r;
+	auto t0 = std::chrono::steady_clock::now();
+	std::atomic<double> first_copy = -1, scan_end = -1;
+	int64 found = 0, checked = 0;
+	auto since = [&] { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(); };
+	report.WhenProgress = [&](const CopyProgress& p) {
+		if(p.done >= p.size && first_copy < 0)
+			first_copy = since();
+	};
+	report.WhenStage = [&](const StageProgress& st) {
+		if(st.stage == 0 && st.finished)
+			scan_end = since();
+		if(st.stage == 2 && st.finished) {
+			checked = st.done;
+			found = st.total;
+		}
+	};
+	EXPECT(RunSync(s, report, r, err), "streaming run: " + err);
+	EXPECT(first_copy >= 0 && scan_end >= 0 && first_copy < scan_end,
+	       Format("first copy finished (%.3f s) before the pre-scan did (%.3f s)", (double)first_copy, (double)scan_end));
+	EXPECT(found == 41 && checked == found, Format("post-scan checked all %d folders (%d)", found, checked));
+	EXPECT(!FileExists(dst + "/d07/e1/extra in the target.txt") &&
+	       FileExists(dst + ".old/d07/e1/extra in the target.txt"), "post-scan moved the extra file out");
+	EXPECT(TreeHash(src, check) == TreeHash(dst, check), "streamed copy equals the source");
 }
 
 // treesync-cli run the way the GUI runs it (--stop-on-eof, stdin held open):
@@ -687,6 +726,7 @@ CONSOLE_APP_MAIN
 	TestEngineRefusals(eroot);
 	TestThreads(eroot);
 	TestCliLikeGui(eroot);
+	TestStreaming(eroot);
 	TestBandwidthAndPriority(eroot);   // last: it lowers this process's priority
 	int efd = open(GetFileFolder(eroot), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
 	RemoveAt(efd, GetFileName(eroot));

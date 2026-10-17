@@ -12,6 +12,16 @@ Differences from the first design, and gaps:
 - **Flushing**: only multi-chunk copies are flushed after each chunk; a one-chunk copy that is cut short is simply copied again.
 - **Verified copies are cached**: after a copy passes its SHA-256 check, the target file's row goes straight into `files`, so the next scan of the target does not read it again.
 
+## Streaming (Copy and Mirror)
+
+Copy and Mirror runs are streamed: three stages run at the same time, so copying starts as soon as the scanner finds something instead of after both trees are scanned.
+
+- **Pre-scan** (one thread) walks the source a folder at a time, reusing cached hashes, creates folders on the target and queues the files.
+- **Copy** (`--threads` workers) takes files right behind it: checks the target, hashes only what is not known yet (a big file is compared chunk by chunk, stopping at the first difference), and copies through the chunk pipeline: read and hash, write, read back and check, per chunk.
+- **Post-scan** (one thread, the side channel) takes each folder once it is fully scanned and all its files are done, removes what the source does not have (Mirror, safe delete) and confirms the rest.
+
+Each action is recorded when it is decided, before it runs. A stopped run is resumed by running it again: the walk is quick with the hash caches, and a big file continues at its last checked chunk. Merge needs both sides complete to tell which side changed, so it keeps the planned engine described below.
+
 ## Principle: SQLite is the record of truth
 
 Every step the engine takes is written to a local SQLite database before the next step starts. If TreeSync is stopped (Stop button, Ctrl+C, crash, power cut), the database says exactly how far it got, and the next run continues from there instead of starting over.

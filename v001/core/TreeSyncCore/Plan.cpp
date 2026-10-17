@@ -20,6 +20,21 @@ static bool Under(const String& rel, const String& dir)
 	return rel.GetCount() > dir.GetCount() && rel.StartsWith(dir) && rel[dir.GetCount()] == '/';
 }
 
+bool TimeSkip(const SyncFlags& flags, const Entry& s, const Entry& d)
+{
+	int64 tolerance = flags.fat_file_times ? 2000000000LL : 0;
+	int64 dt = s.mtime_ns - d.mtime_ns;
+	bool same_time = abs(dt) <= tolerance ||
+	                 (flags.dst_tolerance && abs(abs(dt) - 3600000000000LL) <= tolerance);
+	if(flags.skip_changed && same_time)
+		return true;
+	if(flags.skip_older && !same_time && dt < 0)
+		return true;
+	if(flags.skip_newer && !same_time && dt > 0)
+		return true;
+	return false;
+}
+
 namespace {
 
 struct Planner {
@@ -57,21 +72,7 @@ struct Planner {
 		copies.Top().replaces = replaces;
 	}
 
-	// Source differs from target: the time switches may still skip it.
-	bool TimeSkip(const Entry& s, const Entry& d)
-	{
-		int64 tolerance = flags.fat_file_times ? 2000000000LL : 0;
-		int64 dt = s.mtime_ns - d.mtime_ns;
-		bool same_time = abs(dt) <= tolerance ||
-		                 (flags.dst_tolerance && abs(abs(dt) - 3600000000000LL) <= tolerance);
-		if(flags.skip_changed && same_time)
-			return true;
-		if(flags.skip_older && !same_time && dt < 0)
-			return true;
-		if(flags.skip_newer && !same_time && dt > 0)
-			return true;
-		return false;
-	}
+	bool TimeSkip(const Entry& s, const Entry& d) { return ::TimeSkip(flags, s, d); }
 
 	void OneWay(const Vector<Entry>& src, const Vector<Entry>& dst)
 	{
