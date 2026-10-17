@@ -386,8 +386,11 @@ void TreeSyncWindow::SyncFinished(int code)
 	                 : code == 126 || code == 127 ? "pkexec refused or was cancelled" : "ended abnormally";
 	Log(Format("treesync-cli exit code %d: %s", code, what));
 	int64 ended = (int64)time(nullptr), took = ended - sync_started;
-	String took_text = DurationWords(took);
-	Log("took " + took_text + " (" + DurationClock(took) + ")");
+	Log("took " + DurationWords(took) + " (" + DurationClock(took) + ")");   // padded: the log lines up
+	// The popup and status bar show one duration on its own: no padding needed.
+	String took_text = TrimBoth(DurationWords(took));
+	while(took_text.Find("  ") >= 0)
+		took_text.Replace("  ", " ");
 	KillTimeCallback(77);
 	net_down = false;
 	stage_text[1].SetInk(SColorText());
