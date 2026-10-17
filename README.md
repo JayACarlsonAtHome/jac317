@@ -23,3 +23,9 @@ TreeSync keeps two directory trees in sync. The trees can be on the same machine
 ## Status
 
 Early development.
+
+## License
+
+Copyright 2026 Jay A Carlson
+
+Licensed under the [Apache License, Version 2.0](LICENSE).
