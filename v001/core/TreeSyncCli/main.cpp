@@ -32,8 +32,13 @@ static void OnSignal(int)
 static bool tty = isatty(1);
 static bool status_shown;
 static FileAppend run_log;   // every printed line, in the run's log file
+static int64 run_started = -1;   // time(): lines about the whole run span from here
 
-static void Print(const String& line)
+// A line for the terminal and the run's log. In the log every line starts with
+// start : stop : duration (the j5c Results.txt columns): for a copied file, from
+// when its copy began to when it finished; for anything else, the moment it happened.
+// stamp false: as it is (the results table at the end).
+static void Print(const String& line, int64 start = -1, bool stamp = true)
 {
 	if(status_shown)
 		Cout() << "\r\x1b[K";
@@ -41,6 +46,9 @@ static void Print(const String& line)
 	Cout() << line << "\n";
 	Cout().Flush();
 	if(run_log.IsOpen()) {
+		int64 now = (int64)time(nullptr);
+		if(stamp)
+			run_log << LogStamp(start < 0 ? now : min(start, now), now);
 		run_log << line << "\n";
 		run_log.Flush();
 	}
@@ -104,7 +112,7 @@ CONSOLE_APP_MAIN
 
 	SyncReport report;
 	report.stop = &stop_requested;
-	report.WhenLine = [](const String& s) { Print(s); };
+	report.WhenLine = [](const String& s) { Print(s, s.Find("] Total") >= 0 ? run_started : -1); };
 	report.WhenStatus = [](const String& s) { Status(s); };
 	report.WhenProgress = [](const CopyProgress& p) {
 		if(gui_progress) {
@@ -115,7 +123,7 @@ CONSOLE_APP_MAIN
 			                      p.index, std::to_string(p.count) + (p.more ? "+" : "")) << name << (p.verifying ? "\tverify" : "") << "\n";
 		}
 		if(p.done >= p.size && !p.verifying)
-			Print(ProgressLine(p));
+			Print(ProgressLine(p), (int64)time(nullptr) - (int64)(p.seconds + 0.5));
 		else
 			Status(ProgressLine(p, 100, true));
 	};
@@ -129,7 +137,7 @@ CONSOLE_APP_MAIN
 		}
 		if(s.finished)
 			Print(s.stage == 0 ? Format("pre-scan done: %s entries", AsString(s.done))
-			                   : Format("post-scan done: %s folders checked", AsString(s.done)));
+			                   : Format("post-scan done: %s folders checked", AsString(s.done)), run_started);
 	};
 	// The messages themselves come as lines; this is for the GUI's banner.
 	report.WhenNetwork = [&](bool down, const String& host) {
@@ -168,7 +176,7 @@ CONSOLE_APP_MAIN
 	Print(CommandLineText(ToArgs(setup)));
 	Print("log: " + log_path);
 	SyncResult result;
-	int64 started = (int64)time(nullptr);
+	int64 started = run_started = (int64)time(nullptr);
 	// The start goes at the top too; stop and duration come in the table at the end.
 	Print("started: " + DateTimeText(started));
 	bool ok = RunSync(setup, report, result, error);
@@ -200,10 +208,10 @@ CONSOLE_APP_MAIN
 		if(!setup.flags.dry_run)
 			Print(Format("finished run %d: %d of %d actions done, %d failed, %d conflicts, %s copied",
 			             result.run, result.done, result.planned, result.failed, result.conflicts,
-			             FormatBytes(result.bytes)));
+			             FormatBytes(result.bytes)), started);
 	}
 	Print("took " + DurationWords(ended - started) + " (" + DurationClock(ended - started) + "), from " +
-	      ClockTime(started) + " to " + ClockTime(ended));
+	      ClockTime(started) + " to " + ClockTime(ended), started);
 
 	// Start, stop and duration in the layout of the j5c build Results.txt: at the end
 	// of this run's log, and one line per run in logs/Results.txt.
@@ -216,8 +224,8 @@ CONSOLE_APP_MAIN
 	            : result.run ? String(mode) + " run " + AsString(result.run) : String(mode);
 	String line = ResultsLine(started, ended, what, code, status,
 	                          where(setup.source) + " -> " + where(setup.target) + "  (" + summary + ")");
-	Print("");
-	Print(ResultsHeader(started) + line);
+	Print("", -1, false);
+	Print(ResultsHeader(started) + line, -1, false);
 	String results = AppendFileName(LogFolder(setup.db), "Results.txt");
 	bool fresh = !FileExists(results);
 	FileAppend fa(results);

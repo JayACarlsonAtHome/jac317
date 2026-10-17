@@ -207,6 +207,8 @@ String DurationClock(int64 seconds);
 String DurationWords(int64 seconds);
 String ClockTime(int64 unix_time);
 String DateTimeText(int64 unix_time);   // "2026-10-17 14:13:09  UTC = -7"
+// The three time columns of a log line: " 14:02:58 : 14:03:01 : 000:000:00:00:03 : ".
+String LogStamp(int64 start, int64 stop);
 
 // The run's start, stop and duration as a table in the layout of the j5c build
 // Results.txt: a header ("Status started on ...", the column titles) and one line

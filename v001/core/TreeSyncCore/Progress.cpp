@@ -146,6 +146,11 @@ String DateTimeText(int64 unix_time)
 	return date + " " + ClockTime(unix_time) + "  UTC = " + utc;
 }
 
+String LogStamp(int64 start, int64 stop)
+{
+	return " " + ClockTime(start) + " : " + ClockTime(stop) + " : " + DurationClock(stop - start) + " : ";
+}
+
 String ResultsHeader(int64 unix_time)
 {
 	String date, utc;
@@ -160,8 +165,7 @@ String ResultsLine(int64 start, int64 stop, const String& what, int result, cons
 {
 	String r = AsString(result);
 	r = String('.', max(5 - r.GetCount(), 0)) + r;
-	String line = " " + ClockTime(start) + " : " + ClockTime(stop) + " : " + DurationClock(stop - start) + " : " +
-	              Dotted(what, 40) + " : Result = " + r + " : " + Dotted(status, 25);
+	String line = LogStamp(start, stop) + Dotted(what, 40) + " : Result = " + r + " : " + Dotted(status, 25);
 	if(comment.GetCount())
 		line << " : " << comment;
 	return line;
