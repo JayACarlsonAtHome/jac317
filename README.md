@@ -75,7 +75,9 @@ The point of the GUI is to see what is going on. So the engine reports each step
 
 - **GUI**: the same steps, shown against the trees. Warnings appear in a dialog and are also printed to the terminal.
 
-**Copy plan** (not built yet): the engine copies one file at a time with `cp --preserve=all --reflink=auto --sparse=auto -- SRC DST`, started with `posix_spawn` (an argument list, never a shell, so spaces are safe). It runs `cp` inside the destination folder with short relative names, so deep trees work, and checks the SHA-256 afterwards. Running `cp` per file is what gives per-file progress. `rsync` would also work, but it hides the per-file steps the GUI is meant to show.
+**Restarts** (not built yet): every step is recorded in the SQLite database before the next one starts, so a stopped or crashed run continues where it left off. Big files are copied in chunks, each chunk recorded as it finishes, so a restart continues part-way through the file instead of from the start. Inode numbers identify unchanged files and hard links, and give a quick progress estimate. Details are in [`v001/docs/engine.md`](v001/docs/engine.md).
+
+**Copy plan** (not built yet): the engine copies one file at a time with `cp --preserve=all --reflink=auto --sparse=auto -- SRC DST`, started with `posix_spawn` (an argument list, never a shell, so spaces are safe). It runs `cp` inside the destination folder with short relative names, so deep trees work, and checks the SHA-256 afterwards. Running `cp` per file is what gives per-file progress. Big files use TreeSync's own chunked copy instead, because `cp` cannot resume part-way through a file. `rsync` would also work, but it hides the per-file steps the GUI is meant to show.
 
 ## Long paths and awkward names
 
