@@ -216,11 +216,15 @@ struct Runner {
 			.Text(1, ids[0]).Text(2, ids[1]).Text(3, rel).Text(4, hash).Run();
 	}
 
-	// Chunked copy; every finished chunk is recorded, so a restart continues from
-	// the next one. Returns false with error "stopped" on Stop.
-	// out stays open for the caller, to verify and set attributes through it.
+	// Chunked copy, a pipeline per chunk: read and hash it, write it, read it back and
+	// check it. Every checked chunk is recorded, so a restart continues from the next
+	// one. Works in 1 MiB slices (little memory per thread). src_hash and dst_hash are
+	// the whole-file SHA-256 of what was read and of what was read back, built up
+	// along the way: no separate full read is needed to verify the copy.
+	// Returns false with error "stopped" on Stop.
 	bool ChunkCopy(int seq, TreeFs& from, TreeFs& to, const String& rel, const String& part,
-	               int64 size, CopyProgress& p, Clock::time_point t0, One<TreeFile>& out, String& error)
+	               int64 size, CopyProgress& p, Clock::time_point t0, One<TreeFile>& out,
+	               String& src_hash, String& dst_hash, String& error)
 	{
 		int64 chunk = (int64)flags.chunk_mib << 20;
 		One<TreeFile> in = from.Open(rel, false, error);
@@ -229,7 +233,29 @@ struct Runner {
 		out = to.Open(part, true, error);
 		if(!out)
 			return false;
-		Buffer<byte> buf((size_t)min(chunk, max<int64>(size, 1)));
+		const int64 SLICE = 1 << 20;
+		Buffer<byte> buf((size_t)SLICE);
+		bool count_read = !from.IsLocal();
+		bool count_write = !to.IsLocal() || from.IsLocal();   // --bwlimit: network, or local writes
+		bool count_back = !to.IsLocal();
+
+		// SHA-256 of [off, off + len) of a file, in slices; feeds `also` too.
+		auto hash_range = [&](TreeFile& f, int64 off, int64 len, bool count, Sha256Stream *also,
+		                      String& hash) -> bool {
+			Sha256Stream sha;
+			for(int64 k = 0; k < len; k += SLICE) {
+				int64 n = min(SLICE, len - k);
+				if(!f.ReadAt(off + k, buf, n, error))
+					return false;
+				if(count)
+					report.Count(n);
+				sha.Put(buf, (int)n);
+				if(also)
+					also->Put(buf, (int)n);
+			}
+			hash = sha.FinishString();
+			return true;
+		};
 
 		// Chunks already done in an earlier, stopped attempt.
 		Vector<String> done;
@@ -242,24 +268,34 @@ struct Runner {
 		}
 		int64 count = (size + chunk - 1) / chunk;
 		int next = done.GetCount();
+		Sha256Stream src_sha, dst_sha;
 		if(next > 0) {
 			// The last recorded chunk may have been torn by the stop: check it again.
 			int64 off = (next - 1) * chunk, len = min(chunk, size - off);
-			String ignore;
-			if(!out->ReadAt(off, buf, len, ignore) || SHA256String(~buf, (dword)len) != done.Top())
+			String h, ignore = error;
+			if(!hash_range(*out, off, len, count_back, nullptr, h) || h != done.Top())
 				next--;
+			error = ignore;
 			{
 				Lock l(mx);
 				Stmt(db, "DELETE FROM chunks WHERE run = ? AND seq = ? AND idx >= ?")
 					.Int(1, run).Int(2, seq).Int(3, next).Run();
 			}
 			Line(Format("resuming %s at chunk %d of %d", rel, next + 1, count));
+			// The running hashes cover the chunks already there: those bytes were
+			// checked equal when they were recorded, so the source is read once for both.
+			int64 prefix = min(next * chunk, size);
+			for(int64 k = 0; k < prefix; k += SLICE) {
+				int64 n = min(SLICE, prefix - k);
+				if(!in->ReadAt(k, buf, n, error))
+					return false;
+				if(count_read)
+					report.Count(n);
+				src_sha.Put(buf, (int)n);
+				dst_sha.Put(buf, (int)n);
+			}
 		}
 
-		// --bwlimit counts what crosses the network; local to local it counts writes.
-		bool count_read = !from.IsLocal();
-		bool count_write = !to.IsLocal() || from.IsLocal();
-		const int64 SLICE = 1 << 20;
 		Clock::time_point last_shown = Clock::now();
 		for(int64 idx = next; idx < count; idx++) {
 			if(report.Stopping()) {
@@ -267,16 +303,17 @@ struct Runner {
 				return false;
 			}
 			int64 off = idx * chunk, len = min(chunk, size - off);
-			for(int64 k = 0; k < len; k += SLICE) {   // in slices, so the limit stays smooth
+			// 1. read and hash, 2. write, slice by slice
+			Sha256Stream chunk_sha;
+			for(int64 k = 0; k < len; k += SLICE) {
 				int64 n = min(SLICE, len - k);
-				if(!in->ReadAt(off + k, buf + k, n, error))
+				if(!in->ReadAt(off + k, buf, n, error))
 					return false;
 				if(count_read)
 					report.Count(n);
-			}
-			for(int64 k = 0; k < len; k += SLICE) {
-				int64 n = min(SLICE, len - k);
-				if(!out->WriteAt(off + k, buf + k, n, error))
+				chunk_sha.Put(buf, (int)n);
+				src_sha.Put(buf, (int)n);
+				if(!out->WriteAt(off + k, buf, n, error))
 					return false;
 				if(count_write)
 					report.Count(n);
@@ -298,11 +335,18 @@ struct Runner {
 			// lost in a crash after its rename.
 			if(count > 1)
 				out->Flush();
-			String sha = SHA256String(~buf, (dword)len);
+			// 3. read the chunk back and check it against what was read
+			String sent = chunk_sha.FinishString(), back;
+			if(!hash_range(*out, off, len, count_back, &dst_sha, back))
+				return false;
+			if(back != sent) {
+				error = Format("verify failed: chunk %d of %s reads back differently; kept as %s", idx + 1, rel, part);
+				return false;
+			}
 			{
 				Lock l(mx);
 				Stmt(db, "INSERT OR REPLACE INTO chunks VALUES (?, ?, ?, ?, ?, ?)")
-					.Int(1, run).Int(2, seq).Int(3, idx).Int(4, off).Int(5, len).Text(6, sha).Run();
+					.Int(1, run).Int(2, seq).Int(3, idx).Int(4, off).Int(5, len).Text(6, sent).Run();
 				result.bytes += len;
 			}
 			p.done = off + len;
@@ -310,7 +354,11 @@ struct Runner {
 			if(p.done < p.size)
 				Progress(p);
 		}
-		return out->Truncate(size, error);
+		if(!out->Truncate(size, error))
+			return false;
+		src_hash = src_sha.FinishString();
+		dst_hash = dst_sha.FinishString();
+		return true;
 	}
 
 	// Copies (or links, or re-creates a symlink) a.from.rel, verified, into place.
@@ -356,6 +404,14 @@ struct Runner {
 				return false;
 		}
 
+		// A file not hashed yet (the streaming engine hashes on the way): the cp path
+		// needs it first; the chunked copy works it out while copying.
+		bool hash_new = expect.IsEmpty();
+		bool big_or_remote = now.size >= ((int64)flags.big_file_mib << 20) || !from.IsLocal() || !to.IsLocal() ||
+		                     flags.bwlimit_kib;
+		if(hash_new && !big_or_remote && !from.Hash(e.rel, flags.follow_links, expect, error, report.stop))
+			return false;
+
 		CopyProgress p;
 		p.id = s.seq;
 		p.index = ++copy_index;
@@ -367,6 +423,7 @@ struct Runner {
 		bool fast = from.IsLocal() && to.IsLocal() && !big && !flags.bwlimit_kib;   // cp cannot be throttled
 		bool ok = false;
 		One<TreeFile> out;
+		String src_hash, dst_hash;
 		for(int attempt = 0; attempt <= flags.retries; attempt++) {
 			if(attempt) {
 				Line(Format("retry %d of %d in %d s: %s (%s)", attempt, flags.retries,
@@ -385,7 +442,7 @@ struct Runner {
 				if(dp >= 0) close(dp);
 			}
 			else
-				ok = ChunkCopy(s.seq, from, to, e.rel, part, now.size, p, t0, out, error);
+				ok = ChunkCopy(s.seq, from, to, e.rel, part, now.size, p, t0, out, src_hash, dst_hash, error);
 			if(ok || error == "stopped" || report.Stopping() || Permanent(error))
 				break;
 		}
@@ -396,12 +453,22 @@ struct Runner {
 			result.bytes += now.size;
 		}
 
-		// Read the copy back: it must have the source's SHA-256. The chunked copy
-		// reads it through the handle it wrote with, and sets the attributes there too.
+		// The copy must have the source's SHA-256. After cp, read it back; the chunked
+		// copy already read every chunk back and built both hashes on the way.
 		String got;
-		if(fast ? !to.Hash(part, false, got, error, report.stop)
-		        : !out->Hash(now.size, got, error, report.stop, to.IsLocal() ? nullptr : report.throttle))
-			return false;
+		if(fast) {
+			if(!to.Hash(part, false, got, error, report.stop))
+				return false;
+		}
+		else {
+			got = dst_hash;
+			if(expect.IsEmpty())
+				expect = src_hash;
+			else if(src_hash != expect) {
+				error = "the source changed while it was being copied: " + e.rel;
+				return false;
+			}
+		}
 		if(got != expect) {
 			error = "verify failed: copy of " + e.rel + " has a different SHA-256; kept as " + part;
 			return false;
@@ -423,6 +490,8 @@ struct Runner {
 		p.seconds = Since(t0);
 		Progress(p);
 		Synced(e.rel, expect);
+		if(hash_new)   // the source's own hash, worked out here: keep it for the next scan
+			Cache(from, a.dir, e.rel, expect, &now);
 		if(to.IsLocal())
 			Cache(to, 1 - a.dir, e.rel, expect);
 		else {

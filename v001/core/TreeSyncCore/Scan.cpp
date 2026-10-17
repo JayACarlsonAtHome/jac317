@@ -41,7 +41,7 @@ static int64 Ns(const timespec& t)
 }
 
 // Filesystems whose inode numbers are not stable between mounts or scans.
-static bool UnstableInodes(int fd)
+bool UnstableInodes(int fd)
 {
 	struct statfs sf;
 	if(fstatfs(fd, &sf) != 0)

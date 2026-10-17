@@ -141,6 +141,13 @@ struct FolderEntry : Moveable<FolderEntry> {
 	String name;
 	bool   is_dir = false;    // follows symlinks
 	bool   is_link = false;
+	// The entry itself (not what a symlink points to), as lstat sees it. SFTP has
+	// no dev/ino/ctime (0) and whole-second times.
+	char   type = 'f';        // 'f', 'd', 'l', or 's' for anything special
+	int64  size = 0, mtime_ns = 0, ctime_ns = 0, dev = 0, ino = 0, nlink = 1;
+	int    mode = 0;
+	int64  uid = -1, gid = -1;
+	String link;              // symlink target
 };
 
 int                   OpenDir(const String& dir);   // O_RDONLY dir fd, any path length; -1 + errno

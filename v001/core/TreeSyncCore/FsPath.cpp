@@ -63,7 +63,24 @@ bool ListFolder(const String& dir, Vector<FolderEntry>& out, String& error)
 		struct stat st;
 		FolderEntry& f = out.Add();
 		f.name = e->d_name;
-		f.is_link = fstatat(dirfd(d), e->d_name, &st, AT_SYMLINK_NOFOLLOW) == 0 && S_ISLNK(st.st_mode);
+		if(fstatat(dirfd(d), e->d_name, &st, AT_SYMLINK_NOFOLLOW) == 0) {
+			f.type = S_ISDIR(st.st_mode) ? 'd' : S_ISLNK(st.st_mode) ? 'l' : S_ISREG(st.st_mode) ? 'f' : 's';
+			f.size = st.st_size;
+			f.mtime_ns = (int64)st.st_mtim.tv_sec * 1000000000 + st.st_mtim.tv_nsec;
+			f.ctime_ns = (int64)st.st_ctim.tv_sec * 1000000000 + st.st_ctim.tv_nsec;
+			f.dev = st.st_dev;
+			f.ino = st.st_ino;
+			f.nlink = st.st_nlink;
+			f.mode = st.st_mode & 07777;
+			f.uid = st.st_uid;
+			f.gid = st.st_gid;
+			f.is_link = S_ISLNK(st.st_mode);
+			if(f.is_link) {
+				char buf[PATH_MAX + 1];
+				ssize_t n = readlinkat(dirfd(d), e->d_name, buf, PATH_MAX);
+				f.link = String(buf, (int)max<ssize_t>(n, 0));
+			}
+		}
 		f.is_dir = fstatat(dirfd(d), e->d_name, &st, 0) == 0 && S_ISDIR(st.st_mode);   // follows links
 	}
 	closedir(d);

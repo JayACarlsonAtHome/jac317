@@ -518,6 +518,8 @@ bool SftpFs::Stat(const String& rel, bool follow, Entry& e, String& error)
 		e.uid = a.uid;
 		e.gid = a.gid;
 	}
+	if(e.type == 'l')
+		e.link = impl->ReadLink(impl->P(rel));
 	return true;
 }
 
@@ -751,9 +753,19 @@ bool SftpFs::List(const String& rel, Vector<FolderEntry>& out, String& error)
 		f.name = s;
 		f.is_link = LIBSSH2_SFTP_S_ISLNK(a.permissions);
 		f.is_dir = LIBSSH2_SFTP_S_ISDIR(a.permissions);
+		f.type = f.is_dir ? 'd' : f.is_link ? 'l' : LIBSSH2_SFTP_S_ISREG(a.permissions) ? 'f' : 's';
+		f.size = (a.flags & LIBSSH2_SFTP_ATTR_SIZE) ? (int64)a.filesize : 0;
+		f.mtime_ns = (a.flags & LIBSSH2_SFTP_ATTR_ACMODTIME) ? (int64)a.mtime * 1000000000 : 0;
+		f.mode = a.permissions & 07777;
+		if(a.flags & LIBSSH2_SFTP_ATTR_UIDGID) {
+			f.uid = a.uid;
+			f.gid = a.gid;
+		}
 		if(f.is_link) {   // like local listings: is_dir says what the link points to
+			String full = path == "/" ? "/" + s : path + "/" + s;
 			LIBSSH2_SFTP_ATTRIBUTES t;
-			f.is_dir = m.Attrs(path == "/" ? "/" + s : path + "/" + s, true, t) && LIBSSH2_SFTP_S_ISDIR(t.permissions);
+			f.is_dir = m.Attrs(full, true, t) && LIBSSH2_SFTP_S_ISDIR(t.permissions);
+			f.link = m.ReadLink(full);
 		}
 	}
 	if(n < 0)

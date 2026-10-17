@@ -78,8 +78,24 @@ bool LocalFs::Stat(const String& rel, bool follow, Entry& e, String& error)
 		e.mode = st.st_mode & 07777;
 		e.uid = st.st_uid;
 		e.gid = st.st_gid;
+		if(S_ISLNK(st.st_mode)) {
+			char buf[PATH_MAX + 1];
+			ssize_t n = readlinkat(dp, name, buf, PATH_MAX);
+			e.link = String(buf, (int)max<ssize_t>(n, 0));
+		}
 		return true;
 	});
+}
+
+bool LocalFs::StableIds()
+{
+	if(stable < 0) {
+		int fd = OpenDir(root);
+		stable = fd >= 0 && !UnstableInodes(fd);
+		if(fd >= 0)
+			close(fd);
+	}
+	return stable;
 }
 
 bool LocalFs::Hash(const String& rel, bool follow, String& hash, String& error,

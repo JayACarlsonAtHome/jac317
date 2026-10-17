@@ -134,6 +134,7 @@ inline void ListingLine(String& listing, char type, const String& hash, const St
 }
 
 bool SkipName(const String& name);   // ".", "..", our own .treesync-part files
+bool UnstableInodes(int fd);         // FAT, FUSE, network filesystems
 bool Excluded(const String& patterns, const String& name);
 
 // Plan.cpp -------------------------------------------------------------------
@@ -228,16 +229,19 @@ public:
 	virtual bool   CanChown() const = 0;     // root here, or a root login there
 	virtual bool   Chown(const String& rel, int64 uid, int64 gid, String& error) = 0;   // never follows symlinks
 	virtual String Name() const = 0;         // for reports: "local" or user@host
+	virtual bool   StableIds()               { return false; }   // inode numbers usable by the hash cache
 	virtual ~TreeFs() {}
 };
 
 class LocalFs : public TreeFs {
 	String root;
+	int    stable = -1;   // StableIds, worked out once
 
 public:
 	int    ParentFd(const String& rel) const;   // for the cp fast path
 	String Id() const override           { return root; }
 	bool   IsLocal() const override      { return true; }
+	bool   StableIds() override;
 	bool   CanHardLink() const override  { return true; }
 	bool   RootExists() override;
 	bool   MakeRoot(String& error) override;
