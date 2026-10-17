@@ -53,3 +53,59 @@ String ProgressLine(const CopyProgress& p, int width, bool bar)
 	int name_width = max(10, width - (int)counter.size() - (int)tail.size());
 	return String(counter) + FitName(p.name, name_width) + String(tail);
 }
+
+// Durations -------------------------------------------------------------------
+
+namespace {
+
+struct Parts { int64 years, days, hours, minutes, seconds; };
+
+Parts SplitDuration(int64 total)
+{
+	if(total < 0)
+		total = -total;
+	const int64 DAY = 86400;
+	const double YEAR = 146097.0 * DAY / 400;   // days in 400 Gregorian years, per year
+	Parts p;
+	p.years = min<int64>((int64)(total / YEAR), 999);
+	int64 rest = total - (int64)(p.years * YEAR);
+	p.days = rest / DAY;
+	rest %= DAY;
+	p.hours = rest / 3600;
+	p.minutes = rest / 60 % 60;
+	p.seconds = rest % 60;
+	return p;
+}
+
+std::string Unit(int64 n, const char *name, bool pad)
+{
+	return (pad ? std::format("{:02}", n) : std::to_string(n)) + " " + name + (n == 1 ? "" : "s");
+}
+
+}
+
+String DurationClock(int64 seconds)
+{
+	Parts p = SplitDuration(seconds);
+	return String(std::format("{:03}:{:03}:{:02}:{:02}:{:02}", p.years, p.days, p.hours, p.minutes, p.seconds));
+}
+
+String DurationWords(int64 seconds)
+{
+	Parts p = SplitDuration(seconds);
+	std::string s;
+	if(p.years)
+		s += Unit(p.years, "year", false) + " ";
+	if(p.years || p.days)
+		s += Unit(p.days, "day", false) + " ";
+	s += Unit(p.hours, "hour", false) + " " + Unit(p.minutes, "minute", true) + " " + Unit(p.seconds, "second", true);
+	return String(s);
+}
+
+String ClockTime(int64 unix_time)
+{
+	time_t t = (time_t)unix_time;
+	struct tm lt;
+	localtime_r(&t, &lt);
+	return String(std::format("{:02}:{:02}:{:02}", lt.tm_hour, lt.tm_min, lt.tm_sec));
+}

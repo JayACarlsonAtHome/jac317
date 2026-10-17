@@ -373,6 +373,14 @@ static void TestProgress()
 	EXPECT(withbar.Find(" 50% [==========          ]") >= 0, "thermometer half full at 50%");
 	EXPECT(ProgressLine(lines[1]).Find(" 25% ") >= 0, "partial file shows 25%");
 	EXPECT(ProgressLine(lines[3]).Find("00m21s") >= 0, "elapsed time");
+
+	// Run durations, in the YYY:DDD:HH:MM:SS of Speed_Tests' getDuration().
+	EXPECT(DurationClock(2 * 3600 + 5 * 60 + 9) == "000:000:02:05:09", "duration clock: " + DurationClock(7509));
+	EXPECT(DurationWords(2 * 3600 + 5 * 60 + 9) == "2 hours 05 minutes 09 seconds", "duration words: " + DurationWords(7509));
+	EXPECT(DurationWords(61) == "0 hours 01 minute 01 second", "duration words, singular: " + DurationWords(61));
+	EXPECT(DurationWords(3 * 86400 + 3600) == "3 days 1 hour 00 minutes 00 seconds", "duration with days: " + DurationWords(3 * 86400 + 3600));
+	EXPECT(DurationClock(-90) == "000:000:00:01:30", "duration always positive");
+	EXPECT(DurationClock(400LL * 31556952 + 86400) == "400:001:00:00:00", "duration in years: " + DurationClock(400LL * 31556952 + 86400));
 	Cout() << "\n";
 }
 

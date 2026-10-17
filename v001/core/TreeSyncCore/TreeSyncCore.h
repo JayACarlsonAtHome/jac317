@@ -198,6 +198,14 @@ struct CopyProgress {
 // bar: a text thermometer after the percentage, for a file still in progress.
 String ProgressLine(const CopyProgress& p, int width = 100, bool bar = false);
 
+// How long a run took, like getDuration() in Speed_Tests: always positive, years by
+// the average Gregorian year. DurationClock: "YYY:DDD:HH:MM:SS"; DurationWords:
+// "2 hours 05 minutes 09 seconds" (days and years in front when there are any);
+// ClockTime: local "HH:MM:SS".
+String DurationClock(int64 seconds);
+String DurationWords(int64 seconds);
+String ClockTime(int64 unix_time);
+
 // Toolchain.cpp: compiler, library and C++26 feature report.
 String ToolchainReport();
 

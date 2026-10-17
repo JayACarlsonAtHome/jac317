@@ -176,6 +176,9 @@ class TreeSyncWindow : public TopWindow {
 	void Tick();
 	// The connection to a remote side is lost and treesync-cli waits for it (@net).
 	bool        prescan_done = false;   // the copy total stops growing then
+	int64       sync_started = 0;       // time(): for "it took ..." at the end
+	bool        sync_dry = false;
+	bool        closing = false;        // quitting: no popup
 	bool        net_down = false;
 	String      net_host;
 	int         net_wait = 0;    // seconds it waits before stopping

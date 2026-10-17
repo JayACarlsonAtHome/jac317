@@ -168,8 +168,12 @@ CONSOLE_APP_MAIN
 	Print(CommandLineText(ToArgs(setup)));
 	Print("log: " + log_path);
 	SyncResult result;
+	int64 started = (int64)time(nullptr);
 	bool ok = RunSync(setup, report, result, error);
 	SetRunLog(setup.db, result.run, log_path);
+	int64 ended = (int64)time(nullptr);
+	Print("took " + DurationWords(ended - started) + " (" + DurationClock(ended - started) + "), from " +
+	      ClockTime(started) + " to " + ClockTime(ended));
 	if(!ok) {
 		Print("treesync-cli: " + error);
 		SetExitCode(2);

@@ -315,6 +315,8 @@ void TreeSyncWindow::StartSync(bool dry_run)
 	}
 	child = pid;
 	child_stdin = in[1];
+	sync_started = (int64)time(nullptr);
+	sync_dry = dry_run;
 	Log(String(as_root ? "[as root] " : "") + CommandLineText(ToArgs(s)));
 	status = "Running...";
 	active.Clear();
@@ -383,14 +385,23 @@ void TreeSyncWindow::SyncFinished(int code)
 	                 : code == 2 ? "could not run" : code == 3 ? "stopped; Run again to resume"
 	                 : code == 126 || code == 127 ? "pkexec refused or was cancelled" : "ended abnormally";
 	Log(Format("treesync-cli exit code %d: %s", code, what));
+	int64 ended = (int64)time(nullptr), took = ended - sync_started;
+	String took_text = DurationWords(took);
+	Log("took " + took_text + " (" + DurationClock(took) + ")");
 	KillTimeCallback(77);
 	net_down = false;
 	stage_text[1].SetInk(SColorText());
 	active.Clear();
 	copy_started.Clear();
 	ProgressVisible(false);
-	status = Format("Last run: %s", what);
+	status = "Last run: " + String(what) + ", took " + took_text;
 	LoadTrees();
+	// How long it took, in a popup (not when pkexec was refused or the window is closing).
+	if(!closing && code != 126 && code != 127)
+		PromptOK("[* " + DeQtf(code == 0 ? String(sync_dry ? "Dry run finished" : "Sync finished: in sync")
+		                                 : String(sync_dry ? "Dry run " : "Sync ") + what) + ".]&&"
+		         "It took [* " + DeQtf(took_text) + "]&"
+		         "([C " + DurationClock(took) + "], from " + ClockTime(sync_started) + " to " + ClockTime(ended) + ")");
 }
 
 void TreeSyncWindow::Close()
@@ -398,6 +409,7 @@ void TreeSyncWindow::Close()
 	if(child > 0) {
 		if(!PromptYesNo("A sync is running. Stop it (it can be resumed later) and quit?"))
 			return;
+		closing = true;
 		StopSync();
 		if(reader.joinable())
 			reader.join();   // waits for the current file or chunk to finish
