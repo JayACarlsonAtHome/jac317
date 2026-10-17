@@ -2,6 +2,14 @@
 
 TreeSync keeps two directory trees in sync. The trees can be on the same machine or on different machines.
 
+## Goals
+
+TreeSync is three things at once:
+
+1. **A tree sync tool**: two directory trees, compared by SHA-256, synced with a GUI that shows what is going on.
+2. **A compiler proving ground**: compilers are changing fast, so TreeSync is written in current C++26 and must build cleanly and pass its tests on **both** gcc and clang. Every test run prints a toolchain report: compiler, library and which C++26 features are really there. When a compiler gets something wrong, it is pinned down with a minimal reproducer in [`v001/docs/findings/`](v001/docs/findings/).
+3. **Ours to customize**: we choose how it looks and how it acts, instead of taking a framework's or another tool's defaults. Examples so far: GNU-style long options, dnf-style progress lines, `+`/`-` keys on the trees, Wayland first, and the home-only limit without root.
+
 ## Overview
 
 - **Two trees**: a source tree and a target tree, on one machine or on two machines.

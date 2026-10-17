@@ -47,7 +47,10 @@ void TreeSyncWindow::FileMenu(Bar& bar)
 	bar.Add("Setup..", [this] { EditSetup(); });
 	bar.Separator();
 	bar.Add("About..", [this] {
-		PromptOK("[* TreeSync]&&Sync two directory trees by SHA-256.&&Stub build.");
+		String qtf = "[* TreeSync]&&Sync two directory trees by SHA-256.&&[C1 ";
+		for(const String& line : Split(ToolchainReport(), '\n'))
+			qtf << DeQtf(line) << "&";
+		PromptOK(qtf + "]");
 	});
 	bar.Separator();
 	bar.Add("Exit", [this] { Close(); });

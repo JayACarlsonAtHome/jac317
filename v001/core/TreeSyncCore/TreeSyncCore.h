@@ -136,6 +136,9 @@ struct CopyProgress {
 
 String ProgressLine(const CopyProgress& p, int width = 100);
 
+// Toolchain.cpp: compiler, library and C++26 feature report.
+String ToolchainReport();
+
 // Root.cpp. The messages are plain text, one paragraph per line; the GUI shows
 // them in a dialog and also prints them to the terminal.
 bool   IsRoot();

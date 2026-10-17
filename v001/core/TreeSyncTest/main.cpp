@@ -252,6 +252,8 @@ static void TestProgress()
 
 CONSOLE_APP_MAIN
 {
+	Cout() << ToolchainReport() << "\n";
+
 	String root = AppendFileName(GetTempDirectory(), Format("treesync-test-%d", (int)getpid()));
 	mkdir(root, 0755);
 

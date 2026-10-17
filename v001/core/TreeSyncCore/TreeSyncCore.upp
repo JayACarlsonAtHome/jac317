@@ -10,4 +10,5 @@ file
 	FsPath.cpp,
 	Disks.cpp,
 	Root.cpp,
-	Progress.cpp;
+	Progress.cpp,
+	Toolchain.cpp;
