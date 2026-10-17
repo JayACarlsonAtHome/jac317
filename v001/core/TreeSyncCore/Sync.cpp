@@ -60,6 +60,10 @@ struct Runner {
 	int64         run = 0;
 	int           copy_count = 0, copy_index = 0;
 	Clock::time_point started = Clock::now();
+	IdTable       id_tables[2];
+	bool          ids_loaded = false;
+	bool          owner_note[2] = {};
+	Index<String> unknown_names;
 
 	Runner(Db& db, SyncReport& report, SyncResult& result, const SyncFlags& flags)
 	:	db(db), report(report), result(result), flags(flags) {}
@@ -83,6 +87,60 @@ struct Runner {
 		Stmt(db, "INSERT OR REPLACE INTO files VALUES (?, ?, 'f', ?, ?, ?, ?, ?, ?, ?, '', ?, 0)")
 			.Text(1, ids[side]).Text(2, rel).Int(3, e.dev).Int(4, e.ino).Int(5, e.nlink)
 			.Int(6, e.size).Int(7, e.mtime_ns).Int(8, e.ctime_ns).Int(9, e.mode).Text(10, hash).Run();
+	}
+
+	// --preserve-owner, and the side being written can take owners (root there).
+	bool Owners(int side)
+	{
+		if(!flags.preserve_owner)
+			return false;
+		if(!fs[side]->CanChown()) {
+			if(!owner_note[side])
+				report.WhenLine("owners not copied to " + fs[side]->Name() +
+				                ": that needs root there (--no-preserve-owner hides this note)");
+			owner_note[side] = true;
+			return false;
+		}
+		if(!ids_loaded && !flags.numeric_ids) {
+			for(int i = 0; i < 2; i++) {
+				String error;
+				if(!fs[i]->LoadIds(id_tables[i], error))
+					report.WhenLine("warning: " + error + "; owners copied by number");
+			}
+			ids_loaded = true;
+		}
+		return true;
+	}
+
+	// Owner and group from side `from`, as the numbers the other side uses for the same names.
+	void MapOwner(int from, int64 uid, int64 gid, FileAttrs& fa)
+	{
+		for(int group = 0; group < 2; group++) {
+			String unknown;
+			int64 id = MapId(id_tables[from], id_tables[1 - from], group, group ? gid : uid,
+			                 flags.numeric_ids || !ids_loaded, &unknown);
+			(group ? fa.gid : fa.uid) = id;
+			if(unknown.GetCount() && unknown_names.Find(unknown) < 0) {
+				unknown_names.Add(unknown);
+				report.WhenLine(Format("warning: %s '%s' does not exist on %s; kept its number %d",
+				                       group ? "group" : "user", unknown, fs[1 - from]->Name(), id));
+			}
+		}
+	}
+
+	// Sets the owner of something just created (folder or local symlink) from the source.
+	void CopyOwner(int dir, const String& rel)
+	{
+		if(!Owners(1 - dir))
+			return;
+		Entry src;
+		String error;
+		if(!fs[dir]->Stat(rel, false, src, error) || src.uid < 0)
+			return;
+		FileAttrs fa;
+		MapOwner(dir, src.uid, src.gid, fa);
+		if(!fs[1 - dir]->Chown(rel, fa.uid, fa.gid, error))
+			report.WhenLine("warning: " + error);
 	}
 
 	void Synced(const String& rel, const String& hash)
@@ -177,6 +235,8 @@ struct Runner {
 			if(!to.Symlink(part, e.link, error) || !to.Rename(part, e.rel, error))
 				return false;
 			report.WhenLine("symlink " + e.rel + " -> " + e.link);
+			if(to.IsLocal())   // SFTP cannot set a symlink's own owner
+				CopyOwner(a.dir, e.rel);
 			return true;
 		}
 
@@ -243,10 +303,8 @@ struct Runner {
 			FileAttrs fa;
 			fa.mode = now.mode;
 			fa.mtime_ns = now.mtime_ns;
-			if(from.IsLocal() && to.IsLocal() && IsRoot()) {
-				fa.uid = now.uid;
-				fa.gid = now.gid;
-			}
+			if(now.uid >= 0 && Owners(1 - a.dir))
+				MapOwner(a.dir, now.uid, now.gid, fa);
 			String warn;
 			if(!out->SetAttrs(fa, warn))
 				report.WhenLine("warning: " + warn);
@@ -276,6 +334,7 @@ struct Runner {
 		if(!fs[1 - a.dir]->Mkdir(a.from.rel, a.from.mode, error))
 			return false;
 		report.WhenLine("created folder " + a.from.rel);
+		CopyOwner(a.dir, a.from.rel);
 		return true;
 	}
 
@@ -408,6 +467,23 @@ static One<TreeFs> MakeSide(const TreeEndpoint& e, const SyncSetup& setup, SyncR
 	return fs;
 }
 
+}
+
+bool CompareSides(const SyncSetup& setup, SyncReport& report, String& out, String& error)
+{
+	if(!setup.source.remote && !setup.target.remote) {
+		error = "--compare-ids compares two machines: give --source-host or --target-host";
+		return false;
+	}
+	One<TreeFs> side[2];
+	IdTable t[2];
+	for(int i = 0; i < 2; i++) {
+		side[i] = MakeSide(i ? setup.target : setup.source, setup, report, error);
+		if(!side[i] || !side[i]->LoadIds(t[i], error))
+			return false;
+	}
+	out = CompareIds(t[0], t[1], side[0]->Name(), side[1]->Name());
+	return true;
 }
 
 bool RunSync(const SyncSetup& setup, SyncReport& report, SyncResult& result, String& error)

@@ -21,4 +21,5 @@ file
 	Copy.cpp,
 	LocalFs.cpp,
 	SftpFs.cpp,
+	Ids.cpp,
 	Sync.cpp;

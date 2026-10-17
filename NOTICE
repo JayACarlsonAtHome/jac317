@@ -1,0 +1,10 @@
+TreeSync
+Copyright 2026 Jay A Carlson
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+TreeSync is experimental testing software.
+It copies, overwrites and deletes files, and can suggest commands that change user accounts.
+Use it at your own risk: try it on copies first and keep backups.
+It is provided "AS IS", without warranty of any kind, and the authors and contributors are not liable for any damage or loss of data arising from its use.
+See sections 7 and 8 of the Apache License 2.0 (LICENSE).

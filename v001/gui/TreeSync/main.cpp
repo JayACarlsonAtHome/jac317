@@ -54,7 +54,10 @@ void TreeSyncWindow::FileMenu(Bar& bar)
 	bar.Add("Setup..", [this] { EditSetup(); });
 	bar.Separator();
 	bar.Add("About..", [this] {
-		String qtf = "[* TreeSync]&&Sync two directory trees by SHA-256.&&[C1 ";
+		String qtf = "[* TreeSync]&&Sync two directory trees by SHA-256.&&[*@6 Use at your own risk.]&";
+		for(const String& line : Split(DISCLAIMER, '\n'))
+			qtf << DeQtf(line) << " ";
+		qtf << "&&[C1 ";
 		for(const String& line : Split(ToolchainReport(), '\n'))
 			qtf << DeQtf(line) << "&";
 		PromptOK(qtf + "]");

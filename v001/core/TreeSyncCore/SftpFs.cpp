@@ -704,6 +704,51 @@ bool SftpFs::Rename(const String& from, const String& to, String& error)
 	return false;
 }
 
+// The server's own account files: covers local accounts, not LDAP or SSSD ones.
+bool SftpFs::LoadIds(IdTable& t, String& error)
+{
+	for(int group = 0; group < 2; group++) {
+		String path = group ? "/etc/group" : "/etc/passwd";
+		LIBSSH2_SFTP_HANDLE *h = libssh2_sftp_open_ex(impl->sftp, path, path.GetCount(), LIBSSH2_FXF_READ, 0,
+		                                              LIBSSH2_SFTP_OPENFILE);
+		if(!h) {
+			error = impl->Err("cannot read " + path + " on " + impl->e.host);
+			return false;
+		}
+		String text;
+		char buf[65536];
+		for(ssize_t n; (n = libssh2_sftp_read(h, buf, sizeof(buf))) > 0;)
+			text.Cat(buf, (int)n);
+		libssh2_sftp_close_handle(h);
+		t.Parse(group, text);
+	}
+	return true;
+}
+
+bool SftpFs::CanChown() const
+{
+	return impl->e.user == "root";
+}
+
+String SftpFs::Name() const
+{
+	return impl->e.user + "@" + impl->e.host;
+}
+
+// SFTP setstat follows symlinks, so a symlink's own owner cannot be set: callers
+// only pass files and folders.
+bool SftpFs::Chown(const String& rel, int64 uid, int64 gid, String& error)
+{
+	LIBSSH2_SFTP_ATTRIBUTES a = {};
+	a.flags = LIBSSH2_SFTP_ATTR_UIDGID;
+	a.uid = (unsigned long)uid;
+	a.gid = (unsigned long)gid;
+	if(libssh2_sftp_setstat(impl->sftp, impl->P(rel), &a) == 0)
+		return true;
+	error = impl->Err("cannot set owner of " + impl->P(rel));
+	return false;
+}
+
 bool SftpFs::HardLink(const String&, const String& rel, String& error)
 {
 	error = "SFTP cannot create hard links: " + rel;

@@ -2,6 +2,8 @@
 
 TreeSync keeps two directory trees in sync. The trees can be on the same machine or on different machines.
 
+> **Use at your own risk.** TreeSync is experimental testing software. It copies, overwrites and deletes files, and can suggest commands that change user accounts. Use it at your own risk: try it on copies first and keep backups. It is provided "AS IS", without warranty of any kind, and the authors and contributors are not liable for any damage or loss of data arising from its use. See sections 7 and 8 of the Apache License 2.0 (LICENSE).
+
 ## Goals
 
 TreeSync is three things at once:
@@ -126,6 +128,8 @@ The switches are modelled on robocopy. TreeSync adds `--merge`, which copies cha
 | `--threads=N` | Copy threads (default 8; not used yet, copies run one at a time) | `/MT:n` |
 | `--big-file-mib=N` | Files this big or bigger are copied in resumable chunks (default 1024) | |
 | `--chunk-mib=N` | Chunk size for big files (default 64) | |
+| `--preserve-owner` | Copy owner and group, matched by **name** (default on; needs root on the side being written) | `/COPY:O` |
+| `--numeric-ids` | Copy owners by number instead of name | |
 | `--compress` | Compress SSH traffic with zlib; the other end decompresses on its own. Helps text on slow links, not media | |
 | `--fresh` | Start over instead of resuming an unfinished run | |
 | `--known-hosts=FILE` | SSH known_hosts file (default `~/.ssh/known_hosts`) | |
@@ -139,7 +143,19 @@ Content is compared by SHA-256. File size and time decide whether a cached hash 
 
 ## Status
 
-Working for local trees and over SFTP, with `treesync-cli` and the GUI: scan with a hash cache, Copy / Mirror / Merge, verified copies, hard links, symlinks, resumable runs and big files. Tested against a Fedora 44 server in both directions. Not yet: copying owners and groups (`--preserve-owner`), browsing remote trees in the GUI, password login from the GUI, copying with several threads, and live per-chunk progress in the GUI log.
+Working for local trees and over SFTP, with `treesync-cli` and the GUI: scan with a hash cache, Copy / Mirror / Merge, verified copies, hard links, symlinks, resumable runs and big files. Tested against a Fedora 44 server in both directions. Not yet: browsing remote trees in the GUI, password login from the GUI, copying with several threads, and live per-chunk progress in the GUI log.
+
+## Owners across machines
+
+The same user often has different numbers on different machines (for example `jay` is 1001 on one and 1000 on another, where 1000 is someone else). So `--preserve-owner` matches owners and groups by name; a name the other side does not know keeps its number, with one warning. Owners can only be set with root on the side being written (root here, or `--SIDE-user=root` there); otherwise TreeSync says so once and copies everything else.
+
+To line the two machines up for good:
+
+```bash
+treesync-cli --compare-ids --target-host=server
+```
+
+lists users and groups whose numbers differ, numbers that mean different accounts on each side, and accounts found on only one side. It then suggests one numbering for both and prints the `usermod` / `groupmod` / `chown` commands for each machine. TreeSync never runs them: review them and run them yourself as root, with the accounts logged out. Only regular accounts (1000 and up) get suggestions; system accounts differ between distributions and are left to name mapping. The `find ... -xdev` step covers one filesystem; repeat it for other mounts that hold the account's files.
 
 ## Remote trees (SFTP)
 

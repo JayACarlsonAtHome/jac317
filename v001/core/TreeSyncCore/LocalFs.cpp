@@ -237,6 +237,16 @@ bool LocalFs::Rename(const String& from, const String& to, String& error)
 	return ok;
 }
 
+bool LocalFs::Chown(const String& rel, int64 uid, int64 gid, String& error)
+{
+	return AtParent(*this, rel, error, [&](int dp, const String& name) {
+		if(fchownat(dp, name, (uid_t)uid, (gid_t)gid, AT_SYMLINK_NOFOLLOW) == 0)
+			return true;
+		error = Errno("cannot set owner of " + rel);
+		return false;
+	});
+}
+
 bool LocalFs::HardLink(const String& existing, const String& rel, String& error)
 {
 	int ep = ParentFd(existing), dp = ParentFd(rel);

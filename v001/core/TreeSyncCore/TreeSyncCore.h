@@ -47,6 +47,8 @@ struct SyncFlags {
 	bool   follow_links = false;     // write out what symlinks point to
 	bool   hard_links = true;        // relink hard-linked files instead of writing each out
 	bool   compress = false;         // zlib on SSH connections
+	bool   preserve_owner = true;    // copy owner and group, by name (where we may)
+	bool   numeric_ids = false;      // ...by number instead
 	bool   include_same = false;
 	bool   skip_older = false;
 	bool   skip_newer = false;
@@ -77,7 +79,7 @@ struct IntOption {
 	int min, max;
 };
 
-constexpr int BOOL_OPTION_COUNT = 12;
+constexpr int BOOL_OPTION_COUNT = 14;
 constexpr int INT_OPTION_COUNT = 5;
 extern const BoolOption BOOL_OPTIONS[];
 extern const IntOption  INT_OPTIONS[];
@@ -90,6 +92,10 @@ struct SyncSetup {
 	String       known_hosts;     // --known-hosts=FILE; empty = ~/.ssh/known_hosts
 	bool         fresh = false;   // --fresh: do not resume an unfinished run
 };
+
+// Shown in --help, the GUI's About box and --compare-ids output; the binding text
+// is the Apache License 2.0, sections 7 (no warranty) and 8 (no liability).
+extern const char *DISCLAIMER;
 
 // Options.cpp
 enum { PARSE_OK, PARSE_HELP, PARSE_ERROR };

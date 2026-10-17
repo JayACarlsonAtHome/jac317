@@ -212,6 +212,39 @@ static void TestMessages()
 	EXPECT(r.StartsWith("/my dir is outside"), "refused message names the path: " + Show(r));
 }
 
+// Shaped like the two real machines: jay is 1001 here and 1000 there, where 1000
+// here is someone else.
+static void TestIds()
+{
+	IdTable here, there;
+	here.Parse(false, "root:x:0:0::/root:/bin/bash\njcarlson:x:1000:1000::/home/jcarlson:/bin/bash\n"
+	                  "jay:x:1001:1001::/home/jay:/bin/bash\nchrony:x:996:996::/:/sbin/nologin\n");
+	there.Parse(false, "root:x:0:0::/root:/bin/bash\njay:x:1000:1000::/home/jay:/bin/bash\n"
+	                   "chrony:x:983:983::/:/sbin/nologin\nsystemd-oom:x:996:996::/:/sbin/nologin\n");
+	here.Parse(true, "root:x:0:\njcarlson:x:1000:\njay:x:1001:\ngfs:x:31300:jay\n");
+	there.Parse(true, "root:x:0:\njay:x:1000:\ngfs:x:31300:jay\n");
+
+	String unknown;
+	EXPECT(MapId(here, there, false, 1001, false, nullptr) == 1000, "jay 1001 here is 1000 there");
+	EXPECT(MapId(there, here, false, 1000, false, nullptr) == 1001, "jay 1000 there is 1001 here");
+	EXPECT(MapId(here, there, false, 996, false, nullptr) == 983, "system account mapped by name");
+	EXPECT(MapId(here, there, true, 31300, false, nullptr) == 31300, "gfs group same on both");
+	EXPECT(MapId(here, there, false, 1000, false, &unknown) == 1000 && unknown == "jcarlson",
+	       "name unknown there keeps its number and is reported");
+	EXPECT(MapId(here, there, false, 1001, true, nullptr) == 1001, "--numeric-ids keeps the number");
+	EXPECT(MapId(here, there, false, 4242, false, nullptr) == 4242, "number without a name is kept");
+
+	String r = CompareIds(here, there, "local", "remote");
+	EXPECT(r.Find("jay                  local 1001     remote 1000   -> suggest 1001 on both") >= 0,
+	       "suggests the free number 1001 for jay");
+	EXPECT(r.Find("### on remote\n# user jay: 1000 -> 1001\nusermod -u 1001 'jay'") >= 0,
+	       "commands only on the side that changes");
+	EXPECT(r.Find("### on local") < 0, "nothing to run on the side that keeps its number");
+	EXPECT(r.Find("usermod -u 983") < 0 && r.Find("usermod -u 996") < 0, "system accounts never renumbered");
+	EXPECT(r.Find("1000     local: jcarlson") >= 0, "number clash reported");
+	EXPECT(r.StartsWith("TreeSync is experimental testing software."), "report starts with the disclaimer");
+}
+
 static void TestPathAllowed()
 {
 	if(IsRoot()) {
@@ -513,6 +546,7 @@ CONSOLE_APP_MAIN
 	TestOptions();
 	TestPathAllowed();
 	TestMessages();
+	TestIds();
 
 	// The engine refuses paths outside home without root, so its tests run there.
 	String eroot = IsRoot() ? root + "-engine"

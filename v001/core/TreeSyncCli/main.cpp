@@ -45,10 +45,10 @@ static void Status(const String& s)
 CONSOLE_APP_MAIN
 {
 	Vector<String> args = clone(CommandLine());
-	bool stop_on_eof = false;
+	bool stop_on_eof = false, compare_ids = false;
 	for(int i = args.GetCount() - 1; i >= 0; i--)
-		if(args[i] == "--stop-on-eof") {
-			stop_on_eof = true;
+		if(args[i] == "--stop-on-eof" || args[i] == "--compare-ids") {
+			(args[i] == "--compare-ids" ? compare_ids : stop_on_eof) = true;
 			args.Remove(i);
 		}
 
@@ -88,6 +88,17 @@ CONSOLE_APP_MAIN
 		else
 			Status(ProgressLine(p));
 	};
+
+	if(compare_ids) {
+		String out;
+		if(!CompareSides(setup, report, out, error)) {
+			Print("treesync-cli: " + error);
+			SetExitCode(2);
+			return;
+		}
+		Cout() << out;
+		return;
+	}
 
 	Print(CommandLineText(ToArgs(setup)));
 	SyncResult result;

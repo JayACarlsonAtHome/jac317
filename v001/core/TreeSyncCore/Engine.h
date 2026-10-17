@@ -140,6 +140,22 @@ bool   HashAt(int dirfd, const String& name, String& hash, String& error,
               const std::atomic<bool> *stop = nullptr, int64 *bytes = nullptr, bool follow = false);
 bool   CopySmall(int src_dir, const String& name, int dst_dir, const String& part, String& error);
 
+// Ids.cpp: users and groups, matched by name ------------------------------------
+
+struct IdTable {
+	VectorMap<String, int64> uid, gid;            // name -> number
+	VectorMap<int64, String> user_of, group_of;   // number -> name
+
+	void Add(bool group, const String& name, int64 id);
+	void Parse(bool group, const String& text);   // /etc/passwd or /etc/group lines
+};
+
+bool   LoadLocalIds(IdTable& t, String& error);
+// The number on the other side for the same name; the same number when there is
+// no name for it, the name is unknown there (*unknown is set), or numeric is true.
+int64  MapId(const IdTable& from, const IdTable& to, bool group, int64 id, bool numeric, String *unknown);
+String CompareIds(const IdTable& a, const IdTable& b, const String& name_a, const String& name_b);
+
 // TreeFs.cpp: one side of a sync, local or over SFTP ----------------------------
 
 struct FileAttrs {
@@ -179,6 +195,10 @@ public:
 	virtual bool   Symlink(const String& rel, const String& target, String& error) = 0;
 	virtual bool   Rename(const String& from, const String& to, String& error) = 0; // replaces to
 	virtual bool   HardLink(const String& existing, const String& rel, String& error) = 0;
+	virtual bool   LoadIds(IdTable& t, String& error) = 0;
+	virtual bool   CanChown() const = 0;     // root here, or a root login there
+	virtual bool   Chown(const String& rel, int64 uid, int64 gid, String& error) = 0;   // never follows symlinks
+	virtual String Name() const = 0;         // for reports: "local" or user@host
 	virtual ~TreeFs() {}
 };
 
@@ -204,6 +224,10 @@ public:
 	bool   Symlink(const String& rel, const String& target, String& error) override;
 	bool   Rename(const String& from, const String& to, String& error) override;
 	bool   HardLink(const String& existing, const String& rel, String& error) override;
+	bool   LoadIds(IdTable& t, String& error) override   { return LoadLocalIds(t, error); }
+	bool   CanChown() const override                     { return IsRoot(); }
+	bool   Chown(const String& rel, int64 uid, int64 gid, String& error) override;
+	String Name() const override                         { return "local"; }
 
 	explicit LocalFs(const String& root) : root(root) {}
 };
@@ -235,6 +259,10 @@ public:
 	bool   Symlink(const String& rel, const String& target, String& error) override;
 	bool   Rename(const String& from, const String& to, String& error) override;
 	bool   HardLink(const String& existing, const String& rel, String& error) override;
+	bool   LoadIds(IdTable& t, String& error) override;
+	bool   CanChown() const override;
+	bool   Chown(const String& rel, int64 uid, int64 gid, String& error) override;
+	String Name() const override;
 
 	SftpFs(const TreeEndpoint& e, const String& known_hosts, bool compress);
 	~SftpFs();
@@ -252,7 +280,10 @@ struct SyncResult {
 	Vector<String> plan;      // dry run: one line per action
 };
 
-// Runs (or resumes) a sync. Local trees only for now.
+// Runs (or resumes) a sync.
 bool RunSync(const SyncSetup& setup, SyncReport& report, SyncResult& result, String& error);
+
+// --compare-ids: the user and group report for the two sides (one must be remote).
+bool CompareSides(const SyncSetup& setup, SyncReport& report, String& out, String& error);
 
 #endif

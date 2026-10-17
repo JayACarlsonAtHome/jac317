@@ -6,6 +6,13 @@
 
 #include <charconv>
 
+const char *DISCLAIMER =
+	"TreeSync is experimental testing software. It copies, overwrites and deletes files,\n"
+	"and can suggest commands that change user accounts. Use it at your own risk: try it\n"
+	"on copies first and keep backups. It is provided \"AS IS\", without warranty of any\n"
+	"kind, and the authors and contributors are not liable for any damage or loss of\n"
+	"data arising from its use. See sections 7 and 8 of the Apache License 2.0 (LICENSE).\n";
+
 const BoolOption BOOL_OPTIONS[] = {
 	{ "dry-run",          &SyncFlags::dry_run,          "/L",   "Dry run: report only, change nothing" },
 	{ "fat-file-times",   &SyncFlags::fat_file_times,   "/FFT", "FAT file times: 2-second tolerance" },
@@ -13,6 +20,8 @@ const BoolOption BOOL_OPTIONS[] = {
 	{ "follow-links",     &SyncFlags::follow_links,     "",     "Write out symlink targets, not the links" },
 	{ "hard-links",       &SyncFlags::hard_links,       "",     "Relink hard-linked files, not copies" },
 	{ "compress",         &SyncFlags::compress,         "",     "Compress SSH traffic (helps text, not media)" },
+	{ "preserve-owner",   &SyncFlags::preserve_owner,   "/COPY:O", "Copy owner and group (by name; needs root)" },
+	{ "numeric-ids",      &SyncFlags::numeric_ids,      "",     "Copy owners by number, not by name" },
 	{ "include-same",     &SyncFlags::include_same,     "/IS",  "Include same files (rehash / recopy)" },
 	{ "skip-older",       &SyncFlags::skip_older,       "/XO",  "Skip if source is older than target" },
 	{ "skip-newer",       &SyncFlags::skip_newer,       "/XN",  "Skip if source is newer than target" },
@@ -253,7 +262,9 @@ String Usage()
 	const SyncFlags def;
 	String u;
 	u << "Usage: " << ToLower(GetExeTitle()) << " [OPTION]...\n"
-	  << "Sync two directory trees by SHA-256. Opens the GUI with these settings.\n\n"
+	  << "Sync two directory trees by SHA-256. treesync opens the GUI with these\n"
+	  << "settings; treesync-cli runs the sync in the terminal.\n\n"
+	  << DISCLAIMER << "\n"
 	  << "Trees (SIDE is source or target):\n"
 	  << "  --SIDE=PATH            tree root\n"
 	  << "  --SIDE-host=HOST       remote machine (makes the side remote)\n"
@@ -280,7 +291,9 @@ String Usage()
 	  << "Run:\n"
 	  << "  --fresh                Start over instead of resuming an unfinished run\n"
 	  << "  --db=PATH              Database file (default " << DefaultDbPath() << ")\n"
-	  << "  --known-hosts=FILE     SSH known_hosts file (default ~/.ssh/known_hosts)\n\n"
+	  << "  --known-hosts=FILE     SSH known_hosts file (default ~/.ssh/known_hosts)\n"
+	  << "  --compare-ids          (treesync-cli) Compare users and groups on the two machines,\n"
+	  << "                         suggest one numbering for both, and print the commands\n\n"
 	  << "  -h, --help             Show this help\n";
 	return u;
 }
