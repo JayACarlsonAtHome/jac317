@@ -68,6 +68,13 @@ const BoolOption BOOL_OPTIONS[] = {
 	  "they are kept. Copy mode never removes anything anyway." },
 	{ "skip-source-only", &SyncFlags::skip_source_only, "/XL", "Skip files that exist only in source",
 	  "Only updates files the target already has; files that are new in the source are not copied." },
+	{ "wipe-target", &SyncFlags::wipe_target, "", "Empty the target first",
+	  "Before anything is copied, everything in the target folder is removed, so the sync is simply a "
+	  "fresh full copy.\n"
+	  "With 'Move deleted/replaced files to <target>.old' on (normal), the target's contents are "
+	  "moved into <target>.old, which is instant and loses nothing. With it off, they are deleted "
+	  "for good.\n"
+	  "Refused for /, your home folder itself and system folders, and in Merge mode. Off by default." },
 };
 static_assert(std::size(BOOL_OPTIONS) == BOOL_OPTION_COUNT);
 
@@ -163,12 +170,41 @@ static void EndpointArgs(const char *side, const TreeEndpoint& e, Vector<String>
 		args.Add("--" + s + "-key=" + e.key_file);
 }
 
-// Shows every switch that is on, a --no- form for a default-on switch that is
-// off, and numbers that differ from their defaults.
+SyncFlags DefaultsFor(SyncMode mode)
+{
+	SyncFlags f;
+	f.mode = mode;
+	if(mode == SyncMode::Copy)
+		f.skip_older = true;   // never overwrite a newer target file with an older one
+	return f;
+}
+
+bool WipeAllowed(const String& path, String& why)
+{
+	String p = path;
+	while(p.GetCount() > 1 && p.EndsWith("/"))
+		p.Trim(p.GetCount() - 1);
+	static const char *system[] = { "/", "/bin", "/boot", "/dev", "/etc", "/home", "/lib", "/lib64",
+	                                "/opt", "/proc", "/root", "/run", "/sbin", "/srv", "/sys", "/tmp",
+	                                "/usr", "/var" };
+	for(const char *s : system)
+		if(p == s) {
+			why = "--wipe-target refuses " + p + ": it is a system folder";
+			return false;
+		}
+	if(p.IsEmpty() || p == HomeDir() || p == GetHomeDirectory()) {
+		why = "--wipe-target refuses " + Nvl(p, String("an empty path")) + ": that is the home folder itself";
+		return false;
+	}
+	return true;
+}
+
+// Shows every switch that is on, a --no- form for a switch that is on by default
+// for this mode but off, and numbers that differ from their defaults.
 Vector<String> FlagArgs(const SyncFlags& f)
 {
 	Vector<String> args;
-	const SyncFlags def;
+	const SyncFlags def = DefaultsFor(f.mode);
 	for(const auto& m : MODES)
 		if(m.mode == f.mode)
 			args.Add(String("--") + m.name);
@@ -221,6 +257,13 @@ static bool ParseInt(const String& v, int lo, int hi, int& out)
 
 int ParseCommandLine(const Vector<String>& args, SyncSetup& s, String& error)
 {
+	// The mode's defaults first (the last mode given wins), then the switches.
+	SyncMode mode = s.flags.mode;
+	for(const String& a : args)
+		for(const auto& m : MODES)
+			if(a == String("--") + m.name)
+				mode = m.mode;
+	s.flags = DefaultsFor(mode);
 	for(int i = 0; i < args.GetCount(); i++) {
 		String arg = args[i];
 		if(arg == "-h" || arg == "--help")
@@ -347,7 +390,7 @@ int ParseCommandLine(const Vector<String>& args, SyncSetup& s, String& error)
 
 String Usage()
 {
-	const SyncFlags def;
+	const SyncFlags def = DefaultsFor(SyncMode::Mirror);
 	String u;
 	u << "Usage: " << ToLower(GetExeTitle()) << " [OPTION]...\n"
 	  << "Sync two directory trees by SHA-256. treesync opens the GUI with these\n"
@@ -366,7 +409,8 @@ String Usage()
 	for(const auto& m : MODES)
 		u << Format("  --%-21s%s", m.name, m.text)
 		  << (*m.robocopy ? String(" (robocopy ") + m.robocopy + ")" : String()) << "\n";
-	u << "\nSwitches (--no-NAME turns one off):\n";
+	u << "  (--copy also turns on --skip-older: a newer file on the target is not overwritten)\n";
+	u << "\nSwitches (--no-NAME turns one off; defaults shown for --mirror):\n";
 	for(const BoolOption& o : BOOL_OPTIONS)
 		u << Format("  --%-21s%s (robocopy %s)%s\n", o.name, o.text, o.robocopy,
 		            def.*o.field ? ", default on" : "");

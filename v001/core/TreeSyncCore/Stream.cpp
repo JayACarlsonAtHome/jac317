@@ -38,6 +38,7 @@ struct Streamer {
 	Runner&           r;
 	const SyncFlags&  flags;
 	bool              dry;
+	bool              assume_empty = false;   // dry run with --wipe-target: as if wiped
 
 	// pre-scan -> copy workers
 	std::mutex              qm;
@@ -59,6 +60,70 @@ struct Streamer {
 	VectorMap<Tuple<int64, int64>, String> first_name;   // hard links: (dev, ino) -> first rel (pre-scan only)
 
 	Streamer(Runner& r) : r(r), flags(r.flags), dry(r.flags.dry_run) {}
+
+	// Deletes a target entry and, for a folder, everything in it (--wipe-target
+	// without safe delete).
+	bool DeleteTree(TreeFs& fs, const String& rel, char type, String& error)
+	{
+		if(type == 'd') {
+			Vector<FolderEntry> list;
+			if(!fs.List(rel, list, error))
+				return false;
+			for(const FolderEntry& f : list)
+				if(f.name != "." && f.name != ".." && !DeleteTree(fs, rel + "/" + f.name, f.type, error))
+					return false;
+		}
+		return fs.Remove(rel, type == 'd', error) == 0;
+	}
+
+	// --wipe-target: empty the target before anything is copied. With safe delete
+	// each top-level entry is moved (renamed) into <target>.old: instant, nothing lost.
+	bool Wipe(Ctx& c, String& error)
+	{
+		Vector<FolderEntry> list;
+		if(!c.fs[1]->List(String(), list, error))
+			return Missing(error);   // no target yet: nothing to empty
+		int n = 0;
+		for(const FolderEntry& f : list) {
+			if(f.name == "." || f.name == "..")
+				continue;
+			if(r.report.Stopping())
+				return true;
+			n++;
+			if(dry) {
+				Plan(Format("%-8s %s", "wipe", f.name));
+				continue;
+			}
+			Action a;
+			a.kind = ActionKind::Delete;
+			a.from.rel = f.name;
+			a.from.type = f.type == 'd' ? 'd' : f.type == 'l' ? 'l' : 'f';
+			a.note = "wipe";
+			int seq = r.Record(a);
+			r.SetState(seq, "in_progress");
+			String err;
+			bool ok = flags.safe_delete ? r.MoveOut(c, 1, f.name, err)
+			                            : DeleteTree(*c.fs[1], f.name, a.from.type, err);
+			r.SetState(seq, ok ? "done" : "failed", 0, ok ? String() : err);
+			Lock l(r.mx);
+			if(ok) {
+				r.result.done++;
+				if(!flags.safe_delete)
+					r.report.WhenLine("deleted " + f.name);
+			}
+			else {
+				r.result.failed++;
+				r.report.WhenLine("FAILED " + f.name + ": " + err);
+				error = "could not empty the target: " + err;
+				return false;
+			}
+		}
+		if(dry)
+			assume_empty = true;
+		r.Line(Format("%s the target first: %d entries%s", dry ? "would empty" : "emptied", n,
+		              flags.safe_delete ? " moved to " + r.old_roots[1] : String(" deleted")));
+		return true;
+	}
 
 	using Lock = Runner::Lock;
 
@@ -133,8 +198,8 @@ struct Streamer {
 	bool TargetFolder(Ctx& c, const FolderEntry& src, const String& rel)
 	{
 		Entry t;
-		String error;
-		if(c.fs[1]->Stat(rel, false, t, error)) {
+		String error = "no such file";
+		if(!assume_empty && c.fs[1]->Stat(rel, false, t, error)) {
 			if(t.type == 'd')
 				return true;
 			Conflict(rel, "a folder in the source, not a folder on the target");
@@ -398,8 +463,8 @@ struct Streamer {
 	{
 		Entry& e = it.e;
 		Entry t;
-		String error;
-		bool exists = c.fs[1]->Stat(e.rel, false, t, error);
+		String error = "no such file";
+		bool exists = !assume_empty && c.fs[1]->Stat(e.rel, false, t, error);
 		if(!exists && !Missing(error)) {
 			Fail(e.rel, error);
 			return;
@@ -533,6 +598,8 @@ struct Streamer {
 
 	void CheckFolder(Ctx& c, const String& rel)
 	{
+		if(assume_empty)   // a dry run of --wipe-target: nothing would be left to check
+			return;
 		Vector<FolderEntry> list;
 		String error;
 		if(!c.fs[1]->List(rel, list, error)) {
@@ -627,6 +694,15 @@ bool RunStreaming(Runner& r, TreeFs *side[2], const String& key, bool fresh, Str
 
 	Streamer s(r);
 	s.estimate = side[0]->EntryEstimate();
+	if(flags.wipe_target) {
+		String why;
+		if(!WipeAllowed(side[1]->RootPath(), why)) {
+			error = why;
+			return false;
+		}
+		if(!s.Wipe(r.main, error))
+			return false;
+	}
 	result.source.estimate = s.estimate;
 
 	// Contexts: the pre-scan and the post-scan each get their own (their own SFTP

@@ -104,9 +104,16 @@ bool TreeSyncWindow::ConfirmRun(const SyncSetup& s)
 	String old = s.flags.safe_delete
 	           ? "Removed and replaced files are moved to [C " + DeQtf(where(s.target)) + ".old] (safe delete)."
 	           : "[* Safe delete is off: removed and replaced files are deleted.]";
+	String wipe;
+	if(s.flags.wipe_target)
+		wipe = s.flags.safe_delete
+		     ? "[*@6 The target is emptied first]: everything in it is moved to [C " +
+		       DeQtf(where(s.target)) + ".old], then all files are copied fresh.&"
+		     : "[*@6 The target is emptied first and everything in it is DELETED], then all files "
+		       "are copied fresh.&";
 	return PromptYesNo("[* Run the sync for real?]&&"
 	                   "From: [C " + DeQtf(where(s.source)) + "]&"
-	                   "To: [C " + DeQtf(where(s.target)) + "]&&"
+	                   "To: [C " + DeQtf(where(s.target)) + "]&&" + wipe +
 	                   "This will " + DeQtf(what) + ".&" + old + "&&"
 	                   "Use Sync > Dry run first to see the list of changes.");
 }

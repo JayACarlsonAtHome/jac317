@@ -56,6 +56,7 @@ struct SyncFlags {
 	bool   skip_changed = false;
 	bool   keep_extra = false;
 	bool   skip_source_only = false;
+	bool   wipe_target = false;      // empty the target first (to .old with safe delete)
 	String exclude_files;            // globs, ';'-separated
 	String exclude_dirs;             // globs, ';'-separated
 	int    retries = 3;
@@ -71,6 +72,15 @@ struct SyncFlags {
 // machines and filesystems (network shares, drift, FAT's 2-second steps), so times
 // from the two sides are compared with this much slack.
 inline int64 ToleranceNs(const SyncFlags& f) { return (int64)f.time_tolerance * 1000000000; }
+
+// The defaults differ by mode. Copy adds and updates, so it does not overwrite a
+// newer file on the target with an older one (--skip-older on); Mirror makes an
+// exact copy, so the source always wins; Merge decides by what changed since the
+// last sync, so the time switches do not apply.
+SyncFlags DefaultsFor(SyncMode mode);
+
+// --wipe-target: refuses "/", the home folder itself and system folders.
+bool WipeAllowed(const String& path, String& why);
 
 struct BoolOption {
 	const char *name;                // --name / --no-name
@@ -95,7 +105,7 @@ extern const char *HELP_EXCLUDE_FILES;
 extern const char *HELP_EXCLUDE_DIRS;
 extern const char *HELP_OWNERS;           // the Owners choice: off, by name, by number
 
-constexpr int BOOL_OPTION_COUNT = 15;
+constexpr int BOOL_OPTION_COUNT = 16;
 constexpr int INT_OPTION_COUNT = 7;
 extern const BoolOption BOOL_OPTIONS[];
 extern const IntOption  INT_OPTIONS[];

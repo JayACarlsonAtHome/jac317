@@ -108,6 +108,8 @@ treesync --source=/data --target=/mnt/backup --mirror --threads=8 --no-dry-run
 treesync --source="$HOME/my dir" --target=/backup --target-host=nas --target-user=jay --merge
 ```
 
+Defaults depend on the mode. `--copy` also turns on `--skip-older`, so a newer file on the target is never overwritten by an older one; `--mirror` makes an exact copy, so the source always wins; `--merge` decides by what changed since the last sync, so the time switches do not apply to it. In the GUI, Setup > Flags > Reset to defaults has one button per mode, and options a mode ignores are greyed out.
+
 The switches are modelled on robocopy. TreeSync adds `--merge`, which copies changes both ways and reports a conflict when the same file changed on both sides.
 
 | Option | Meaning | robocopy |
@@ -120,6 +122,7 @@ The switches are modelled on robocopy. TreeSync adds `--merge`, which copies cha
 | `--hard-links` | Hard-linked files are copied once and relinked at the target (default on); `--no-hard-links` writes each name out as its own copy | |
 | `--follow-links` | Write out what symlinks point to (files and folders); off by default, so symlinks are copied as symlinks | off = `/SL` |
 | `--include-same` | Include same files (rehash / recopy) | `/IS` |
+| `--wipe-target` | Empty the target before anything is copied: with safe delete its contents move to `<target>.old`, without it they are deleted. Refused for `/`, the home folder itself, system folders and `--merge` | |
 | `--skip-older` | Skip if source is older than target | `/XO` |
 | `--skip-newer` | Skip if source is newer than target | `/XN` |
 | `--skip-changed` | Skip changed files (same time, new hash) | `/XC` |

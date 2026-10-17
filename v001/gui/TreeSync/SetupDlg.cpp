@@ -140,11 +140,12 @@ SetupDlg::FlagsPane::FlagsPane()
 		Add(reset[i].SetLabel(reset_name[i]).LeftPos(m + rw + i * (bw + Zx(8)), bw).TopPos(y, Zy(24)));
 		reset[i].Tip("Every switch, number and exclude list back to its default, mode " + String(reset_name[i]));
 		reset[i] << [this, md, i] {
-			SyncFlags f;
-			f.mode = md;
-			Set(f);
+			Set(DefaultsFor(md));
 			ShowHelp("Reset to defaults", HELP_MODE[i] + String("\nAll switches, numbers and exclude lists are "
-			         "back to their defaults. Nothing is saved until OK; Cancel undoes it."));
+			         "back to the defaults for this mode") +
+			         (md == SyncMode::Copy ? " (Copy also skips files whose source is older, so a newer file on "
+			                                 "the target is never overwritten)" : "") +
+			         ". Nothing is saved until OK; Cancel undoes it.");
 		};
 	}
 	need.cx = max(need.cx, m + rw + 3 * (bw + Zx(8)) + m);
@@ -195,10 +196,14 @@ void SetupDlg::FlagsPane::Sync()
 {
 	SyncMode m = (SyncMode)(int)~mode;
 	for(int i = 0; i < BOOL_OPTION_COUNT; i++) {
-		// Mirror already deletes extras, --keep-extra opts out; Merge never deletes.
-		if(BOOL_OPTIONS[i].field == &SyncFlags::keep_extra)
+		auto f = BOOL_OPTIONS[i].field;
+		// Greyed out where the mode ignores them: only Mirror removes extras (keep-extra
+		// opts out); Merge decides by what changed since the last sync (no time switches),
+		// copies both ways (no source-only) and cannot have one side wiped.
+		if(f == &SyncFlags::keep_extra)
 			opt[i].Enable(m == SyncMode::Mirror);
-		if(BOOL_OPTIONS[i].field == &SyncFlags::skip_source_only)
+		if(f == &SyncFlags::skip_source_only || f == &SyncFlags::skip_older || f == &SyncFlags::skip_newer ||
+		   f == &SyncFlags::skip_changed || f == &SyncFlags::include_same || f == &SyncFlags::wipe_target)
 			opt[i].Enable(m != SyncMode::Merge);
 	}
 	preview = CommandLineText(WithoutDryRun(FlagArgs(Get())));

@@ -146,6 +146,11 @@ bool RunSync(const SyncSetup& setup, SyncReport& report, SyncResult& result, Str
 
 	// Copy and Mirror stream: pre-scan, copy and post-scan at the same time. Merge
 	// needs both sides complete to tell which side changed: it plans first.
+	if(flags.mode == SyncMode::Merge && flags.wipe_target) {
+		error = "--wipe-target is not allowed with --merge: Merge copies both ways, so emptying one "
+		        "side would only copy everything back";
+		return false;
+	}
 	if(flags.mode != SyncMode::Merge) {
 		TreeFs *sides[2] = { ~side[0], ~side[1] };
 		return RunStreaming(r, sides, key, setup.fresh, error);

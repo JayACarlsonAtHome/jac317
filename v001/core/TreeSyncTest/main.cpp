@@ -236,6 +236,21 @@ static void TestOptions()
 	a.mtime_ns = b.mtime_ns + 3601000000000LL;
 	EXPECT(!TimeSkip(dst, a, b), "--time-tolerance=0: 1 h + 1 s is different");
 
+	// Defaults differ by mode: Copy does not overwrite newer target files.
+	EXPECT(DefaultsFor(SyncMode::Copy).skip_older && !DefaultsFor(SyncMode::Mirror).skip_older &&
+	       !DefaultsFor(SyncMode::Merge).skip_older, "Copy defaults to --skip-older, Mirror and Merge do not");
+	SyncSetup c1;
+	ParseCommandLine(Vector<String>{ "--copy" }, c1, err);
+	EXPECT(c1.flags.skip_older, "--copy starts from Copy's defaults");
+	SyncSetup c2;
+	ParseCommandLine(Vector<String>{ "--copy", "--no-skip-older" }, c2, err);
+	Vector<String> c2a = FlagArgs(c2.flags);
+	EXPECT(!c2.flags.skip_older && FindIndex(c2a, String("--no-skip-older")) >= 0,
+	       "--copy --no-skip-older: off, and kept on the command line");
+	SyncSetup c3;
+	ParseCommandLine(Vector<String>{ "--skip-older", "--mirror" }, c3, err);
+	EXPECT(c3.flags.skip_older, "a switch given before the mode still counts");
+
 	// Owners are one choice: --numeric-ids switches owner copying on, and switching
 	// it off leaves no numbers.
 	SyncSetup o1;
@@ -674,6 +689,55 @@ static void TestStreaming(const String& root)
 	EXPECT(TreeHash(src, check) == TreeHash(dst, check), "streamed copy equals the source");
 }
 
+// --wipe-target: the target is emptied first, into <target>.old with safe delete.
+static void TestWipe(const String& root)
+{
+	String src = root + "/w-src", dst = root + "/w-dst", db = root + "/sync.db", check = root + "/check.db";
+	Put(src + "/keep/a.txt", "a\n");
+	Put(src + "/b.txt", "b\n");
+	auto fill_target = [&] {
+		Put(dst + "/keep/a.txt", "a\n");               // the same as the source
+		Put(dst + "/old folder/x.txt", "x\n");         // only on the target
+		Put(dst + "/b.txt", "an older b\n");          // different
+	};
+	fill_target();
+
+	SyncSetup s = Setup(src, dst, db);
+	s.flags.wipe_target = true;
+	s.flags.dry_run = true;
+	SyncResult r;
+	Vector<String> lines;
+	Sync(s, r, &lines);
+	int wipes = 0, copies = 0;
+	for(const String& l : r.plan) {
+		wipes += l.StartsWith("wipe");
+		copies += l.StartsWith("copy");
+	}
+	EXPECT(wipes == 3 && copies == 2 && FileExists(dst + "/old folder/x.txt"),
+	       Format("dry run lists 3 wipes and 2 copies as if empty (%d, %d), changes nothing", wipes, copies));
+
+	s.flags.dry_run = false;
+	Sync(s, r);
+	EXPECT(r.failed == 0 && TreeHash(src, check) == TreeHash(dst, check), "after the wipe the target equals the source");
+	EXPECT(FileExists(dst + ".old/old folder/x.txt") && LoadFile(dst + ".old/b.txt") == "an older b\n" &&
+	       FileExists(dst + ".old/keep/a.txt"), "with safe delete, everything that was there is in .old");
+
+	fill_target();
+	s.flags.safe_delete = false;
+	Sync(s, r);
+	EXPECT(!FileExists(dst + "/old folder/x.txt") && !FileExists(dst + ".old/old folder/x.txt.1") &&
+	       TreeHash(src, check) == TreeHash(dst, check), "without safe delete the old contents are deleted");
+
+	String why;
+	EXPECT(!WipeAllowed("/", why) && !WipeAllowed("/home", why) && !WipeAllowed("/etc/", why) &&
+	       !WipeAllowed(HomeDir(), why) && WipeAllowed(root + "/w-dst", why), "wipe refused for / /home /etc and home");
+	SyncSetup m = Setup(src, dst, db);
+	m.flags.mode = SyncMode::Merge;
+	m.flags.wipe_target = true;
+	SyncReport rep;
+	EXPECT(!RunSync(m, rep, r, why) && why.Find("not allowed with --merge") >= 0, "wipe refused with --merge");
+}
+
 // treesync-cli run the way the GUI runs it (--stop-on-eof, stdin held open):
 // it must exit cleanly, without U++'s debug "Heap leaks detected!".
 static void TestCliLikeGui(const String& root)
@@ -767,6 +831,7 @@ CONSOLE_APP_MAIN
 	TestThreads(eroot);
 	TestCliLikeGui(eroot);
 	TestStreaming(eroot);
+	TestWipe(eroot);
 	TestBandwidthAndPriority(eroot);   // last: it lowers this process's priority
 	int efd = open(GetFileFolder(eroot), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
 	RemoveAt(efd, GetFileName(eroot));
