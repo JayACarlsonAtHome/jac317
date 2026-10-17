@@ -20,6 +20,12 @@ TreeSync keeps two directory trees in sync. The trees can be on the same machine
 4. **Sync**: copy or update the files that differ, based on the options chosen in the GUI.
 5. **Report**: show the results in the GUI.
 
+## Language and build
+
+- **C++26** (`-std=c++26`), plus U++ for the GUI.
+- **Compilers**: GCC 14+ or Clang 21+. On RHEL 9 the system GCC 11 is too old, so use `gcc-toolset-15` (`scl enable gcc-toolset-15 bash`) or `clang++`.
+- **Contracts**: preconditions and assertions are written with C++26 contracts where the compiler supports them (`__cpp_contracts`). Otherwise they fall back to runtime assertion checks through a small macro wrapper, so the code does not need to change once compilers catch up.
+
 ## Status
 
 Early development.
