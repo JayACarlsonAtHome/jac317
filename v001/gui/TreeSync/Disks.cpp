@@ -90,8 +90,8 @@ Vector<MountInfo> ListMounts()
 			disk = DISK_NETWORK;
 		else if(dev.StartsWith("/dev/") && !dev.StartsWith("/dev/loop")) {
 			std::error_code ec;
-			fs::path real = fs::canonical(dev.ToStd(), ec);
-			disk = DiskOfBlock((ec ? fs::path(dev.ToStd()) : real).filename().string());
+			fs::path real = fs::canonical(ToFs(dev), ec);
+			disk = DiskOfBlock((ec ? ToFs(dev) : real).filename().string());
 		}
 		if(disk.IsEmpty() || seen.Find(dir) >= 0)
 			continue;
@@ -101,7 +101,7 @@ Vector<MountInfo> ListMounts()
 		mi.disk = disk;
 		mi.label = dir + "  (" + type;
 		std::error_code ec;
-		fs::space_info sp = fs::space(dir.ToStd(), ec);
+		fs::space_info sp = fs::space(ToFs(dir), ec);
 		if(!ec)
 			mi.label << ", " << TrimBoth(FormatFileSize((int64)sp.capacity));
 		mi.label << ")";
@@ -136,7 +136,6 @@ Vector<MountInfo> ListMounts()
 // True when p is dir itself or somewhere below it (/home is not under /hom).
 bool IsUnder(const String& p, const String& dir)
 {
-	fs::path rel = fs::path(p.ToStd()).lexically_normal()
-	                 .lexically_relative(fs::path(dir.ToStd()).lexically_normal());
+	fs::path rel = ToFs(p).lexically_normal().lexically_relative(ToFs(dir).lexically_normal());
 	return !rel.empty() && *rel.begin() != "..";
 }

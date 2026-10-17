@@ -11,6 +11,7 @@ file
 	Disks.cpp,
 	PathPicker.cpp,
 	Root.cpp,
+	FsPath.cpp,
 	main.cpp;
 
 mainconfig

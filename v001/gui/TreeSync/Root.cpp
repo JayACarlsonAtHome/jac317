@@ -34,11 +34,14 @@ String RootName()
 }
 
 // Resolves symlinks and "..", so neither can step outside the home directory.
+// If the path cannot be resolved (e.g. longer than PATH_MAX), ".." is still removed
+// lexically; symlinks in it then go unchecked, which is acceptable because the home
+// limit is a convenience: without root the OS permissions still apply.
 static String Resolved(const String& p)
 {
 	std::error_code ec;
-	fs::path c = fs::weakly_canonical(p.ToStd(), ec);
-	return ec ? p : String(c.string());
+	fs::path c = fs::weakly_canonical(ToFs(p), ec);
+	return FromFs(ec ? fs::absolute(ToFs(p), ec).lexically_normal() : c);
 }
 
 String HomeDir()

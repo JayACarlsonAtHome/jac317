@@ -81,10 +81,16 @@ String SyncFlags::ToString() const
 	sw(xl, "/XL");
 	sw(xj, "/XJ");
 	sw(is, "/IS");
-	if(xf.GetCount())
-		s << " /XF " << xf;
-	if(xd.GetCount())
-		s << " /XD " << xd;
+	// Patterns are ';'-separated; ones with spaces are quoted, as robocopy needs.
+	auto patterns = [&](const char *sw, const String& list) {
+		if(list.IsEmpty())
+			return;
+		s << ' ' << sw;
+		for(const String& p : Split(list, ';'))
+			s << ' ' << (p.Find(' ') >= 0 ? "\"" + p + "\"" : p);
+	};
+	patterns("/XF", xf);
+	patterns("/XD", xd);
 	s << " /R:" << retries << " /W:" << wait << " /MT:" << threads;
 	return s;
 }

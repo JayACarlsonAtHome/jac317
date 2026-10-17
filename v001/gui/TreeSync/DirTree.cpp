@@ -33,32 +33,29 @@ void DirTree::LoadChildren(int id)
 	if(GetChildCount(id) || dir.IsEmpty())
 		return;
 
-	namespace fs = std::filesystem;
-	Vector<String> dirs, links, files;
-	std::error_code ec;
-	for(const fs::directory_entry& e :
-	    fs::directory_iterator(dir.ToStd(), fs::directory_options::none, ec)) {
-		String name = e.path().filename().string();
-		std::error_code ec2;
-		bool is_dir = e.is_directory(ec2);   // follows symlinks
-		bool is_link = e.is_symlink(ec2);
-		if(is_dir && is_link && (!follow_links || !PathAllowed(e.path().string())))
-			links.Add(name);   // /XJ, or a link leaving home without root: never descended into
-		else if(is_dir)
-			dirs.Add(name);
-		else
-			files.Add(name);
-	}
-	if(ec) {
-		Add(id, Null, Null, "(" + String(ec.message()) + ")");
+	Vector<FolderEntry> entries;
+	String error;
+	if(!ListFolder(dir, entries, error)) {
+		Add(id, Null, Null, "(" + error + ")");
 		return;
+	}
+
+	Vector<String> dirs, links, files;
+	for(const FolderEntry& e : entries) {
+		String child = AppendFileName(dir, e.name);
+		if(e.is_dir && e.is_link && (!follow_links || !PathAllowed(child)))
+			links.Add(e.name);   // /XJ, or a link leaving home without root: never descended into
+		else if(e.is_dir)
+			dirs.Add(e.name);
+		else
+			files.Add(e.name);
 	}
 	Upp::Sort(dirs);
 	Upp::Sort(links);
 	Upp::Sort(files);
 
 	for(const String& d : dirs)
-		Add(id, CtrlImg::Dir(), String((fs::path(dir.ToStd()) / d.ToStd()).string()), d, true);
+		Add(id, CtrlImg::Dir(), AppendFileName(dir, d), d, true);
 	for(const String& l : links)
 		Add(id, CtrlImg::Dir(), Null, l + " ->");
 	for(const String& f : files)

@@ -87,7 +87,7 @@ void PathPicker::Browse()
 	FileSel fs;
 	String start = ~path;
 	std::error_code ec;
-	fs.ActiveDir(std::filesystem::is_directory(start.ToStd(), ec) ? start : String(~mount));
+	fs.ActiveDir(std::filesystem::is_directory(ToFs(start), ec) ? start : String(~mount));
 	if(!fs.ExecuteSelectDir("Tree root") || !Accept(~fs))
 		return;
 	Set(~fs);
@@ -96,11 +96,12 @@ void PathPicker::Browse()
 
 void PathPicker::Commit()
 {
-	if(!Accept(~path)) {
+	String p = CleanPath(~path);
+	if(!Accept(p)) {
 		path <<= committed;
 		return;
 	}
-	Set(~path);
+	Set(p);
 	WhenPath();
 }
 

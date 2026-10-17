@@ -40,6 +40,12 @@ cd v001/gui
 
 Output goes to `v001/gui/out/<compiler>/TreeSync`. U++'s stock build methods pass `-std=c++17` after any package options, so TreeSync ships its own build methods in `v001/gui/bm/` that pass `-std=c++26`. A `static_assert` stops the build if C++26 is not in effect.
 
+## Long paths and awkward names
+
+- **Long paths**: on Linux, folders are opened one component at a time (`openat`), so trees deeper than `PATH_MAX` (4096 bytes) still work. On Windows, long absolute paths get the `\\?\` prefix, which lifts the 260-character `MAX_PATH` limit.
+- **Spaces and other characters**: names with spaces (including leading or trailing ones), tabs, newlines, quotes, backslashes and non-ASCII characters are handled as-is. Paths never go through a shell, so nothing needs quoting. Remote transfers must keep this rule: use an SFTP library, not `ssh`/`scp` command lines.
+- **Pasted paths**: the path field accepts `"quoted"` paths, `/shell\ escaped` paths, `file://` URIs, `~`, and a trailing newline from a paste.
+
 ## Running as root
 
 TreeSync is meant to run as root (Administrator on Windows), because a sync often meets files the current user cannot read or replace. Without root it still runs, after a warning, but local trees are limited to your home directory. Paths are resolved before they are checked, so `..` and symlinks cannot step outside home. Remote trees are not limited this way; what they can reach depends on the remote login.

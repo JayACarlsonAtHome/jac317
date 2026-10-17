@@ -79,6 +79,18 @@ Vector<DiskInfo>  ListDisks();
 Vector<MountInfo> ListMounts();
 bool              IsUnder(const String& p, const String& dir);
 
+// FsPath.cpp: long-path and UTF-8 safe conversions and folder listing.
+struct FolderEntry : Moveable<FolderEntry> {
+	String name;
+	bool   is_dir = false;    // follows symlinks
+	bool   is_link = false;
+};
+
+std::filesystem::path ToFs(const String& p);
+String                FromFs(const std::filesystem::path& p);
+bool                  ListFolder(const String& dir, Vector<FolderEntry>& out, String& error);
+String                CleanPath(String p);
+
 // Disk -> Mount (Drive on Windows) -> Path, with a browse button.
 class PathPicker : public ParentCtrl {
 	Label      lbl_disk, lbl_mount, lbl_path;
