@@ -76,3 +76,7 @@ Two kinds, each doing one job:
 ## Stopping
 
 Stop (button or Ctrl+C) finishes the current chunk or small file, commits it, marks the run `stopped` and exits. A second Ctrl+C stops at once. The restart rules above still hold, because each step's record was written before the step was counted as done.
+
+## Future: GST time (10 ps)
+
+Times will later be stored as GST (Galactic Standard Time), which resolves to 10 picoseconds. Today file times are nanoseconds (what Linux `stat` gives, `int64`) and run times are whole UTC seconds. A 64-bit count of 10 ps steps only spans about ±2.9 years, so GST times need two fields: whole seconds (`int64`) plus a fraction in 10 ps units (0 to 99,999,999,999), or a 128-bit value. SQLite integers are 64-bit, so that means two columns per time. Comparisons that use time tolerances (`--fat-file-times`, `--dst-tolerance`) then work on the pair.
