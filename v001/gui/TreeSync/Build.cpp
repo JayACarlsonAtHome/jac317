@@ -24,6 +24,12 @@ static String BuildScript()
 	return FileExists(s) ? s : String();
 }
 
+// The TreeSync program built by one compiler: out/<compiler>/treesync.
+String TreeSyncExe(const String& compiler)
+{
+	return NormalizePath(AppendFileName(GetExeFolder(), "../" + compiler + "/treesync"));
+}
+
 static String BuildSettingsPath()
 {
 	return AppendFileName(GetFileFolder(SettingsPath()), "build");
@@ -67,7 +73,8 @@ class BuildWindow : public TopWindow {
 	Splitter  split3;
 	ArrayCtrl compare_list;
 	LineEdit  results;
-	Button    back, close3, restart;
+	Button    back, close3;
+	Button    use_gcc1, use_clang1, use_gcc3, use_clang3;   // startup: continue with that build
 
 	Vector<BuildStep> steps;
 	int               step = -1;
@@ -94,8 +101,9 @@ class BuildWindow : public TopWindow {
 
 public:
 	bool startup = false;              // the page TreeSync opens on: Continue instead of Close
-	bool restart_wanted = false;       // this program was rebuilt and the user wants the new one
+	String continue_with;              // startup: "gcc" or "clang", the build to run next
 	void Startup();
+	void UseButtons();
 	bool auto_run = false;             // --build-run: start at once, close when done
 	void Run()                         { Start(); }
 	void Snap(const String& folder);   // --screenshot: the three screens as PNGs
@@ -170,8 +178,13 @@ BuildWindow::BuildWindow()
 	s3.Add(split3.HSizePosZ(8, 8).VSizePosZ(8, 44));
 	s3.Add(back.SetLabel("Back").LeftPosZ(8, 100).BottomPosZ(8, 28));
 	s3.Add(close3.SetLabel("Close").RightPosZ(8, 100).BottomPosZ(8, 28));
-	s3.Add(restart.SetLabel("Restart TreeSync (new build)").RightPosZ(116, 220).BottomPosZ(8, 28));
-	restart.Hide();
+	for(Button *b : { &use_gcc1, &use_clang1, &use_gcc3, &use_clang3 }) {
+		bool gcc = b == &use_gcc1 || b == &use_gcc3;
+		b->SetLabel(gcc ? "Continue to TreeSync using GCC exe" : "Continue to TreeSync using Clang exe");
+		*b << [this, gcc] { continue_with = gcc ? "gcc" : "clang"; Close(); };
+		(b == &use_gcc1 || b == &use_clang1 ? s1 : s3).Add(b->RightPosZ(gcc ? 266 : 8, 250).BottomPosZ(8, 28));
+		b->Hide();
+	}
 
 	compiler << [this] { ShowCommand(); };
 	type << [this] { ShowCommand(); };
@@ -183,7 +196,6 @@ BuildWindow::BuildWindow()
 	close1 << [this] { Close(); };
 	close3 << [this] { Close(); };
 	stop << [this] { Stop(); };
-	restart << [this] { restart_wanted = true; Close(); };
 	at_start << [this] { Save(); };
 	back << [this] { Screen(1); };
 
@@ -437,8 +449,8 @@ void BuildWindow::Finish()
 	String kept = text;   // for Build-Results.txt: without the note below
 	if(rebuilt_me)
 		text << "\n\nThis program (" << here << ") was rebuilt: " <<
-		        (startup ? "Restart TreeSync to use the new build." : "close TreeSync and start it again to use the new build.");
-	restart.Show(rebuilt_me && startup && !auto_run);
+		        (startup ? "the Continue buttons start the new builds." : "close TreeSync and start it again to use the new build.");
+	UseButtons();
 	results <<= text;
 	// Kept: Build-Results.txt in the logs folder, next to the sync runs' Results.txt.
 	String path = AppendFileName(LogFolder(DefaultDbPath()), "Build-Results.txt");
@@ -558,15 +570,31 @@ void BuildWindow::Snap(const String& folder)
 	Screen(1);
 }
 
+// The first screen when TreeSync starts: instead of Close, one Continue button per
+// compiler, each starting that compiler's build of TreeSync (the newest one).
 void BuildWindow::Startup()
 {
 	startup = true;
 	Title("TreeSync - compiler and test options");
-	start.SetLabel("Build and test");
-	start.RightPosZ(196, 140);
-	close1.SetLabel("Continue to TreeSync").RightPosZ(8, 180);
-	close3.SetLabel("Continue to TreeSync").RightPosZ(8, 180);
-	restart.RightPosZ(196, 220);
+	start.SetLabel("Build and test").RightPosZ(524, 140);
+	at_start.SetLabel("Show this page at start").LeftPosZ(8, 220);
+	close1.Hide();
+	close3.Hide();
+	UseButtons();
+}
+
+// Each Continue button needs its program built.
+void BuildWindow::UseButtons()
+{
+	if(!startup)
+		return;
+	for(Button *b : { &use_gcc1, &use_clang1, &use_gcc3, &use_clang3 }) {
+		String c = b == &use_gcc1 || b == &use_gcc3 ? "gcc" : "clang";
+		bool built = FileExists(TreeSyncExe(c));
+		b->Show();
+		b->Enable(built);
+		b->Tip(built ? "Starts " + TreeSyncExe(c) : "Not built yet: Build and test with " + c + " first");
+	}
 }
 
 void ShowBuild()
@@ -584,14 +612,15 @@ bool BuildPageAtStart()
 	return true;
 }
 
-// The first screen: compiler and test options, Build and test or Continue. True when
-// this program was rebuilt and the user chose to restart into the new build.
-bool BuildStartPage()
+// The first screen: compiler and test options, Build and test, then Continue with the
+// gcc or the clang build. Returns which ("gcc" or "clang"); empty if the window was
+// just closed (carry on in this program).
+String BuildStartPage()
 {
 	BuildWindow w;
 	w.Startup();
 	w.Execute();
-	return w.restart_wanted;
+	return w.continue_with;
 }
 
 // --build-run (a developer aid): the saved choices, built and tested for real.

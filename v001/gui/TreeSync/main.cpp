@@ -203,9 +203,14 @@ GUI_APP_MAIN
 	Vector<String> args = clone(CommandLine());
 	String shots;
 	int bench = 0;
+	bool from_start_page = false;
 	for(int i = args.GetCount() - 1; i >= 0; i--)
 		if(args[i].StartsWith("--screenshot=")) {
 			shots = args[i].Mid(13);
+			args.Remove(i);
+		}
+		else if(args[i] == "--from-start-page") {   // started by the options page's Continue
+			from_start_page = true;
 			args.Remove(i);
 		}
 		else if(args[i] == "--build-run") {   // a developer aid: Build and test, started at once
@@ -267,15 +272,18 @@ GUI_APP_MAIN
 	save_settings = true;
 	// First screen: compiler and test options (like jac313's runner); then the sync
 	// window. If this program was rebuilt there, start the new build in its place.
-	if(BuildPageAtStart() && BuildStartPage()) {
-		String exe = GetExeFilePath();
+	String use = from_start_page || !BuildPageAtStart() ? String() : BuildStartPage();
+	if(use.GetCount()) {   // the chosen compiler's build, newest, without the page again
+		String exe = TreeSyncExe(use);
+		Vector<String> pass = clone(CommandLine());
+		pass.Add("--from-start-page");
 		std::vector<char *> argv;
 		argv.push_back(const_cast<char *>(~exe));
-		for(const String& a : CommandLine())
+		for(const String& a : pass)
 			argv.push_back(const_cast<char *>(~a));
 		argv.push_back(nullptr);
 		execv(exe, argv.data());
-		Exclamation("Could not restart " + DeQtf(exe) + ": " + DeQtf(strerror(errno)));
+		Exclamation("Could not start " + DeQtf(exe) + ": " + DeQtf(strerror(errno)));
 	}
 	WarnNotRoot();
 	for(TreeEndpoint *e : { &setup.source, &setup.target })
