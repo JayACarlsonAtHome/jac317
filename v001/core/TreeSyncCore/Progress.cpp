@@ -77,9 +77,15 @@ Parts SplitDuration(int64 total)
 	return p;
 }
 
-std::string Unit(int64 n, const char *name, bool pad)
+// Fixed width so lines up in a column: the number padded (spaces, or zeros for
+// minutes and seconds), and a singular unit takes a space in place of the 's'.
+std::string Unit(int64 n, const char *name, int width, bool zeros)
 {
-	return (pad ? std::format("{:02}", n) : std::to_string(n)) + " " + name + (n == 1 ? "" : "s");
+	// Padded by hand: clang 21 rejects a dynamic width in std::format (docs/findings).
+	std::string num = std::to_string(n);
+	if((int)num.size() < width)
+		num.insert(0, width - num.size(), zeros ? '0' : ' ');
+	return num + " " + name + (n == 1 ? " " : "s");
 }
 
 }
@@ -95,11 +101,14 @@ String DurationWords(int64 seconds)
 	Parts p = SplitDuration(seconds);
 	std::string s;
 	if(p.years)
-		s += Unit(p.years, "year", false) + " ";
+		s += Unit(p.years, "year", 3, false) + " ";
 	if(p.years || p.days)
-		s += Unit(p.days, "day", false) + " ";
-	s += Unit(p.hours, "hour", false) + " " + Unit(p.minutes, "minute", true) + " " + Unit(p.seconds, "second", true);
-	return String(s);
+		s += Unit(p.days, "day", 3, false) + " ";
+	s += Unit(p.hours, "hour", 2, false) + " " + Unit(p.minutes, "minute", 2, true) + " " +
+	     Unit(p.seconds, "second", 2, true);
+	String r(s);
+	r.TrimEnd(" ");   // a singular "second " at the very end
+	return r;
 }
 
 String ClockTime(int64 unix_time)

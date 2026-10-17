@@ -10,6 +10,7 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #include <chrono>
+#include <format>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -23,15 +24,15 @@ inline double Since(Clock::time_point t)
 	return std::chrono::duration<double>(Clock::now() - t).count();
 }
 
-// "45 s", "3 min 05 s", "1 h 02 min": for messages.
+// "45 s", " 3 min 05 s", " 1 h 02 min": for messages, numbers padded to line up.
 inline String Duration(double seconds)
 {
 	int s = (int)seconds;
 	if(s < 60)
-		return AsString(s) + " s";
+		return String(std::format("{:2} s", s));
 	if(s < 3600)
-		return AsString(s / 60) + " min" + (s % 60 ? String(" ") + (s % 60 < 10 ? "0" : "") + AsString(s % 60) + " s" : String());
-	return AsString(s / 3600) + " h " + (s / 60 % 60 < 10 ? "0" : "") + AsString(s / 60 % 60) + " min";
+		return String(s % 60 ? std::format("{:2} min {:02} s", s / 60, s % 60) : std::format("{:2} min", s / 60));
+	return String(std::format("{:2} h {:02} min", s / 3600, s / 60 % 60));
 }
 
 // NAME.treesync-part next to rel, or a short name when that would pass the

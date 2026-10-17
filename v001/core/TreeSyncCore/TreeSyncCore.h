@@ -200,7 +200,8 @@ String ProgressLine(const CopyProgress& p, int width = 100, bool bar = false);
 
 // How long a run took, like getDuration() in Speed_Tests: always positive, years by
 // the average Gregorian year. DurationClock: "YYY:DDD:HH:MM:SS"; DurationWords:
-// "2 hours 05 minutes 09 seconds" (days and years in front when there are any);
+// " 2 hours 05 minutes 09 seconds", fixed width so lines line up (days and years
+// in front when there are any);
 // ClockTime: local "HH:MM:SS".
 String DurationClock(int64 seconds);
 String DurationWords(int64 seconds);
