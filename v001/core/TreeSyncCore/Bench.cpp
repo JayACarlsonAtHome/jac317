@@ -61,8 +61,10 @@ String BenchFacts()
 	// Sorting paths the way the scanner orders a tree.
 	const int PATHS = 50000;
 	Vector<String> paths;
+	// int64: i * 104729 overflows int past i = 20505, and gcc -O3 turns that undefined
+	// behaviour into an endless loop (docs/findings/bench_int_overflow_endless_loop.md).
 	for(int i = 0; i < PATHS; i++)
-		paths.Add(Format("dir%d/sub%d/file %d.txt", i * 7919 % 97, i * 104729 % 89, i));
+		paths.Add(Format("dir%d/sub%d/file %d.txt", (int)(i * 7919LL % 97), (int)(i * 104729LL % 89), i));
 	t = Best([&] {
 		Vector<String> v = clone(paths);
 		Sort(v, [](const String& a, const String& b) { return SortKey(a) < SortKey(b); });
