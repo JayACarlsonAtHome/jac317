@@ -169,6 +169,8 @@ CONSOLE_APP_MAIN
 	Print("log: " + log_path);
 	SyncResult result;
 	int64 started = (int64)time(nullptr);
+	// The start goes at the top too; stop and duration come in the table at the end.
+	Print("started: " + DateTimeText(started));
 	bool ok = RunSync(setup, report, result, error);
 	SetRunLog(setup.db, result.run, log_path);
 	int64 ended = (int64)time(nullptr);

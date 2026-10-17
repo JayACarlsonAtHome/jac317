@@ -126,17 +126,31 @@ static String Dotted(const String& s, int width)   // left-aligned, filled with 
 	return s.GetCount() >= width ? s : s + String('.', width - s.GetCount());
 }
 
-String ResultsHeader(int64 unix_time)
+// "2026-10-17", and "-7" (or "+5:30") for the local offset from UTC.
+static void LocalDate(int64 unix_time, String& date, String& utc)
 {
 	time_t t = (time_t)unix_time;
 	struct tm lt;
 	localtime_r(&t, &lt);
 	long off = lt.tm_gmtoff;
-	String utc = AsString(off / 3600);
+	utc = (off > 0 ? "+" : "") + AsString(off / 3600);
 	if(off % 3600)
-		utc << ":" << String(std::format("{:02}", (int)(abs(off) % 3600 / 60)));
-	return String(std::format(" Status started on {:04}-{:02}-{:02}  UTC = ", lt.tm_year + 1900, lt.tm_mon + 1,
-	                          lt.tm_mday)) + utc + "\n\n"
+		utc << ":" << String(std::format("{:02}", (int)(labs(off) % 3600 / 60)));
+	date = String(std::format("{:04}-{:02}-{:02}", lt.tm_year + 1900, lt.tm_mon + 1, lt.tm_mday));
+}
+
+String DateTimeText(int64 unix_time)
+{
+	String date, utc;
+	LocalDate(unix_time, date, utc);
+	return date + " " + ClockTime(unix_time) + "  UTC = " + utc;
+}
+
+String ResultsHeader(int64 unix_time)
+{
+	String date, utc;
+	LocalDate(unix_time, date, utc);
+	return " Status started on " + date + "  UTC = " + utc + "\n\n"
 	       " Start    : Stop     : Duration         : Command / Comments\n"
 	       " HH:MM:SS : HH:MM:SS : YYY:DDD:HH:MM:SS :\n " + String('=', 127) + "\n";
 }

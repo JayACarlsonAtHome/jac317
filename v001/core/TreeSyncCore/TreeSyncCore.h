@@ -206,6 +206,7 @@ String ProgressLine(const CopyProgress& p, int width = 100, bool bar = false);
 String DurationClock(int64 seconds);
 String DurationWords(int64 seconds);
 String ClockTime(int64 unix_time);
+String DateTimeText(int64 unix_time);   // "2026-10-17 14:13:09  UTC = -7"
 
 // The run's start, stop and duration as a table in the layout of the j5c build
 // Results.txt: a header ("Status started on ...", the column titles) and one line

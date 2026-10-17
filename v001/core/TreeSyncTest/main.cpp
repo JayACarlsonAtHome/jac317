@@ -391,6 +391,8 @@ static void TestProgress()
 	               "Good..................... : src -> dst") == 20, "results line layout: " + rl);
 	EXPECT(ResultsLine(t0, t0, "Copy run 7", 3, "Stopped", "").Find("Result = ....3 : Stopped..................") > 0 &&
 	       !ResultsLine(t0, t0, "Copy run 7", 3, "Stopped", "").EndsWith(" : "), "results line, no comment");
+	EXPECT(DateTimeText(t0).StartsWith("20") && DateTimeText(t0).Find(ClockTime(t0) + "  UTC = ") == 11,
+	       "date and time text: " + DateTimeText(t0));
 	String rh = ResultsHeader(t0);
 	EXPECT(rh.StartsWith(" Status started on 20") && rh.Find("UTC = ") > 0 &&
 	       rh.Find(" Start    : Stop     : Duration         : Command / Comments\n") > 0, "results header");
