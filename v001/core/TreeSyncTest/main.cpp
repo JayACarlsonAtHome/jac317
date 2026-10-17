@@ -754,6 +754,16 @@ static void TestStreaming(const String& root)
 	EXPECT(!FileExists(dst + "/d07/e1/extra in the target.txt") &&
 	       FileExists(dst + ".old/d07/e1/extra in the target.txt"), "post-scan moved the extra file out");
 	EXPECT(TreeHash(src, check) == TreeHash(dst, check), "streamed copy equals the source");
+
+	// The AI exports of that run: organized (the sections) and complete (every action).
+	String out_logs, out_sql, ai_err;
+	EXPECT(ExportAiLogs(db, r.run, out_logs, ai_err) && ExportAiSql(db, r.run, out_sql, ai_err), "AI export: " + ai_err);
+	String l = LoadFile(out_logs), q = LoadFile(out_sql);
+	EXPECT(l.Find("## How to read this") >= 0 && l.Find("## 7. The logs in full") >= 0, "AI logs export has its sections");
+	int rows = 0;
+	for(int at = q.Find("## 8. This run: every action"); (at = q.Find("| copy |", at + 1)) >= 0;)
+		rows++;
+	EXPECT(q.Find("CREATE TABLE") >= 0 && rows == 2000, Format("AI SQL export: schema and all 2000 copies (%d)", rows));
 }
 
 // --wipe-target: the target is emptied first, into <target>.old with safe delete.

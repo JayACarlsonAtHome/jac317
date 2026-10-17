@@ -40,6 +40,8 @@ public:
 	void   Reset();
 	int64  Int(int col) const;
 	String Text(int col) const;
+	int    Columns() const;      // of the result
+	String Name(int col) const;  // column name
 
 	Stmt(Db& db, const char *sql);
 	Stmt(const Stmt&) = delete;

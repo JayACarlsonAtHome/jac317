@@ -109,6 +109,8 @@ void TreeSyncWindow::ViewMenu(Bar& bar)
 	   .Help("Past runs, what each did, failures first (from the database)");
 	bar.Add("Show log file", [this] { ShowLogFile(LatestLog(setup.db)); }).Key(K_CTRL_L)
 	   .Help("The newest run's log file");
+	bar.Add("Export newest run for AI (logs + SQL)", [this] { ExportForAi(setup.db, 0, true, true); })
+	   .Help("Writes run-N-logs.AI.md and run-N-sql.AI.md in the logs folder, for an AI to analyse");
 }
 
 void TreeSyncWindow::SyncMenu(Bar& bar)

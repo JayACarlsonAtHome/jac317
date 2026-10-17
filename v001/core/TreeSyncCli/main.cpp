@@ -84,6 +84,35 @@ CONSOLE_APP_MAIN
 		Cout() << (args[0] == "--toolchain" ? ToolchainFacts() : BenchFacts());
 		return;
 	}
+	// --export-ai-logs[=RUN] / --export-ai-sql[=RUN] [--db=PATH]: a run as Markdown for an
+	// AI to analyse (RUN: a number; default the newest). Prints where it went.
+	{
+		String db;
+		Vector<String> what;
+		Vector<int64> runs;
+		for(const String& a : args)
+			if(a.StartsWith("--db="))
+				db = a.Mid(5);
+			else if(a.StartsWith("--export-ai-logs") || a.StartsWith("--export-ai-sql")) {
+				int eq = a.Find('=');
+				what.Add(a.Mid(2, (eq < 0 ? a.GetCount() : eq) - 2));
+				runs.Add(eq < 0 ? 0 : ScanInt64(a.Mid(eq + 1)));
+			}
+		if(what.GetCount()) {
+			for(int i = 0; i < what.GetCount(); i++) {
+				String out, error;
+				bool ok = what[i] == "export-ai-logs" ? ExportAiLogs(db, runs[i], out, error)
+				                                      : ExportAiSql(db, runs[i], out, error);
+				if(ok)
+					Cout() << out << "\n";
+				else {
+					Cerr() << "treesync-cli: " << error << "\n";
+					SetExitCode(2);
+				}
+			}
+			return;
+		}
+	}
 	bool stop_on_eof = false, compare_ids = false;
 	static bool gui_progress = false;
 	for(int i = args.GetCount() - 1; i >= 0; i--)

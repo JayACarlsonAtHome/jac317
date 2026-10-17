@@ -194,6 +194,16 @@ SELECT run, started, state, copied, failed FROM run_summary ORDER BY run DESC LI
 SELECT * FROM failures WHERE run = 42;
 ```
 
+
+### Export for AI analysis
+
+History > *Export logs to AI.md* and *Export SQL to AI.md* (for the selected run), View > *Export newest run for AI*, or `treesync-cli --export-ai-logs[=RUN] --export-ai-sql[=RUN]` write a run as Markdown into `logs/ai/`, organized but complete, for an AI (or a person) to analyse:
+
+- `run-N-logs.AI.md`: a guide to reading TreeSync logs, the run, each start of the run (a resumed run has several logs), every problem and event (failures, warnings, network, stops, resumes), the 200 slowest copies, files and bytes per minute, then every log in full.
+- `run-N-sql.AI.md`: the schema, all runs, this run's actions by kind and state, failures, biggest copies, chunks, every action, the logs of every run, the hash cache of both trees, the synced files, and queries to start from. It is large (a 50,000-file tree gives about 25 MB); nothing is left out.
+
+Every log of every run is recorded in the `run_logs` table; older logs are found by their "run N" line.
+
 ## Sharing the machine
 
 When a lot of other copying is going on, TreeSync can step back:

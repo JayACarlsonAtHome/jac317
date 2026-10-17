@@ -15,6 +15,7 @@ file
 	Progress.cpp,
 	Toolchain.cpp,
 	Bench.cpp,
+	AiExport.cpp,
 	Engine.h,
 	Runner.h,
 	Db.cpp,

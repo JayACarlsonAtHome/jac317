@@ -227,6 +227,15 @@ String ToolchainFacts();   // "key<TAB>value" per line, for comparing compilers
 // SHA-256 throughput, progress-line formatting, path sorting. Best of 3 rounds.
 String BenchFacts();
 
+// AiExport.cpp: a run as Markdown for analysis by an AI (or a person), organized but
+// complete. logs: every log of the run (one per start) with a guide, the summary,
+// problems, the slowest copies and throughput per minute, then each log in full. sql:
+// the schema, all runs, and this run's actions, chunks, hash cache and synced files.
+// Written to <logs>/ai/run-N-logs.AI.md or run-N-sql.AI.md; run 0 = the newest.
+bool ExportAiLogs(const String& db_path, int64 run, String& out_path, String& error);
+bool ExportAiSql(const String& db_path, int64 run, String& out_path, String& error);
+Vector<String> RunLogs(const String& db_path, int64 run);   // in order
+
 // Root.cpp. The messages are plain text, one paragraph per line; the GUI shows
 // them in a dialog and also prints them to the terminal.
 bool   IsRoot();

@@ -103,6 +103,7 @@ Vector<String> WithoutDryRun(Vector<String> args);
 void   ShowHistory(const String& db_path);
 void   HistoryScreenshot(const String& db_path, const String& png);
 void   ShowLogFile(const String& path);
+void   ExportForAi(const String& db_path, int64 run, bool logs, bool sql);   // run 0: the newest
 void   ShowBuild();                                // Build.cpp: build and test, like jac313's runner
 void   BuildScreenshots(const String& folder);
 void   BuildRun();

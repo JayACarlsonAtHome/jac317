@@ -22,6 +22,30 @@ void ShowLogFile(const String& path)
 	w.Execute();
 }
 
+// Exports a run for AI analysis (both files when logs and sql), says where they went,
+// and offers to open the folder. run 0: the newest.
+void ExportForAi(const String& db_path, int64 run, bool logs, bool sql)
+{
+	Vector<String> done;
+	String error;
+	for(int i = 0; i < 2; i++) {
+		if(!(i ? sql : logs))
+			continue;
+		String out;
+		if(!(i ? ExportAiSql(db_path, run, out, error) : ExportAiLogs(db_path, run, out, error))) {
+			Exclamation("Export failed: " + DeQtf(error));
+			return;
+		}
+		done.Add(out);
+	}
+	String list;
+	for(const String& p : done)
+		list << "[C " << DeQtf(p) << "] (" << DeQtf(FormatBytes(GetFileLength(p))) << ")&";
+	if(PromptYesNo("[* Exported for AI analysis:]&" + list + "&Give the file to an AI and ask it about the run.&&"
+	               "Open the folder?"))
+		LaunchWebBrowser(GetFileFolder(done[0]));
+}
+
 // The newest log file (their names are their start times).
 String LatestLog(const String& db_path)
 {
@@ -36,7 +60,7 @@ class HistoryWindow : public TopWindow {
 	String    db_path;
 	Splitter  split;
 	ArrayCtrl runs, actions;
-	Button    show_log, refresh, close;
+	Button    show_log, refresh, close, ai_logs, ai_sql;
 
 	void LoadRuns();
 	void LoadActions();
@@ -78,6 +102,14 @@ HistoryWindow::HistoryWindow(const String& path) : db_path(path)
 	Add(show_log.SetLabel("Show log").LeftPosZ(4, 100).BottomPosZ(6, 24));
 	Add(refresh.SetLabel("Refresh").LeftPosZ(110, 100).BottomPosZ(6, 24));
 	Add(close.SetLabel("Close").RightPosZ(4, 100).BottomPosZ(6, 24));
+	Add(ai_logs.SetLabel("Export logs to AI.md").LeftPosZ(216, 160).BottomPosZ(6, 24));
+	Add(ai_sql.SetLabel("Export SQL to AI.md").LeftPosZ(382, 160).BottomPosZ(6, 24));
+	ai_logs.Tip("Every log of the selected run (one per start), with a guide, the problems, the slowest "
+	            "copies and throughput, as Markdown for an AI to analyse");
+	ai_sql.Tip("The database for the selected run: schema, all runs, its actions, chunks, hash cache and "
+	           "synced files, as Markdown for an AI to analyse");
+	ai_logs << [this] { if(runs.IsCursor()) ExportForAi(db_path, (int64)runs.Get(runs.GetCursor(), 0), true, false); };
+	ai_sql << [this] { if(runs.IsCursor()) ExportForAi(db_path, (int64)runs.Get(runs.GetCursor(), 0), false, true); };
 	show_log << [this] {
 		if(runs.IsCursor())
 			ShowLogFile(runs.Get(runs.GetCursor(), 10));

@@ -27,6 +27,9 @@ CREATE INDEX IF NOT EXISTS actions_state ON actions (run, state);
 CREATE TABLE IF NOT EXISTS chunks (
 	run INTEGER, seq INTEGER, idx INTEGER, offset INTEGER, length INTEGER, sha256 TEXT,
 	PRIMARY KEY (run, seq, idx));
+CREATE TABLE IF NOT EXISTS run_logs (
+	run INTEGER, log TEXT,
+	PRIMARY KEY (run, log));
 CREATE TABLE IF NOT EXISTS synced (
 	source TEXT, target TEXT, rel TEXT, sha256 TEXT,
 	PRIMARY KEY (source, target, rel));
@@ -170,6 +173,17 @@ String Stmt::Text(int col) const
 	return s ? String(s, sqlite3_column_bytes(st, col)) : String();
 }
 
+int Stmt::Columns() const
+{
+	return sqlite3_column_count(st);
+}
+
+String Stmt::Name(int col) const
+{
+	const char *s = sqlite3_column_name(st, col);
+	return s ? String(s) : String();
+}
+
 String LogFolder(const String& db_path)
 {
 	return AppendFileName(GetFileFolder(Nvl(db_path, DefaultDbPath())), "logs");
@@ -179,8 +193,11 @@ void SetRunLog(const String& db_path, int64 run, const String& log)
 {
 	Db db;
 	String error;
-	if(run > 0 && db.Open(Nvl(db_path, DefaultDbPath()), error))
+	if(run > 0 && db.Open(Nvl(db_path, DefaultDbPath()), error)) {
 		Stmt(db, "UPDATE runs SET log = ? WHERE id = ?").Text(1, log).Int(2, run).Run();
+		// Every log of the run: one per start, a resumed run has several.
+		Stmt(db, "INSERT OR IGNORE INTO run_logs VALUES (?, ?)").Int(1, run).Text(2, log).Run();
+	}
 }
 
 String DefaultDbPath()
