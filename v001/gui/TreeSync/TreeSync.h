@@ -101,14 +101,31 @@ public:
 	SyncSetup Get() const;
 };
 
+// Browsable view of one tree, with [+]/[-] expanders and +/- keys.
+class DirTree : public TreeCtrl {
+	bool follow_links = false;
+
+	void LoadChildren(int id);
+
+public:
+	DirTree();
+	void Load(const char *caption, const TreeEndpoint& e, bool skip_links);
+	void CollapseAll();
+	bool Key(dword key, int count) override;
+};
+
 class TreeSyncWindow : public TopWindow {
 	MenuBar   menu;
 	StatusBar status;
+	Splitter  split;
+	DirTree   source_tree, target_tree;
 	SyncSetup setup;
 
 	void MainMenu(Bar& bar);
 	void FileMenu(Bar& bar);
+	void ViewMenu(Bar& bar);
 	void EditSetup();
+	void LoadTrees();
 
 public:
 	TreeSyncWindow();

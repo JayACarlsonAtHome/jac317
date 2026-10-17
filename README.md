@@ -9,7 +9,7 @@ TreeSync keeps two directory trees in sync. The trees can be on the same machine
 - **Local SQLite cache**: hashes are stored in a local SQLite table, so a later sync only has to re-hash what has changed.
 - **U++ GUI**: a desktop interface built with [U++ (Ultimate++)](https://www.ultimatepp.org/) for:
   - setting sync options
-  - viewing one or both trees
+  - viewing one or both trees side by side, with [+]/[-] to expand and collapse folders (mouse, or the + and - keys)
   - showing sync results (what matched, what was copied, updated or skipped, and any conflicts)
 
 ## How it works
