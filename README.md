@@ -117,7 +117,7 @@ The switches are modelled on robocopy. TreeSync adds `--merge`, which copies cha
 | `--merge` | Copy both ways; changed on both sides = conflict | — |
 | `--dry-run` | Report only, change nothing (default on) | `/L` |
 | `--fat-file-times` | 3-second time tolerance (FAT, many network shares; robocopy allows 2) | `/FFT` |
-| `--dst-tolerance` | Allow exact 1-hour (DST) time shifts | `/DST` |
+| `--dst-tolerance` | Allow 1-hour (DST) time shifts, give or take 3 seconds | `/DST` |
 | `--hard-links` | Hard-linked files are copied once and relinked at the target (default on); `--no-hard-links` writes each name out as its own copy | |
 | `--follow-links` | Write out what symlinks point to (files and folders); off by default, so symlinks are copied as symlinks | off = `/SL` |
 | `--include-same` | Include same files (rehash / recopy) | `/IS` |

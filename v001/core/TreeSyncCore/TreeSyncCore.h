@@ -43,7 +43,7 @@ struct SyncFlags {
 	SyncMode mode = SyncMode::Mirror;
 	bool   dry_run = true;
 	bool   fat_file_times = false;   // FAT_TOLERANCE_NS time tolerance
-	bool   dst_tolerance = false;    // allow exact 1-hour shifts
+	bool   dst_tolerance = false;    // allow 1-hour shifts, give or take FAT_TOLERANCE_NS
 	bool   follow_links = false;     // write out what symlinks point to
 	bool   hard_links = true;        // relink hard-linked files instead of writing each out
 	bool   compress = false;         // zlib on SSH connections

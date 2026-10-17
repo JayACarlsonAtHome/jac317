@@ -218,6 +218,19 @@ static void TestOptions()
 	a.mtime_ns = b.mtime_ns + 3500000000LL;
 	EXPECT(!TimeSkip(ff, a, b), "3.5 s apart: different times");
 
+	// --dst-tolerance: one hour apart, give or take 3 seconds, without --fat-file-times too.
+	SyncFlags dst;
+	dst.dst_tolerance = true;
+	dst.skip_changed = true;
+	a.mtime_ns = b.mtime_ns + 3600000000000LL + 2500000000LL;
+	EXPECT(TimeSkip(dst, a, b), "1 h + 2.5 s: same time with --dst-tolerance");
+	a.mtime_ns = b.mtime_ns - 3600000000000LL + 1000000000LL;
+	EXPECT(TimeSkip(dst, a, b), "-1 h + 1 s: same time");
+	a.mtime_ns = b.mtime_ns + 3600000000000LL + 3500000000LL;
+	EXPECT(!TimeSkip(dst, a, b), "1 h + 3.5 s: different");
+	a.mtime_ns = b.mtime_ns + 2000000000LL;
+	EXPECT(!TimeSkip(dst, a, b), "2 s apart without --fat-file-times: different");
+
 	// Owners are one choice: --numeric-ids switches owner copying on, and switching
 	// it off leaves no numbers.
 	SyncSetup o1;

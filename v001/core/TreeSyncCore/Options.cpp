@@ -21,9 +21,9 @@ const BoolOption BOOL_OPTIONS[] = {
 	  "exFAT disk (USB sticks, SD cards) or some network shares: they keep times only in 2-second "
 	  "steps, and the two sides may round differently, so without this every file there looks "
 	  "changed. (robocopy's /FFT allows 2 seconds; TreeSync allows one more for safety.)" },
-	{ "dst-tolerance", &SyncFlags::dst_tolerance, "/DST", "Allow exact 1-hour (DST) time shifts",
-	  "Treats file times exactly one hour apart as equal. For FAT disks and Windows shares whose times "
-	  "jump by an hour when daylight saving time starts or ends." },
+	{ "dst-tolerance", &SyncFlags::dst_tolerance, "/DST", "Allow 1-hour (DST) time shifts",
+	  "Treats file times one hour apart, give or take 3 seconds, as equal. For FAT disks and Windows "
+	  "shares whose times jump by an hour when daylight saving time starts or ends." },
 	{ "follow-links", &SyncFlags::follow_links, "", "Copy what symlinks point to, not the links",
 	  "A symlink (symbolic or soft link) is a tiny file that holds only a path to another file or "
 	  "folder, like a shortcut.\n"

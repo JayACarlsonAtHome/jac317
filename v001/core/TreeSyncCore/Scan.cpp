@@ -77,7 +77,8 @@ bool HashCache::Lookup(const Entry& e, String& hash)
 		return false;
 	int64 tolerance = flags.fat_file_times ? FAT_TOLERANCE_NS : 0;
 	int64 dt = abs(find.Int(3) - e.mtime_ns);
-	bool time_ok = dt <= tolerance || (flags.dst_tolerance && abs(dt - 3600000000000LL) <= tolerance);
+	// --dst-tolerance: one hour apart, give or take FAT_TOLERANCE_NS, also counts as equal.
+	bool time_ok = dt <= tolerance || (flags.dst_tolerance && abs(dt - 3600000000000LL) <= FAT_TOLERANCE_NS);
 	bool ok = find.Int(2) == e.size && time_ok &&
 	          (unstable || (find.Int(0) == e.dev && find.Int(1) == e.ino && find.Int(4) == e.ctime_ns));
 	if(ok)

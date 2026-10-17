@@ -24,8 +24,9 @@ bool TimeSkip(const SyncFlags& flags, const Entry& s, const Entry& d)
 {
 	int64 tolerance = flags.fat_file_times ? FAT_TOLERANCE_NS : 0;
 	int64 dt = s.mtime_ns - d.mtime_ns;
+	// --dst-tolerance: one hour apart, give or take FAT_TOLERANCE_NS, is the same time too.
 	bool same_time = abs(dt) <= tolerance ||
-	                 (flags.dst_tolerance && abs(abs(dt) - 3600000000000LL) <= tolerance);
+	                 (flags.dst_tolerance && abs(abs(dt) - 3600000000000LL) <= FAT_TOLERANCE_NS);
 	if(flags.skip_changed && same_time)
 		return true;
 	if(flags.skip_older && !same_time && dt < 0)
