@@ -189,6 +189,14 @@ treesync-cli --source=/data --target-host=server --target-user=jay --target=/bac
 - **Copies**: always use the chunked copy, so a stopped remote copy resumes part-way through the file. Each copy is read back over the connection and checked against the source's SHA-256 before it is renamed into place, atomically, with OpenSSH's `posix-rename`.
 - **Limits of SFTP**: no inode numbers and whole-second times, so the remote hash cache matches on size and time; no hard links, so hard-linked files are written out as separate copies (the log says so).
 
+## Inspiration
+
+TreeSync was inspired by **robocopy**, Microsoft's Robust File Copy for Windows: its switches (`/MIR`, `/FFT`, `/XO`, `/XF` and the rest) were the starting point for TreeSync's options, and the robocopy equivalents are listed for reference. No robocopy code was used or copied. TreeSync is written from scratch, for Linux, and made the way its author wanted it: GNU-style long options, SHA-256 comparison, verified copies, resumable runs, safe delete, and a GUI that shows what is going on.
+
+Two other tools shaped smaller details, again as ideas only: **rsync** (the option names `--bwlimit` and `--numeric-ids`) and **Fedora's dnf5** (the style of the progress lines).
+
+TreeSync is not affiliated with or endorsed by Microsoft or the rsync and dnf projects. Robocopy is a Microsoft product; the names are used only to describe where ideas came from.
+
 ## License
 
 Copyright 2026 Jay A Carlson
