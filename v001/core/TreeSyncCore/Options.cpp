@@ -144,7 +144,7 @@ static const struct { const char *name; SyncMode mode; const char *robocopy; con
 };
 
 // Quotes for a POSIX shell only when needed: --name='value with spaces'.
-static String ShellQuote(const String& arg)
+String ShellQuote(const String& arg)
 {
 	auto safe = [](int c) { return IsAlNum(c) || strchr("-_./:=,+@%", c); };
 	bool ok = arg.GetCount() > 0;

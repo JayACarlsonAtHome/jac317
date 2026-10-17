@@ -132,6 +132,7 @@ int            ParseCommandLine(const Vector<String>& args, SyncSetup& s, String
 Vector<String> FlagArgs(const SyncFlags& f);
 Vector<String> ToArgs(const SyncSetup& s);
 String         CommandLineText(const Vector<String>& args);   // shell-quoted, ready to paste
+String         ShellQuote(const String& arg);                 // one argument, safe for sh
 String         Usage();
 
 // Saved settings: command-line options, one per line ('#' starts a comment), in

@@ -103,7 +103,12 @@ class BuildWindow : public TopWindow {
 	ParentCtrl s1, s2, s3;
 
 	// Screen 1
-	LabelBox  compiler_box, build_box, display_box, toolchain_box;
+	LabelBox  compiler_box, build_box, display_box, machine_box, toolchain_box;
+	Label     req_status;
+	Button    check_again, fix;
+	bool      req_ok = true;
+	void      CheckRequirements();
+	void      OpenFixTerminal();
 	Switch    display;
 	Label     display_now;
 	Label     compiler_label, type_label;
@@ -199,11 +204,19 @@ BuildWindow::BuildWindow()
 	s1.Add(display_now.HSizePosZ(560, 16).TopPosZ(242, 22));
 	display.Tip("X11 lets any program read the keyboard and the screen of the others, and is no "
 	            "longer developed. Use it only on a desktop without Wayland.");
-	s1.Add(toolchain_box.SetLabel("This program was built with").HSizePosZ(8, 8).VSizePosZ(280, 132));
+	s1.Add(machine_box.SetLabel("This machine").HSizePosZ(8, 8).TopPosZ(280, 52));
+	s1.Add(req_status.HSizePosZ(20, 360).TopPosZ(300, 22));
+	s1.Add(check_again.SetLabel("Check again").RightPosZ(196, 110).TopPosZ(298, 26));
+	s1.Add(fix.SetLabel("Open terminal to fix...").RightPosZ(20, 170).TopPosZ(298, 26));
+	check_again << [this] { CheckRequirements(); };
+	fix << [this] { OpenFixTerminal(); };
+	fix.Tip("Opens a terminal with ./bootstrap.sh typed at the prompt; press Enter to run it. "
+	        "It asks before it installs anything.");
+	s1.Add(toolchain_box.SetLabel("This program was built with").HSizePosZ(8, 8).VSizePosZ(338, 132));
 	toolchain.SetReadOnly();
 	toolchain.SetFont(Monospace());
 	toolchain <<= ToolchainReport();
-	s1.Add(toolchain.HSizePosZ(16, 16).VSizePosZ(300, 140));
+	s1.Add(toolchain.HSizePosZ(16, 16).VSizePosZ(358, 140));
 
 	command.SetFont(Monospace());
 	s1.Add(command.HSizePosZ(8, 8).BottomPosZ(42, 84));   // up to 5 steps, one line each
@@ -267,6 +280,7 @@ BuildWindow::BuildWindow()
 
 	Load();
 	ShowCommand();
+	CheckRequirements();
 	if(BuildScript().IsEmpty()) {
 		start.Disable();
 		command = "Cannot build from here: build.sh is not two folders above this program (" +
@@ -375,9 +389,58 @@ void BuildWindow::Save()
 	               "\nat_start=" + AsString((int)at_start) + "\ndisplay=" + AsString(~display) + "\n");
 }
 
+// What this machine has, from bootstrap.sh --check (a fraction of a second): each
+// requirement of setup/recipes.conf, and U++.
+void BuildWindow::CheckRequirements()
+{
+	String script = BuildScript();
+	if(script.IsEmpty()) {
+		req_status = "Not run from a build tree: nothing to check.";
+		check_again.Disable();
+		fix.Disable();
+		return;
+	}
+	String out;
+	int code = Sys("bash " + ShellQuote(AppendFileName(GetFileFolder(script), "bootstrap.sh")) + " --check", out);
+	Vector<String> missing, optional;
+	int count = 0;
+	for(const String& line : Split(out, '\n')) {
+		Vector<String> f = Split(line, '\t', false);
+		if(f.GetCount() < 5 || f[0] != "@req")
+			continue;
+		count++;
+		if(f[2] == "missing")
+			(f[3] == "required" ? missing : optional).Add(f[4]);
+	}
+	req_ok = code == 0 && count > 0;
+	if(count == 0)
+		req_status = "Could not check (bootstrap.sh --check gave nothing).";
+	else if(req_ok)
+		req_status = Format("All %d requirements present", count) +
+		             (optional.GetCount() ? " (optional, missing: " + Join(optional, "; ") + ")" : String());
+	else
+		req_status = "Missing: " + Join(missing, "; ");
+	req_status.SetInk(req_ok ? SColorText() : LtRed());
+	req_status.Tip(req_ok ? String() : "Missing: " + Join(missing, "\n"));
+	fix.Enable(!req_ok || optional.GetCount());
+}
+
+// A terminal with ./bootstrap.sh typed at the prompt, waiting for Enter.
+void BuildWindow::OpenFixTerminal()
+{
+	String opener = AppendFileName(GetFileFolder(BuildScript()), "setup/fix-in-terminal.sh");
+	String out;
+	if(Sys("bash " + ShellQuote(opener), out) != 0)
+		Exclamation("Could not open a terminal: " + DeQtf(TrimBoth(out)) + "&&Run this in one yourself:&[C " +
+		            DeQtf("cd " + GetFileFolder(BuildScript()) + " && ./bootstrap.sh") + "]");
+}
+
 void BuildWindow::Start()
 {
 	if(BuildScript().IsEmpty())
+		return;
+	if(!req_ok && !PromptYesNo("Some requirements are missing (see [* This machine]), so the build "
+	                           "will probably fail.&&Build anyway?"))
 		return;
 	Save();
 	Plan();
@@ -655,6 +718,8 @@ void BuildWindow::Startup()
 	close1.Hide();
 	close3.Hide();
 	UseButtons();
+	if(!req_ok)   // missing requirements: the fix, ready to run, as soon as the page is up
+		PostCallback([this] { OpenFixTerminal(); });
 }
 
 // Each Continue button needs its program built.

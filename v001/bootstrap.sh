@@ -9,6 +9,8 @@
 #   ./bootstrap.sh --compiler gcc   # build with one compiler (default: both)
 #   ./bootstrap.sh --no-build       # stop after the checks and installs
 #   ./bootstrap.sh --upp-dir DIR    # where U++ goes if it has to be fetched (default ~/u++)
+#   ./bootstrap.sh --check          # only check, quietly, one "@req" line each (the GUI's
+#                                   # options page uses this); exit 1 if a required one is missing
 #
 #   1. Detects the Linux family (rhel, fedora, linuxmint).
 #   2. Checks each requirement in setup/recipes.conf; for the missing ones shows the
@@ -26,19 +28,37 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 RECIPES="$HERE/setup/recipes.conf"
 . "$HERE/tools.sh"
 
-DRY=0; YES=0; BUILD=1; COMPILERS="gcc clang"; UPP_TARGET="$HOME/u++"
+DRY=0; YES=0; BUILD=1; CHECK=0; COMPILERS="gcc clang"; UPP_TARGET="$HOME/u++"
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run)  DRY=1; shift ;;
+    --check)    CHECK=1; shift ;;
     --yes)      YES=1; shift ;;
     --no-build) BUILD=0; shift ;;
     --compiler) case "${2:-}" in gcc|clang) COMPILERS="$2" ;; both) COMPILERS="gcc clang" ;;
                   *) echo "--compiler must be gcc, clang or both" >&2; exit 2 ;; esac; shift 2 ;;
     --upp-dir)  UPP_TARGET="${2:-}"; shift 2 ;;
-    -h|--help)  sed -n '3,25p' "$0"; exit 0 ;;
+    -h|--help)  sed -n '3,27p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+
+# --- --check: report and stop, nothing installed or built -----------------------------
+# One line per requirement: @req<TAB>name<TAB>ok|missing<TAB>required|optional<TAB>description
+if [ "$CHECK" = 1 ]; then
+  field() { sed -n "s/^$1\.$2 *= *//p" "$RECIPES" | head -1; }
+  bad=0
+  for n in $(sed -n 's/^\([a-z0-9_]*\)\.desc *=.*/\1/p' "$RECIPES"); do
+    req=$([ "$(field "$n" required)" = true ] && echo required || echo optional)
+    # TREESYNC_PRETEND_MISSING="clang upp": report those as missing (to test the GUI's path)
+    if eval "$(field "$n" check)" >/dev/null 2>&1 && [[ " ${TREESYNC_PRETEND_MISSING:-} " != *" $n "* ]]; then st=ok
+    else st=missing; [ $req = required ] && bad=1; fi
+    printf '@req\t%s\t%s\t%s\t%s\n' "$n" "$st" "$req" "$(field "$n" desc)"
+  done
+  if [ -n "$(find_upp)" ] && [[ " ${TREESYNC_PRETEND_MISSING:-} " != *" upp "* ]]; then st=ok; else st=missing; bad=1; fi
+  printf '@req\tupp\t%s\trequired\tU++ (umk and uppsrc)\n' "$st"
+  exit $bad
+fi
 
 # --- results table (start : stop : duration, like the j5c build Results.txt) ---------
 STARTED=$(date +%s)
