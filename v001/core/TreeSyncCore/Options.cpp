@@ -103,6 +103,12 @@ const IntOption INT_OPTIONS[] = {
 	{ "bwlimit", &SyncFlags::bwlimit_kib, "/IPG:n", "Bandwidth limit (KiB/s)", 0, 10485760,
 	  "Caps the speed in KiB per second (1024 is 1 MiB/s), leaving room for other work. 0 means no "
 	  "limit. Counts network traffic; for a local copy it limits the writes." },
+	{ "network-wait", &SyncFlags::network_wait, "", "Wait for the network (seconds)", 0, 604800,
+	  "When the connection to a remote side is lost (the network is down, the router or Starlink is "
+	  "restarting, the other machine reboots), the run pauses, says so, and tries to reconnect every "
+	  "few seconds. When the machine answers again the run carries on where it was; a big file "
+	  "continues at its last checked chunk. This is how long to wait, in seconds, before giving up: "
+	  "then the run stops, and running it again resumes it. 0 stops at once." },
 };
 static_assert(std::size(INT_OPTIONS) == INT_OPTION_COUNT);
 

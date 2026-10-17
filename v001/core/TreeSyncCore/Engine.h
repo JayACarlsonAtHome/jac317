@@ -108,10 +108,12 @@ struct SyncReport {
 	Event<const CopyProgress&> WhenProgress;  // copy progress; done == size when a file finishes
 	Event<int64, int64>        WhenOverall;   // bytes of the run's copies done, of total
 	Event<const StageProgress&> WhenStage;    // pre-scan and post-scan of a streamed run
+	Event<bool, const String&> WhenNetwork;   // true: lost the connection to host, waiting; false: back
 	const std::atomic<bool>   *stop = nullptr;
+	std::atomic<bool>          halted = false;   // the engine stopped the run itself (network gone too long)
 	Throttle                  *throttle = nullptr;   // set by RunSync for --bwlimit
 
-	bool Stopping() const      { return stop && *stop; }
+	bool Stopping() const      { return halted || (stop && *stop); }
 	void Count(int64 bytes)    { if(throttle) throttle->Account(bytes); }
 };
 
@@ -247,6 +249,11 @@ public:
 	virtual String Name() const = 0;         // for reports: "local" or user@host
 	virtual bool   StableIds()               { return false; }   // inode numbers usable by the hash cache
 	virtual int64  EntryEstimate()           { return 0; }       // likely entry count (statvfs), 0 = unknown
+	// A remote side whose connection broke (network down, server gone): every call
+	// fails until Reconnect succeeds. Reconnect only with no files open.
+	virtual bool   Lost()                    { return false; }
+	virtual bool   Reconnect(String& error)  { error = "not a remote side"; return false; }
+	virtual String Host() const              { return String(); }   // remote: the machine, for messages
 	virtual ~TreeFs() {}
 };
 
@@ -321,6 +328,9 @@ public:
 	bool   CanChown() const override;
 	bool   Chown(const String& rel, int64 uid, int64 gid, String& error) override;
 	String Name() const override;
+	bool   Lost() override;
+	bool   Reconnect(String& error) override;
+	String Host() const override;
 
 	SftpFs(const TreeEndpoint& e, const String& known_hosts, bool compress);
 	~SftpFs();

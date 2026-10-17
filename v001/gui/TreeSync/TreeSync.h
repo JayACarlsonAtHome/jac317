@@ -174,6 +174,12 @@ class TreeSyncWindow : public TopWindow {
 	VectorMap<int, std::chrono::steady_clock::time_point> copy_started;   // copy id -> first seen
 	String copy_text;            // the Copy box's own line, before any "still working" note
 	void Tick();
+	// The connection to a remote side is lost and treesync-cli waits for it (@net).
+	bool        prescan_done = false;   // the copy total stops growing then
+	bool        net_down = false;
+	String      net_host;
+	int         net_wait = 0;    // seconds it waits before stopping
+	std::chrono::steady_clock::time_point net_since;
 	SyncSetup setup;
 
 	// SyncRun.cpp: treesync-cli as a child process.

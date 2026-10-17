@@ -111,6 +111,7 @@ bool RunSync(const SyncSetup& setup, SyncReport& report, SyncResult& result, Str
 
 	SyncFlags key_flags = flags;
 	key_flags.dry_run = false;
+	key_flags.network_wait = SyncFlags().network_wait;   // how long to wait is not part of what the run does
 	String key = Join(FlagArgs(key_flags), " ");
 
 	Runner r(db, report, result, setup);

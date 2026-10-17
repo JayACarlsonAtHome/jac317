@@ -141,7 +141,15 @@ void TreeSyncWindow::Tick()
 			active.Set(i, 5, MinSec(std::chrono::duration<double>(now - copy_started[q]).count()));
 	}
 	double quiet = std::chrono::duration<double>(now - last_progress).count();
-	if(quiet >= 3 && active.GetCount())
+	stage_text[1].SetInk(net_down ? LtRed() : SColorText());
+	if(net_down) {
+		double gone = std::chrono::duration<double>(now - net_since).count();
+		// One line: the box has room for one. The log has the details.
+		stage_text[1] = "NETWORK UNAVAILABLE: no connection to " + net_host + " for " + MinSec(gone) +
+		                ". Retrying every 5 s; carries on by itself when it is back (gives up at " +
+		                MinSec(net_wait) + ").";
+	}
+	else if(quiet >= 3 && active.GetCount())
 		stage_text[1] = Format("Still working, please wait: %d file%s in progress, no new progress for %d s. "
 		                       "Big files over a slow link can take minutes; nothing is stuck while this counts.",
 		                       active.GetCount(), active.GetCount() == 1 ? "" : "s", (int)quiet);
@@ -152,9 +160,12 @@ void TreeSyncWindow::Tick()
 
 void TreeSyncWindow::StageShow(int stage, int64 done, int64 total, const String& text)
 {
-	if(stage == 1)
-		copy_text = text;
 	stage_bar[stage].Set(total > 0 ? (int)(min(done, total) * 1000 / total) : 0, 1000);
+	if(stage == 1) {
+		copy_text = text;
+		if(net_down)   // the network message stays until the connection is back
+			return;
+	}
 	stage_text[stage] = text;
 }
 
@@ -164,9 +175,20 @@ void TreeSyncWindow::ShowProgress(const String& line)
 {
 	Vector<String> f = Split(line, '\t', false);
 	last_progress = std::chrono::steady_clock::now();
+	if(f[0] == "@net" && f.GetCount() >= 4) {
+		net_down = f[1] == "1";
+		net_host = f[2];
+		net_wait = ScanInt(f[3]);
+		net_since = std::chrono::steady_clock::now();
+		Tick();
+		return;
+	}
 	if(f[0] == "@overall" && f.GetCount() >= 3) {
 		int64 done = ScanInt64(f[1]), total = ScanInt64(f[2]);
-		StageShow(1, done, total, FormatBytes(done) + " of " + FormatBytes(total) + " so far");
+		// While the pre-scan runs the total is what it has found so far; files that turn
+		// out the same as the target's drop out of it again.
+		StageShow(1, done, total, FormatBytes(done) + " of " + FormatBytes(total) +
+		          (prescan_done ? String() : String("  (so far: the pre-scan is still finding files)")));
 		return;
 	}
 	if(f[0] == "@stage" && f.GetCount() >= 6) {
@@ -174,6 +196,8 @@ void TreeSyncWindow::ShowProgress(const String& line)
 		int64 done = ScanInt64(f[2]), total = ScanInt64(f[3]);
 		bool finished = f[4] == "1";
 		String detail = f.GetCount() > 5 ? f[5] : String();
+		if(stage == 0 && finished)
+			prescan_done = true;
 		if(stage == 0)
 			StageShow(0, done, finished ? done : total,
 			          finished ? Format("done: %s entries", AsString(done))
@@ -295,6 +319,8 @@ void TreeSyncWindow::StartSync(bool dry_run)
 	status = "Running...";
 	active.Clear();
 	copy_started.Clear();
+	net_down = false;
+	prescan_done = false;
 	for(int i = 0; i < 3; i++)
 		StageShow(i, 0, 0, String());
 	ProgressVisible(true);
@@ -358,6 +384,8 @@ void TreeSyncWindow::SyncFinished(int code)
 	                 : code == 126 || code == 127 ? "pkexec refused or was cancelled" : "ended abnormally";
 	Log(Format("treesync-cli exit code %d: %s", code, what));
 	KillTimeCallback(77);
+	net_down = false;
+	stage_text[1].SetInk(SColorText());
 	active.Clear();
 	copy_started.Clear();
 	ProgressVisible(false);

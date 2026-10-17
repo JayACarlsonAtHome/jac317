@@ -7,6 +7,7 @@
 //   @file <TAB> id <TAB> done <TAB> size <TAB> seconds <TAB> index <TAB> count <TAB> name [<TAB> verify]
 //   @overall <TAB> done <TAB> total
 //   @stage <TAB> stage <TAB> done <TAB> total <TAB> finished <TAB> detail   (0 pre-scan, 2 post-scan)
+//   @net <TAB> down <TAB> host <TAB> wait   (1: lost the connection, waiting up to wait s; 0: back)
 // which the GUI turns into thermometers instead of log lines.
 // Exit codes: 0 in sync, 1 failures or conflicts, 2 usage or setup error, 3 stopped.
 #include <TreeSyncCore/TreeSyncCore.h>
@@ -129,6 +130,11 @@ CONSOLE_APP_MAIN
 		if(s.finished)
 			Print(s.stage == 0 ? Format("pre-scan done: %s entries", AsString(s.done))
 			                   : Format("post-scan done: %s folders checked", AsString(s.done)));
+	};
+	// The messages themselves come as lines; this is for the GUI's banner.
+	report.WhenNetwork = [&](bool down, const String& host) {
+		if(gui_progress)
+			Cout() << std::format("@net\t{}\t{}\t{}\n", down ? 1 : 0, host.ToStd(), setup.flags.network_wait);
 	};
 	report.WhenOverall = [](int64 done, int64 total) {
 		if(gui_progress)

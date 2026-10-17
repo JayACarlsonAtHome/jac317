@@ -77,6 +77,24 @@ Two kinds, each doing one job:
 
 Stop (button or Ctrl+C) finishes the current chunk or small file, commits it, marks the run `stopped` and exits. A second Ctrl+C stops at once. The restart rules above still hold, because each step's record was written before the step was counted as done.
 
+## Network outages
+
+A remote side whose connection breaks (a socket or transport error from libssh2,
+or SFTP's "connection lost") is marked lost and its socket shut down at once, so
+the calls still pending (closing handles) fail straight away. The thread waits in
+`Runner::WaitForNetwork`: one quiet reconnect first (a connection that sat idle
+through an outage is only found broken afterwards), then a message and a reconnect
+every 5 s, up to `--network-wait` seconds, after which the run stops itself
+(`SyncReport::halted`) and can be resumed. `Runner::Net(c, op)` repeats an
+operation after each outage it recovers from; `RunStep` uses it, so a step is
+redone, not failed, and a chunked copy continues at its last recorded chunk.
+Reconnecting happens in place (same `SftpFs` object) and only with no files open.
+
+The streaming pre-scan marks a source folder it could not list as unread, and the
+post-scan removes nothing from the matching target folder. The full SFTP scan used
+by Merge ends with an error when the connection is lost, rather than treating the
+folders it missed as empty.
+
 ## Future: GST time (10 ps)
 
 Times will later be stored as GST (Galactic Standard Time), which resolves to 10 picoseconds. Today file times are nanoseconds (what Linux `stat` gives, `int64`) and run times are whole UTC seconds. A 64-bit count of 10 ps steps only spans about ±2.9 years, so GST times need two fields: whole seconds (`int64`) plus a fraction in 10 ps units (0 to 99,999,999,999), or a 128-bit value. SQLite integers are 64-bit, so that means two columns per time. Comparisons that use time tolerances (`--time-tolerance`, `--dst-tolerance`) then work on the pair.

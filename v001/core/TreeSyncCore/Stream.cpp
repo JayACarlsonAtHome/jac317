@@ -31,6 +31,7 @@ struct Folder {
 	int           pending = 0;     // queued items not finished yet
 	bool          walked = false;  // every entry seen and queued
 	bool          posted = false;  // handed to the post-scan
+	bool          unread = false;  // the source folder could not be listed: remove nothing from the target's
 	Index<String> names;           // source names in it
 };
 
@@ -199,12 +200,14 @@ struct Streamer {
 	{
 		Entry t;
 		String error = "no such file";
-		if(!assume_empty && c.fs[1]->Stat(rel, false, t, error)) {
+		if(!assume_empty && r.Net(c, [&] { return c.fs[1]->Stat(rel, false, t, error); })) {
 			if(t.type == 'd')
 				return true;
 			Conflict(rel, "a folder in the source, not a folder on the target");
 			return false;
 		}
+		if(r.report.Stopping())
+			return false;
 		if(!Missing(error)) {
 			Fail(rel, error);
 			return false;
@@ -245,11 +248,15 @@ struct Streamer {
 		}
 		Vector<FolderEntry> list;
 		String error;
-		if(!c.fs[0]->List(rel, list, error)) {
-			r.Line("warning: cannot read source folder " + Nvl(rel, String("/")) + ": " + error);
+		if(!r.Net(c, [&] { list.Clear(); return c.fs[0]->List(rel, list, error); })) {
+			if(!r.report.Stopping())
+				r.Line("warning: cannot read source folder " + Nvl(rel, String("/")) + ": " + error +
+				       "; its target folder is left as it is");
 			Lock l(r.mx);
 			r.result.source.warnings++;
-			folders.GetAdd(rel).walked = true;
+			Folder& fd = folders.GetAdd(rel);
+			fd.unread = true;
+			fd.walked = true;
 			TrySettle(rel);
 			return;
 		}
@@ -352,8 +359,10 @@ struct Streamer {
 				Folder& fd = folders.GetAdd(rel);
 				fd.names.Add(f.name);
 				fd.pending++;
-				if(e.type == 'f')
+				if(e.type == 'f') {
 					r.unchecked++;
+					r.unchecked_bytes += e.size;
+				}
 				if(later_link)
 					links.Add(pick(it));
 			}
@@ -465,11 +474,15 @@ struct Streamer {
 	void Process(Ctx& c, Item& it)
 	{
 		Entry& e = it.e;
-		if(e.type == 'f')   // decided below: copied (copy_count) or not
+		if(e.type == 'f') {   // decided below: copied (copy_count) or not
 			r.unchecked--;
+			r.unchecked_bytes -= e.size;
+		}
 		Entry t;
 		String error = "no such file";
-		bool exists = !assume_empty && c.fs[1]->Stat(e.rel, false, t, error);
+		bool exists = !assume_empty && r.Net(c, [&] { return c.fs[1]->Stat(e.rel, false, t, error); });
+		if(r.report.Stopping())
+			return;
 		if(!exists && !Missing(error)) {
 			Fail(e.rel, error);
 			return;
@@ -515,8 +528,8 @@ struct Streamer {
 				}
 				if(e.hash.GetCount() && th.GetCount())
 					same = e.hash == th;
-				else if(!Same(c, e, t, th, same, error)) {
-					if(error != "stopped")
+				else if(!r.Net(c, [&] { return Same(c, e, t, th, same, error); })) {
+					if(error != "stopped" && !r.report.Stopping())
 						Fail(e.rel, error);
 					return;
 				}
@@ -582,7 +595,7 @@ struct Streamer {
 		if(type == 'd') {
 			Vector<FolderEntry> list;
 			String error;
-			if(c.fs[1]->List(rel, list, error))
+			if(r.Net(c, [&] { list.Clear(); return c.fs[1]->List(rel, list, error); }))
 				for(const FolderEntry& f : list)
 					if(!SkipName(f.name))
 						RemoveExtra(c, rel + "/" + f.name, f.type);
@@ -605,17 +618,22 @@ struct Streamer {
 	{
 		if(assume_empty)   // a dry run of --wipe-target: nothing would be left to check
 			return;
-		Vector<FolderEntry> list;
-		String error;
-		if(!c.fs[1]->List(rel, list, error)) {
-			if(!(dry && Missing(error)))   // a dry run did not create it
-				r.Line("warning: cannot read target folder " + Nvl(rel, String("/")) + ": " + error);
-			return;
-		}
 		Index<String> names;
 		{
 			Lock l(r.mx);
-			names = clone(folders.GetAdd(rel).names);
+			const Folder& fd = folders.GetAdd(rel);
+			if(fd.unread)   // what the source has there is not known: delete nothing
+				return;
+			names = clone(fd.names);
+		}
+		Vector<FolderEntry> list;
+		String error;
+		if(!r.Net(c, [&] { list.Clear(); return c.fs[1]->List(rel, list, error); })) {
+			if(r.report.Stopping())
+				return;
+			if(!(dry && Missing(error)))   // a dry run did not create it
+				r.Line("warning: cannot read target folder " + Nvl(rel, String("/")) + ": " + error);
+			return;
 		}
 		bool purge = flags.mode == SyncMode::Mirror && !flags.keep_extra;
 		for(const FolderEntry& f : list) {

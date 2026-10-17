@@ -23,6 +23,17 @@ inline double Since(Clock::time_point t)
 	return std::chrono::duration<double>(Clock::now() - t).count();
 }
 
+// "45 s", "3 min 05 s", "1 h 02 min": for messages.
+inline String Duration(double seconds)
+{
+	int s = (int)seconds;
+	if(s < 60)
+		return AsString(s) + " s";
+	if(s < 3600)
+		return AsString(s / 60) + " min" + (s % 60 ? String(" ") + (s % 60 < 10 ? "0" : "") + AsString(s % 60) + " s" : String());
+	return AsString(s / 3600) + " h " + (s / 60 % 60 < 10 ? "0" : "") + AsString(s / 60 % 60) + " min";
+}
+
 // NAME.treesync-part next to rel, or a short name when that would pass the
 // 255-byte name limit.
 inline String PartRel(const String& rel, int64 run, int seq)
@@ -70,6 +81,7 @@ struct Runner {
 	int64             run = 0;
 	std::atomic<int>  copy_count = 0;
 	std::atomic<int>  unchecked = 0;     // streaming: files queued, not compared with the target yet
+	std::atomic<int64> unchecked_bytes = 0;   // and their sizes
 	std::atomic<bool> counting = false;  // streaming: the pre-scan is still finding files
 	std::atomic<int>  copy_index = 0;
 	Clock::time_point started = Clock::now();
@@ -147,7 +159,10 @@ struct Runner {
 		int64 done = overall_finished;
 		for(int64 d : in_flight)
 			done += d;
-		report.WhenOverall(min(done, overall_total), overall_total);
+		// Like the file counter: the files still to check count too, so the total
+		// does not creep up as the pre-scan finds more.
+		int64 total = overall_total + unchecked_bytes;
+		report.WhenOverall(min(done, total), total);
 	}
 
 	void SetState(int seq, const char *state, int64 bytes = 0, const String& error = Null)
@@ -418,7 +433,9 @@ struct Runner {
 	}
 
 	// Copies (or links, or re-creates a symlink) a.from.rel, verified, into place.
-	bool Copy(Ctx& c, const Step& s, String& error)
+	// index: the file's number in the counter, 0 until it gets one (kept when the
+	// copy is repeated after a network outage).
+	bool Copy(Ctx& c, const Step& s, String& error, int& index)
 	{
 		const Action& a = s.a;
 		const Entry& e = a.from;
@@ -430,7 +447,8 @@ struct Runner {
 			if(to.CanHardLink()) {
 				if(!to.HardLink(a.link_to, part, error) || !MakeRoom(c, a, error) || !to.Rename(part, e.rel, error))
 					return false;
-				copy_index++;
+				if(!index)
+					index = ++copy_index;
 				Line("linked " + e.rel + " -> " + a.link_to);
 				// A new link changes the inode's ctime: refresh the cache for both names.
 				Cache(to, 1 - a.dir, e.rel, e.hash);
@@ -470,7 +488,9 @@ struct Runner {
 
 		CopyProgress p;
 		p.id = s.seq;
-		p.index = ++copy_index;
+		if(!index)
+			index = ++copy_index;
+		p.index = index;
 		p.count = copy_count;
 		p.name = e.rel;
 		p.size = now.size;
@@ -499,8 +519,8 @@ struct Runner {
 			}
 			else
 				ok = ChunkCopy(s.seq, from, to, e.rel, part, now.size, p, t0, out, src_hash, dst_hash, error);
-			if(ok || error == "stopped" || report.Stopping() || Permanent(error))
-				break;
+			if(ok || error == "stopped" || report.Stopping() || Permanent(error) || from.Lost() || to.Lost())
+				break;   // a lost connection is waited for by RunStep, not retried here
 		}
 		if(!ok)
 			return false;
@@ -591,19 +611,25 @@ struct Runner {
 			return false;
 		SetState(s.seq, "in_progress");
 		String error;
-		bool ok = true;
-		switch(s.a.kind) {
-		case ActionKind::Mkdir:  ok = Mkdir(c, s.a, error); break;
-		case ActionKind::Copy:
-		case ActionKind::Link:   ok = Copy(c, s, error); break;
-		case ActionKind::Delete: ok = Delete(c, s.a, error); break;
-		case ActionKind::Conflict: {
-			Lock l(mx);
-			result.conflicts++;
-			report.WhenLine("CONFLICT " + s.a.from.rel + ": " + s.a.note);
-			break;
-		}
-		}
+		int index = 0;
+		// A lost connection is not a failure: once it is back the step runs again (a
+		// big file continues at its last checked chunk).
+		bool ok = Net(c, [&] {
+			error.Clear();
+			switch(s.a.kind) {
+			case ActionKind::Mkdir:  return Mkdir(c, s.a, error);
+			case ActionKind::Copy:
+			case ActionKind::Link:   return Copy(c, s, error, index);
+			case ActionKind::Delete: return Delete(c, s.a, error);
+			case ActionKind::Conflict: {
+				Lock l(mx);
+				result.conflicts++;
+				report.WhenLine("CONFLICT " + s.a.from.rel + ": " + s.a.note);
+				return true;
+			}
+			}
+			return true;
+		});
 		if(!ok && (error == "stopped" || report.Stopping())) {
 			SetState(s.seq, "planned");   // not failed: redo it on resume
 			return false;
@@ -633,6 +659,96 @@ struct Runner {
 			c.fs[i] = &s;
 		}
 		return true;
+	}
+
+	// Network outages -------------------------------------------------------------
+	// A thread whose remote side lost its connection waits here and reconnects.
+	// The first to notice says so; the first to get back says so.
+	bool              net_down = false;
+	Clock::time_point net_since;
+
+	bool WaitForNetwork(TreeFs& fs)
+	{
+		String host = fs.Host();
+		Clock::time_point t0 = Clock::now();
+		String error;
+		// A connection that sat idle through an outage is only found broken once the
+		// network is back: then one quiet reconnect does it.
+		if(!report.Stopping() && flags.network_wait && fs.Reconnect(error)) {
+			Line("network: reconnected to " + host);
+			return true;
+		}
+		{
+			Lock l(mx);
+			if(!net_down) {
+				net_down = true;
+				net_since = t0;
+				if(flags.network_wait)
+					report.WhenLine("network: lost the connection to " + host + "; waiting up to " +
+					                Duration(flags.network_wait) + " for it to come back (--network-wait)");
+				report.WhenNetwork(true, host);
+			}
+		}
+		for(int tries = 1;; tries++) {
+			if(report.Stopping())
+				return false;
+			if(Since(t0) >= flags.network_wait) {
+				Lock l(mx);
+				if(!report.halted) {
+					report.halted = true;
+					report.WhenLine(flags.network_wait
+						? "network: " + host + " did not come back within " + Duration(flags.network_wait) +
+						  "; stopping. Run the same sync again to carry on where it stopped."
+						: "network: lost the connection to " + host + "; stopping (--network-wait=0). "
+						  "Run the same sync again to carry on where it stopped.");
+					report.WhenNetwork(false, host);
+				}
+				return false;
+			}
+			if(fs.Reconnect(error))
+				break;
+			{
+				Lock l(mx);
+				report.WhenStatus(Format("network: waiting for %s (%s, try %d): %s", host,
+				                         Duration(Since(net_since)), tries, error));
+			}
+			for(int k = 0; k < 20 && !report.Stopping(); k++)   // 5 s, in short naps
+				std::this_thread::sleep_for(std::chrono::milliseconds(250));
+		}
+		Lock l(mx);
+		if(net_down) {
+			net_down = false;
+			report.WhenLine("network: " + host + " is back after " + Duration(Since(net_since)) + "; carrying on");
+			report.WhenNetwork(false, host);
+		}
+		return true;
+	}
+
+	// After a failed call: true if a side had lost its connection and is connected
+	// again, so the call is worth repeating. False for any other failure, when
+	// stopped, or when the network did not come back in time.
+	bool Recover(Ctx& c)
+	{
+		bool any = false;
+		for(int i = 0; i < 2; i++)
+			if(c.fs[i] && c.fs[i]->Lost()) {
+				any = true;
+				if(!WaitForNetwork(*c.fs[i]))
+					return false;
+			}
+		return any;
+	}
+
+	// op, repeated after each outage the network recovers from.
+	template <class F>
+	bool Net(Ctx& c, F op)
+	{
+		for(;;) {
+			if(op())
+				return true;
+			if(!Recover(c))
+				return false;
+		}
 	}
 
 	// File copies, on up to --threads threads. False when stopped.

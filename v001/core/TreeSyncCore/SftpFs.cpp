@@ -21,6 +21,9 @@
 #include <cstring>
 
 static const int TIMEOUT_MS = 120000;
+// A connection with data unacknowledged this long is dead (TCP_USER_TIMEOUT); an
+// idle one is probed by keep-alive. Either way a cut link shows within a minute.
+static const int DEAD_LINK_MS = 45000;
 
 static const char *FxName(unsigned long fx)
 {
@@ -48,8 +51,56 @@ struct SftpFs::Impl {
 	LIBSSH2_SFTP    *sftp = nullptr;
 	String           root;
 	bool             compress = false;
+	bool             lost = false;
 
 	LIBSSH2_SESSION *S()    { return session; }
+
+	// The connection is gone when the last error is a socket or transport one; then
+	// the socket is shut down at once, so the calls still to come (closing handles)
+	// fail straight away instead of each waiting for the timeout.
+	bool CheckLost()
+	{
+		if(lost || !session)
+			return lost;
+		switch(libssh2_session_last_errno(session)) {
+		case LIBSSH2_ERROR_SOCKET_SEND:
+		case LIBSSH2_ERROR_SOCKET_RECV:
+		case LIBSSH2_ERROR_SOCKET_TIMEOUT:
+		case LIBSSH2_ERROR_SOCKET_DISCONNECT:
+		case LIBSSH2_ERROR_BAD_SOCKET:
+		case LIBSSH2_ERROR_TIMEOUT:
+		case LIBSSH2_ERROR_KEX_FAILURE:
+		case LIBSSH2_ERROR_CHANNEL_CLOSED:
+		case LIBSSH2_ERROR_CHANNEL_EOF_SENT:
+			lost = true;
+			break;
+		case LIBSSH2_ERROR_SFTP_PROTOCOL:
+			lost = sftp && (libssh2_sftp_last_error(sftp) == LIBSSH2_FX_CONNECTION_LOST ||
+			                libssh2_sftp_last_error(sftp) == LIBSSH2_FX_NO_CONNECTION);
+			break;
+		}
+		if(lost && sock >= 0)
+			shutdown(sock, SHUT_RDWR);
+		return lost;
+	}
+
+	void Close()
+	{
+		if(sock >= 0 && lost)
+			shutdown(sock, SHUT_RDWR);
+		if(sftp)
+			libssh2_sftp_shutdown(sftp);
+		if(session) {
+			if(!lost)
+				libssh2_session_disconnect(session, "treesync done");
+			libssh2_session_free(session);
+		}
+		if(sock >= 0)
+			close(sock);
+		sftp = nullptr;
+		session = nullptr;
+		sock = -1;
+	}
 
 	String P(const String& rel) const
 	{
@@ -61,9 +112,11 @@ struct SftpFs::Impl {
 		char *msg = nullptr;
 		int len = 0;
 		int rc = S() ? libssh2_session_last_error(S(), &msg, &len, 0) : 0;
-		if(rc == LIBSSH2_ERROR_SFTP_PROTOCOL && sftp)
-			return what + ": " + FxName(libssh2_sftp_last_error(sftp));
-		return what + ": " + (msg && len ? String(msg, len) : String("SSH error"));
+		String text = rc == LIBSSH2_ERROR_SFTP_PROTOCOL && sftp ? String(FxName(libssh2_sftp_last_error(sftp)))
+		            : msg && len ? String(msg, len) : String("SSH error");
+		if(CheckLost())
+			text << " (connection to " << e.host << " lost)";
+		return what + ": " + text;
 	}
 
 	unsigned long Fx()      { return sftp ? libssh2_sftp_last_error(sftp) : 0; }
@@ -126,17 +179,7 @@ struct SftpFs::Impl {
 		return true;
 	}
 
-	~Impl()
-	{
-		if(sftp)
-			libssh2_sftp_shutdown(sftp);
-		if(session) {
-			libssh2_session_disconnect(session, "treesync done");
-			libssh2_session_free(session);
-		}
-		if(sock >= 0)
-			close(sock);
-	}
+	~Impl()                 { CheckLost(); Close(); }
 };
 
 SftpFs::SftpFs(const TreeEndpoint& e, const String& known_hosts, bool compress)
@@ -189,8 +232,10 @@ static int ConnectTcp(const String& host, int port, String& error)
 		setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
 		// Keep-alive: on a long run some connections sit idle for minutes (pre-scan,
 		// post-scan); probes keep firewalls and NAT from dropping them and notice a
-		// dead server: first probe after 60 s idle, then every 15 s, give up after 4.
-		int idle = 60, interval = 15, count = 4;
+		// dead link: first probe after 20 s idle, then every 5 s. A busy server still
+		// answers probes (its kernel does), so a slow disk there is not taken for one.
+		int idle = 20, interval = 5, count = 4, dead = DEAD_LINK_MS;
+		setsockopt(fd, IPPROTO_TCP, TCP_USER_TIMEOUT, &dead, sizeof(dead));
 		setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one));
 		setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle));
 		setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &interval, sizeof(interval));
@@ -406,6 +451,10 @@ struct RemoteScanner {
 				Warn(m.Err("error while reading folder " + path));
 			libssh2_sftp_close_handle(h);
 		}
+		// A folder missed because the connection broke would look empty, and its
+		// files deleted: the scan ends here instead.
+		if(m.CheckLost())
+			return Null;
 		SortByKey(items);
 
 		String listing;
@@ -470,7 +519,7 @@ struct RemoteScanner {
 					String error;
 					int64 bytes = 0;
 					if(!m.HashPath(p, e.hash, error, report.stop, &bytes, report.throttle)) {
-						if(report.Stopping())
+						if(report.Stopping() || m.CheckLost())
 							return Null;
 						Warn(error);
 						continue;
@@ -501,7 +550,9 @@ bool SftpFs::Scan(Db& db, const SyncFlags& flags, SyncReport& report, Vector<Ent
 	root_hash = s.Dir(impl->root, Null);
 	if(IsNull(root_hash)) {
 		db.Exec("COMMIT");
-		error = "stopped";
+		error = impl->lost ? "lost the connection to " + impl->e.host + " while scanning it; nothing was "
+		                     "changed. Run again when the network is back (the hashes found so far are kept)."
+		                   : String("stopped");
 		return false;
 	}
 	cache.Finish();
@@ -851,4 +902,27 @@ bool SftpFs::HardLink(const String&, const String& rel, String& error)
 {
 	error = "SFTP cannot create hard links: " + rel;
 	return false;
+}
+
+bool SftpFs::Lost()
+{
+	return impl->CheckLost();
+}
+
+// A new connection in place of the broken one: same object, so whoever holds it
+// carries on. All its files must be closed already.
+bool SftpFs::Reconnect(String& error)
+{
+	impl->Close();
+	impl->lost = false;
+	if(Connect(error))
+		return true;
+	impl->Close();
+	impl->lost = true;
+	return false;
+}
+
+String SftpFs::Host() const
+{
+	return impl->e.host;
 }

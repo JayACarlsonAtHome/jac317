@@ -66,6 +66,7 @@ struct SyncFlags {
 	int    chunk_mib = 64;           // chunk size for big files
 	int    bwlimit_kib = 0;          // KiB/s over the network (local: writes); 0 = no limit
 	int    time_tolerance = 3;       // seconds: times of the two sides this close count as equal
+	int    network_wait = 1800;      // seconds to wait for a lost remote side to come back; 0 = stop at once
 };
 
 // --time-tolerance in nanoseconds. Clocks and file times differ slightly between
@@ -106,7 +107,7 @@ extern const char *HELP_EXCLUDE_DIRS;
 extern const char *HELP_OWNERS;           // the Owners choice: off, by name, by number
 
 constexpr int BOOL_OPTION_COUNT = 16;
-constexpr int INT_OPTION_COUNT = 7;
+constexpr int INT_OPTION_COUNT = 8;
 extern const BoolOption BOOL_OPTIONS[];
 extern const IntOption  INT_OPTIONS[];
 
