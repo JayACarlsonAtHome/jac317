@@ -1,0 +1,79 @@
+# --- U++ / TheIDE ---
+# Build output directories
+upp.out/
+_out/
+out/
+.cache/
+
+# TheIDE per-user / session files
+*.aux
+*.bak
+*.tmp
+*.idx
+*.ipp.cache
+
+# U++ generated files
+*.iml.cache
+*.lay.cache
+*.tpp.cache
+
+# --- C++ build artifacts ---
+# Object files
+*.o
+*.obj
+*.lo
+*.slo
+*.ko
+
+# Precompiled headers
+*.gch
+*.pch
+
+# Libraries
+*.a
+*.lib
+*.la
+*.lai
+*.so
+*.so.*
+*.dylib
+*.dll
+
+# Executables
+*.exe
+*.out
+*.app
+
+# Debug / compiler output
+*.pdb
+*.ilk
+*.map
+*.d
+*.dSYM/
+
+# CMake / Make (if used)
+build/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+
+# --- Runtime data ---
+# Local SQLite hash cache
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# --- Editors / OS ---
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Claude scratch
+tmp_claude/
