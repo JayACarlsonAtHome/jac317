@@ -46,6 +46,7 @@ struct SyncFlags {
 	bool   dst_tolerance = false;    // allow exact 1-hour shifts
 	bool   follow_links = false;     // write out what symlinks point to
 	bool   hard_links = true;        // relink hard-linked files instead of writing each out
+	bool   compress = false;         // zlib on SSH connections
 	bool   include_same = false;
 	bool   skip_older = false;
 	bool   skip_newer = false;
@@ -76,7 +77,7 @@ struct IntOption {
 	int min, max;
 };
 
-constexpr int BOOL_OPTION_COUNT = 11;
+constexpr int BOOL_OPTION_COUNT = 12;
 constexpr int INT_OPTION_COUNT = 5;
 extern const BoolOption BOOL_OPTIONS[];
 extern const IntOption  INT_OPTIONS[];
@@ -86,6 +87,7 @@ struct SyncSetup {
 	TreeEndpoint target;
 	SyncFlags    flags;
 	String       db;              // --db=PATH; empty = DefaultDbPath()
+	String       known_hosts;     // --known-hosts=FILE; empty = ~/.ssh/known_hosts
 	bool         fresh = false;   // --fresh: do not resume an unfinished run
 };
 

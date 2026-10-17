@@ -12,6 +12,7 @@ const BoolOption BOOL_OPTIONS[] = {
 	{ "dst-tolerance",    &SyncFlags::dst_tolerance,    "/DST", "Allow exact 1-hour (DST) time shifts" },
 	{ "follow-links",     &SyncFlags::follow_links,     "",     "Write out symlink targets, not the links" },
 	{ "hard-links",       &SyncFlags::hard_links,       "",     "Relink hard-linked files, not copies" },
+	{ "compress",         &SyncFlags::compress,         "",     "Compress SSH traffic (helps text, not media)" },
 	{ "include-same",     &SyncFlags::include_same,     "/IS",  "Include same files (rehash / recopy)" },
 	{ "skip-older",       &SyncFlags::skip_older,       "/XO",  "Skip if source is older than target" },
 	{ "skip-newer",       &SyncFlags::skip_newer,       "/XN",  "Skip if source is newer than target" },
@@ -105,6 +106,8 @@ Vector<String> ToArgs(const SyncSetup& s)
 	args.Append(FlagArgs(s.flags));
 	if(s.db.GetCount())
 		args.Add("--db=" + s.db);
+	if(s.known_hosts.GetCount())
+		args.Add("--known-hosts=" + s.known_hosts);
 	if(s.fresh)
 		args.Add("--fresh");
 	return args;
@@ -194,10 +197,10 @@ int ParseCommandLine(const Vector<String>& args, SyncSetup& s, String& error)
 			s.fresh = true;
 			continue;
 		}
-		if(name == "db") {
+		if(name == "db" || name == "known-hosts") {
 			if(!need())
 				return PARSE_ERROR;
-			s.db = CleanPath(value);
+			(name == "db" ? s.db : s.known_hosts) = CleanPath(value);
 			continue;
 		}
 		if(name == "exclude-file" || name == "exclude-dir") {
@@ -257,7 +260,9 @@ String Usage()
 	  << "  --SIDE-user=USER       remote login\n"
 	  << "  --SIDE-port=PORT       SSH port (default 22)\n"
 	  << "  --SIDE-key=FILE        SSH key file\n"
-	  << "  (passwords are only accepted in the setup screen)\n\n"
+	  << "  Login order: --SIDE-key, a password (setup screen, or treesync-cli\n"
+	  << "  --password-stdin), ssh-agent, then ~/.ssh/id_ed25519, id_ecdsa, id_rsa.\n"
+	  << "  The host key must already be in known_hosts (connect once with ssh).\n\n"
 	  << "Mode (default --mirror):\n";
 	for(const auto& m : MODES)
 		u << Format("  --%-21s%s", m.name, m.text)
@@ -274,7 +279,8 @@ String Usage()
 	  << "  --exclude-dir=GLOB     Skip matching folders, repeatable (robocopy /XD)\n\n"
 	  << "Run:\n"
 	  << "  --fresh                Start over instead of resuming an unfinished run\n"
-	  << "  --db=PATH              Database file (default " << DefaultDbPath() << ")\n\n"
+	  << "  --db=PATH              Database file (default " << DefaultDbPath() << ")\n"
+	  << "  --known-hosts=FILE     SSH known_hosts file (default ~/.ssh/known_hosts)\n\n"
 	  << "  -h, --help             Show this help\n";
 	return u;
 }

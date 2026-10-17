@@ -22,6 +22,19 @@ String SortKey(const String& rel)
 	return k;
 }
 
+bool SkipName(const String& name)
+{
+	return name == "." || name == ".." || name.EndsWith(".treesync-part");
+}
+
+bool Excluded(const String& patterns, const String& name)
+{
+	for(const String& p : Split(patterns, ';'))
+		if(fnmatch(p, name, 0) == 0)
+			return true;
+	return false;
+}
+
 static int64 Ns(const timespec& t)
 {
 	return (int64)t.tv_sec * 1000000000 + t.tv_nsec;
@@ -45,67 +58,71 @@ static bool UnstableInodes(int fd)
 	return false;
 }
 
-static bool Matches(const String& patterns, const String& name)
+// HashCache -----------------------------------------------------------------
+
+HashCache::HashCache(Db& db, const String& root, const SyncFlags& flags, bool unstable)
+:	db(db), root(root), flags(flags), unstable(unstable),
+	find(db, "SELECT dev, ino, size, mtime_ns, ctime_ns, sha256 FROM files WHERE root = ? AND rel = ?"),
+	store(db, "INSERT OR REPLACE INTO files VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
 {
-	for(const String& p : Split(patterns, ';'))
-		if(fnmatch(p, name, 0) == 0)
-			return true;
-	return false;
+	stamp = GetUTCSeconds(GetSysTime()) * 1000 + Random(1000);
+	db.Exec("BEGIN");
 }
+
+bool HashCache::Lookup(const Entry& e, String& hash)
+{
+	find.Reset();
+	find.Text(1, root).Text(2, e.rel);
+	if(!find.Step())
+		return false;
+	int64 tolerance = flags.fat_file_times ? 2000000000LL : 0;
+	int64 dt = abs(find.Int(3) - e.mtime_ns);
+	bool time_ok = dt <= tolerance || (flags.dst_tolerance && abs(dt - 3600000000000LL) <= tolerance);
+	bool ok = find.Int(2) == e.size && time_ok &&
+	          (unstable || (find.Int(0) == e.dev && find.Int(1) == e.ino && find.Int(4) == e.ctime_ns));
+	if(ok)
+		hash = find.Text(5);
+	find.Reset();
+	return ok && hash.GetCount() == 64;
+}
+
+void HashCache::Store(const Entry& e)
+{
+	store.Text(1, root).Text(2, e.rel).Text(3, String(e.type, 1))
+	     .Int(4, e.dev).Int(5, e.ino).Int(6, e.nlink).Int(7, e.size)
+	     .Int(8, e.mtime_ns).Int(9, e.ctime_ns).Int(10, e.mode).Text(11, e.link)
+	     .Text(12, e.hash).Int(13, stamp);
+	store.Run();
+	// Commit in batches so a stopped scan keeps the hashes it already has.
+	if(++pending >= 500) {
+		db.Exec("COMMIT; BEGIN");
+		pending = 0;
+	}
+}
+
+void HashCache::Finish()
+{
+	Stmt(db, "DELETE FROM files WHERE root = ? AND seen <> ?").Text(1, root).Int(2, stamp).Run();
+	db.Exec("COMMIT");
+}
+
+// Local scanner --------------------------------------------------------------
 
 namespace {
 
 struct Scanner {
-	Db&               db;
 	String            root;
 	const SyncFlags&  flags;
 	SyncReport&       report;
 	Vector<Entry>&    out;
 	ScanStats&        stats;
-	bool              unstable = false;
-	int64             stamp = 0;
+	HashCache&        cache;
 	Index<Tuple<int64, int64>> open_dirs;   // (dev, ino) of folders being walked: loop guard
-	Stmt              find, store;
-	int               pending = 0;
 	std::chrono::steady_clock::time_point last_status = std::chrono::steady_clock::now();
 
-	Scanner(Db& db, const String& root, const SyncFlags& flags, SyncReport& report,
-	        Vector<Entry>& out, ScanStats& stats)
-	:	db(db), root(root), flags(flags), report(report), out(out), stats(stats),
-		find(db, "SELECT dev, ino, size, mtime_ns, ctime_ns, sha256 FROM files WHERE root = ? AND rel = ?"),
-		store(db, "INSERT OR REPLACE INTO files VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-	{}
-
-	bool SameFile(const Entry& e, String& hash)
-	{
-		find.Reset();
-		find.Text(1, root).Text(2, e.rel);
-		if(!find.Step())
-			return false;
-		int64 tolerance = flags.fat_file_times ? 2000000000LL : 0;
-		int64 dt = abs(find.Int(3) - e.mtime_ns);
-		bool time_ok = dt <= tolerance || (flags.dst_tolerance && abs(dt - 3600000000000LL) <= tolerance);
-		bool ok = find.Int(2) == e.size && time_ok &&
-		          (unstable || (find.Int(0) == e.dev && find.Int(1) == e.ino && find.Int(4) == e.ctime_ns));
-		if(ok)
-			hash = find.Text(5);
-		find.Reset();
-		return ok && hash.GetCount() == 64;
-	}
-
-	void Store(const Entry& e)
-	{
-		store.Text(1, root).Text(2, e.rel).Text(3, String(e.type, 1))
-		     .Int(4, e.dev).Int(5, e.ino).Int(6, e.nlink).Int(7, e.size)
-		     .Int(8, e.mtime_ns).Int(9, e.ctime_ns).Int(10, e.mode).Text(11, e.link)
-		     .Text(12, e.hash).Int(13, stamp);
-		store.Run();
-		// Commit in batches so a stopped scan keeps the hashes it already has.
-		if(++pending >= 500) {
-			db.Exec("COMMIT; BEGIN");
-			pending = 0;
-		}
-	}
+	Scanner(const String& root, const SyncFlags& flags, SyncReport& report,
+	        Vector<Entry>& out, ScanStats& stats, HashCache& cache)
+	:	root(root), flags(flags), report(report), out(out), stats(stats), cache(cache) {}
 
 	void Status(const String& rel)
 	{
@@ -126,14 +143,13 @@ struct Scanner {
 		report.WhenLine("warning: " + msg);
 	}
 
-	// Scans the open folder fd; returns its folder hash, or "" if stopped.
+	// Scans the open folder fd; returns its folder hash, or Null if stopped.
 	String Dir(int fd, const String& rel)
 	{
 		Vector<String> names;
 		if(DIR *d = fdopendir(dup(fd))) {
 			while(dirent *e = readdir(d))
-				if(strcmp(e->d_name, ".") && strcmp(e->d_name, "..") &&
-				   !String(e->d_name).EndsWith(".treesync-part"))
+				if(!SkipName(e->d_name))
 					names.Add(e->d_name);
 			closedir(d);
 		}
@@ -141,7 +157,7 @@ struct Scanner {
 			Warn("cannot read folder " + AppendFileName(root, rel) + ": " + strerror(errno));
 		Sort(names);
 
-		String listing;   // what the folder hash covers: "type hash name\n" per child
+		String listing;
 		for(const String& name : names) {
 			if(report.Stopping())
 				return Null;
@@ -172,7 +188,7 @@ struct Scanner {
 			Status(e.rel);
 
 			if(S_ISDIR(st.st_mode)) {
-				if(Matches(flags.exclude_dirs, name))
+				if(Excluded(flags.exclude_dirs, name))
 					continue;
 				Tuple<int64, int64> id = { e.dev, e.ino };
 				if(open_dirs.Find(id) >= 0) {
@@ -195,8 +211,8 @@ struct Scanner {
 				if(IsNull(h))
 					return Null;
 				out[at].hash = h;
-				Store(out[at]);
-				listing << "d " << h << ' ' << name << '\n';
+				cache.Store(out[at]);
+				ListingLine(listing, 'd', h, name);
 			}
 			else if(S_ISLNK(st.st_mode)) {
 				char buf[PATH_MAX + 1];
@@ -205,14 +221,14 @@ struct Scanner {
 				e.link = String(buf, (int)max<ssize_t>(n, 0));
 				e.hash = SHA256String("symlink\n" + e.link);
 				out.Add(e);
-				Store(e);
-				listing << "l " << e.hash << ' ' << name << '\n';
+				cache.Store(e);
+				ListingLine(listing, 'l', e.hash, name);
 			}
 			else if(S_ISREG(st.st_mode)) {
-				if(Matches(flags.exclude_files, name))
+				if(Excluded(flags.exclude_files, name))
 					continue;
 				e.type = 'f';
-				if(SameFile(e, e.hash))
+				if(cache.Lookup(e, e.hash))
 					stats.reused++;
 				else {
 					String error;
@@ -227,8 +243,8 @@ struct Scanner {
 					stats.hashed_bytes += bytes;
 				}
 				out.Add(e);
-				Store(e);
-				listing << "f " << e.hash << ' ' << name << '\n';
+				cache.Store(e);
+				ListingLine(listing, 'f', e.hash, name);
 			}
 			else
 				Warn("skipped special file (device, pipe or socket): " + AppendFileName(root, e.rel));
@@ -259,10 +275,8 @@ bool ScanTree(Db& db, const String& root, const SyncFlags& flags, SyncReport& re
 	   fstatvfs(fd, &vfs) == 0 && vfs.f_files > 0)
 		stats.estimate = vfs.f_files - vfs.f_ffree;
 
-	Scanner s(db, root, flags, report, out, stats);
-	s.unstable = UnstableInodes(fd);
-	s.stamp = GetUTCSeconds(GetSysTime()) * 1000 + Random(1000);
-	db.Exec("BEGIN");
+	HashCache cache(db, root, flags, UnstableInodes(fd));
+	Scanner s(root, flags, report, out, stats, cache);
 	root_hash = s.Dir(fd, Null);
 	close(fd);
 	if(IsNull(root_hash)) {
@@ -270,9 +284,7 @@ bool ScanTree(Db& db, const String& root, const SyncFlags& flags, SyncReport& re
 		error = "stopped";
 		return false;
 	}
-	// Forget files that are gone from this tree.
-	Stmt(db, "DELETE FROM files WHERE root = ? AND seen <> ?").Text(1, root).Int(2, s.stamp).Run();
-	db.Exec("COMMIT");
+	cache.Finish();
 	Sort(out, [](const Entry& a, const Entry& b) { return SortKey(a.rel) < SortKey(b.rel); });
 	return true;
 }

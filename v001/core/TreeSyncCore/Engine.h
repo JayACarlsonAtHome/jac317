@@ -54,6 +54,7 @@ struct Entry : Moveable<Entry> {
 	char   type = 'f';      // 'f' file, 'd' folder, 'l' symlink
 	int64  dev = 0, ino = 0, nlink = 1, size = 0, mtime_ns = 0, ctime_ns = 0;
 	int    mode = 0;
+	int64  uid = -1, gid = -1;   // filled by TreeFs::Stat, not stored
 	String link;            // symlink target
 	String hash;            // SHA-256 hex; folders: hash of their contents
 };
@@ -84,6 +85,36 @@ struct SyncReport {
 bool ScanTree(Db& db, const String& root, const SyncFlags& flags, SyncReport& report,
               Vector<Entry>& out, String& root_hash, ScanStats& stats, String& error);
 
+// The files table as a hash cache for one tree (root = TreeFs::Id()). Used by the
+// local and the SFTP scanner, so both treat cached hashes the same way.
+class HashCache {
+	Db&              db;
+	String           root;
+	const SyncFlags& flags;
+	bool             unstable;   // inode numbers not usable: match on size and time only
+	Stmt             find, store;
+	int              pending = 0;
+
+public:
+	int64 stamp;
+
+	bool Lookup(const Entry& e, String& hash);
+	void Store(const Entry& e);
+	void Finish();               // forget entries not seen in this scan, commit
+
+	HashCache(Db& db, const String& root, const SyncFlags& flags, bool unstable);
+};
+
+// One line of a folder's listing; the folder hash is SHA-256 of all its lines,
+// built the same way locally and over SFTP so equal trees hash equal.
+inline void ListingLine(String& listing, char type, const String& hash, const String& name)
+{
+	listing << type << ' ' << hash << ' ' << name << '\n';
+}
+
+bool SkipName(const String& name);   // ".", "..", our own .treesync-part files
+bool Excluded(const String& patterns, const String& name);
+
 // Plan.cpp -------------------------------------------------------------------
 
 enum class ActionKind { Mkdir, Copy, Link, Delete, Conflict };
@@ -108,6 +139,106 @@ Vector<Action> PlanSync(const Vector<Entry>& src, const Vector<Entry>& dst, cons
 bool   HashAt(int dirfd, const String& name, String& hash, String& error,
               const std::atomic<bool> *stop = nullptr, int64 *bytes = nullptr, bool follow = false);
 bool   CopySmall(int src_dir, const String& name, int dst_dir, const String& part, String& error);
+
+// TreeFs.cpp: one side of a sync, local or over SFTP ----------------------------
+
+struct FileAttrs {
+	int   mode = 0644;
+	int64 mtime_ns = 0;
+	int64 uid = -1, gid = -1;   // -1: leave the owner alone
+};
+
+// An open file for chunked copying.
+struct TreeFile {
+	virtual bool ReadAt(int64 off, void *buf, int64 len, String& error) = 0;
+	virtual bool WriteAt(int64 off, const void *buf, int64 len, String& error) = 0;
+	virtual bool Truncate(int64 size, String& error) = 0;
+	virtual void Flush() = 0;
+	virtual bool SetAttrs(const FileAttrs& a, String& error) = 0;
+	bool         Hash(int64 size, String& hash, String& error, const std::atomic<bool> *stop);
+	virtual ~TreeFile() {}
+};
+
+// Paths are relative to the tree root ("" is the root itself).
+class TreeFs {
+public:
+	virtual String Id() const = 0;        // key in the database: path, or sftp://user@host:port/path
+	virtual bool   IsLocal() const        { return false; }
+	virtual bool   CanHardLink() const    { return false; }
+	virtual bool   RootExists() = 0;
+	virtual bool   MakeRoot(String& error) = 0;
+	virtual bool   Scan(Db& db, const SyncFlags& flags, SyncReport& report, Vector<Entry>& out,
+	                    String& root_hash, ScanStats& stats, String& error) = 0;
+	virtual bool   Stat(const String& rel, bool follow, Entry& e, String& error) = 0;
+	virtual bool   Hash(const String& rel, bool follow, String& hash, String& error,
+	                    const std::atomic<bool> *stop) = 0;
+	virtual One<TreeFile> Open(const String& rel, bool write, String& error) = 0;   // write: create, keep content
+	virtual bool   SetAttrs(const String& rel, const FileAttrs& a, String& error) = 0;
+	virtual bool   Mkdir(const String& rel, int mode, String& error) = 0;           // fine if it exists
+	virtual int    Remove(const String& rel, bool dir, String& error) = 0;          // 0 ok/gone, 1 not empty, -1 error
+	virtual bool   Symlink(const String& rel, const String& target, String& error) = 0;
+	virtual bool   Rename(const String& from, const String& to, String& error) = 0; // replaces to
+	virtual bool   HardLink(const String& existing, const String& rel, String& error) = 0;
+	virtual ~TreeFs() {}
+};
+
+class LocalFs : public TreeFs {
+	String root;
+
+public:
+	int    ParentFd(const String& rel) const;   // for the cp fast path
+	String Id() const override           { return root; }
+	bool   IsLocal() const override      { return true; }
+	bool   CanHardLink() const override  { return true; }
+	bool   RootExists() override;
+	bool   MakeRoot(String& error) override;
+	bool   Scan(Db& db, const SyncFlags& flags, SyncReport& report, Vector<Entry>& out,
+	            String& root_hash, ScanStats& stats, String& error) override;
+	bool   Stat(const String& rel, bool follow, Entry& e, String& error) override;
+	bool   Hash(const String& rel, bool follow, String& hash, String& error,
+	            const std::atomic<bool> *stop) override;
+	One<TreeFile> Open(const String& rel, bool write, String& error) override;
+	bool   SetAttrs(const String& rel, const FileAttrs& a, String& error) override;
+	bool   Mkdir(const String& rel, int mode, String& error) override;
+	int    Remove(const String& rel, bool dir, String& error) override;
+	bool   Symlink(const String& rel, const String& target, String& error) override;
+	bool   Rename(const String& from, const String& to, String& error) override;
+	bool   HardLink(const String& existing, const String& rel, String& error) override;
+
+	explicit LocalFs(const String& root) : root(root) {}
+};
+
+// Over SFTP (libssh2). The host key must already be in known_hosts. SFTP has no
+// inode numbers and only whole-second times, so the hash cache matches on size and
+// time, and hard links are written out as copies.
+class SftpFs : public TreeFs {
+public:
+	struct Impl;      // defined in SftpFs.cpp only
+
+private:
+	One<Impl> impl;
+
+public:
+	bool   Connect(String& error);
+	String Id() const override;
+	bool   RootExists() override;
+	bool   MakeRoot(String& error) override;
+	bool   Scan(Db& db, const SyncFlags& flags, SyncReport& report, Vector<Entry>& out,
+	            String& root_hash, ScanStats& stats, String& error) override;
+	bool   Stat(const String& rel, bool follow, Entry& e, String& error) override;
+	bool   Hash(const String& rel, bool follow, String& hash, String& error,
+	            const std::atomic<bool> *stop) override;
+	One<TreeFile> Open(const String& rel, bool write, String& error) override;
+	bool   SetAttrs(const String& rel, const FileAttrs& a, String& error) override;
+	bool   Mkdir(const String& rel, int mode, String& error) override;
+	int    Remove(const String& rel, bool dir, String& error) override;
+	bool   Symlink(const String& rel, const String& target, String& error) override;
+	bool   Rename(const String& from, const String& to, String& error) override;
+	bool   HardLink(const String& existing, const String& rel, String& error) override;
+
+	SftpFs(const TreeEndpoint& e, const String& known_hosts, bool compress);
+	~SftpFs();
+};
 
 // Sync.cpp -------------------------------------------------------------------
 

@@ -2,6 +2,7 @@ description "TreeSync engine side: settings, options, paths, disks (no GUI)\n";
 
 uses
 	Core,
+	Core/SSH,
 	plugin/sqlite3;
 
 file
@@ -18,4 +19,6 @@ file
 	Scan.cpp,
 	Plan.cpp,
 	Copy.cpp,
+	LocalFs.cpp,
+	SftpFs.cpp,
 	Sync.cpp;

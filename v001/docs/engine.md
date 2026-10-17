@@ -5,7 +5,10 @@ Status: built for local trees (`core/TreeSyncCore`: `Db.cpp`, `Scan.cpp`, `Plan.
 Differences from the first design, and gaps:
 - **Merge never deletes**: something present on only one side is copied to the other.
 - **Type changes are conflicts**: when a name is a file on one side and a folder on the other, nothing is changed.
-- **Not yet**: remote trees, `--threads` (copies run one at a time), and resuming a scan part-way through hashing one big file (the files hashed before the stop are kept).
+- **Remote trees**: built on SFTP (`SftpFs.cpp`), behind the same `TreeFs` interface as local trees (`LocalFs.cpp`). Local to local, small files still go through `cp`; every other copy uses the chunked copy, so it is resumable.
+- **Not yet**: `--threads` (copies run one at a time), and resuming a scan part-way through hashing one big file (the files hashed before the stop are kept).
+- **Retries** are skipped for errors waiting will not fix (permission denied, no space, read-only, quota, unsupported, missing file).
+- **Flushing**: only multi-chunk copies are flushed after each chunk; a one-chunk copy that is cut short is simply copied again.
 - **Verified copies are cached**: after a copy passes its SHA-256 check, the target file's row goes straight into `files`, so the next scan of the target does not read it again.
 
 ## Principle: SQLite is the record of truth

@@ -126,7 +126,9 @@ The switches are modelled on robocopy. TreeSync adds `--merge`, which copies cha
 | `--threads=N` | Copy threads (default 8; not used yet, copies run one at a time) | `/MT:n` |
 | `--big-file-mib=N` | Files this big or bigger are copied in resumable chunks (default 1024) | |
 | `--chunk-mib=N` | Chunk size for big files (default 64) | |
+| `--compress` | Compress SSH traffic with zlib; the other end decompresses on its own. Helps text on slow links, not media | |
 | `--fresh` | Start over instead of resuming an unfinished run | |
+| `--known-hosts=FILE` | SSH known_hosts file (default `~/.ssh/known_hosts`) | |
 | `--db=PATH` | Database file (default `~/.local/share/treesync/treesync.db`) | |
 | `--SIDE=PATH` | Tree root; SIDE is `source` or `target` | |
 | `--SIDE-host`, `-user`, `-port`, `-key` | Remote login for that side | |
@@ -137,7 +139,18 @@ Content is compared by SHA-256. File size and time decide whether a cached hash 
 
 ## Status
 
-Working for local trees, with `treesync-cli` and the GUI: scan with a hash cache, Copy / Mirror / Merge, verified copies, hard links, symlinks, resumable runs and big files. Not yet: remote trees (SSH/SFTP), copying with several threads, and live per-chunk progress in the GUI log.
+Working for local trees and over SFTP, with `treesync-cli` and the GUI: scan with a hash cache, Copy / Mirror / Merge, verified copies, hard links, symlinks, resumable runs and big files. Tested against a Fedora 44 server in both directions. Not yet: copying owners and groups (`--preserve-owner`), browsing remote trees in the GUI, password login from the GUI, copying with several threads, and live per-chunk progress in the GUI log.
+
+## Remote trees (SFTP)
+
+```bash
+treesync-cli --source=/data --target-host=server --target-user=jay --target=/backup/data --mirror --no-dry-run
+```
+
+- **Login**: in the order ssh uses: `--SIDE-key`, ssh-agent, `~/.ssh/id_ed25519` / `id_ecdsa` / `id_rsa`, then a password.
+- **Host key**: must already be in `known_hosts` (connect once with `ssh` to check and accept it). An unknown or changed key is refused, with its fingerprint in the message.
+- **Copies**: always use the chunked copy, so a stopped remote copy resumes part-way through the file. Each copy is read back over the connection and checked against the source's SHA-256 before it is renamed into place, atomically, with OpenSSH's `posix-rename`.
+- **Limits of SFTP**: no inode numbers and whole-second times, so the remote hash cache matches on size and time; no hard links, so hard-linked files are written out as separate copies (the log says so).
 
 ## License
 

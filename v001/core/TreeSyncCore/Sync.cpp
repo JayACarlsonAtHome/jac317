@@ -3,14 +3,14 @@
 // before it starts and done (or failed) after, so a stopped run resumes exactly.
 // Every copy goes to a .treesync-part file, is read back and checked against the
 // source's SHA-256, and only then renamed into place.
+//
+// Each side is a TreeFs (local or SFTP). Local to local, small files go through
+// /usr/bin/cp; everything else uses the chunked copy, each chunk recorded, so
+// remote copies resume part-way through a file just like big local ones.
 #include "TreeSyncCore.h"
 
-#include <fcntl.h>
-#include <sys/stat.h>
 #include <unistd.h>
-#include <cerrno>
 #include <chrono>
-#include <cstring>
 #include <thread>
 
 using Clock = std::chrono::steady_clock;
@@ -20,23 +20,26 @@ static double Since(Clock::time_point t)
 	return std::chrono::duration<double>(Clock::now() - t).count();
 }
 
-static String Errno(const String& what)
+// NAME.treesync-part next to rel, or a short name when that would pass the
+// 255-byte name limit.
+static String PartRel(const String& rel, int64 run, int seq)
 {
-	return what + ": " + strerror(errno);
-}
-
-// Folder fd for the parent of rel inside root.
-static int OpenParent(const String& root, const String& rel)
-{
+	String name = GetFileName(rel) + ".treesync-part";
+	if(name.GetCount() > 255)
+		name = Format(".treesync-%d-%d.treesync-part", run, seq);
 	String folder = GetFileFolder(rel);
-	return OpenDir(folder.IsEmpty() ? root : AppendFileName(root, folder));
+	return folder.IsEmpty() ? name : folder + "/" + name;
 }
 
-// NAME.treesync-part, or a short name when that would pass the 255-byte name limit.
-static String PartName(const String& name, int64 run, int seq)
+// Errors that waiting will not fix: no point in retrying them.
+static bool Permanent(const String& error)
 {
-	String part = name + ".treesync-part";
-	return part.GetCount() <= 255 ? part : Format(".treesync-%d-%d.treesync-part", run, seq);
+	String e = ToLower(error);
+	for(const char *s : { "permission denied", "operation not permitted", "no space left",
+	                      "read-only file system", "quota", "not supported", "no such file" })
+		if(e.Find(s) >= 0)
+			return true;
+	return false;
 }
 
 namespace {
@@ -52,7 +55,8 @@ struct Runner {
 	SyncReport&   report;
 	SyncResult&   result;
 	const SyncFlags& flags;
-	String        roots[2];   // [0] source, [1] target
+	TreeFs       *fs[2] = {};   // [0] source, [1] target
+	String        ids[2];
 	int64         run = 0;
 	int           copy_count = 0, copy_index = 0;
 	Clock::time_point started = Clock::now();
@@ -66,55 +70,41 @@ struct Runner {
 			.Text(1, state).Int(2, bytes).Text(3, error).Int(4, run).Int(5, seq).Run();
 	}
 
-	// The copy was just verified, so the target's hash cache can take it as is:
-	// the next scan of the target then reuses it instead of reading the file again.
-	void Cache(const String& root, const String& rel, int dp, const String& name, const String& hash)
+	// A verified copy goes straight into the target's hash cache, so the next scan
+	// of the target reuses the hash instead of reading the file again.
+	void Cache(TreeFs& to, int side, const String& rel, const String& hash, const Entry *known = nullptr)
 	{
-		struct stat st;
-		if(fstatat(dp, name, &st, AT_SYMLINK_NOFOLLOW) != 0)
+		Entry e;
+		String error;
+		if(known)
+			e = clone(*known);
+		else if(!to.Stat(rel, false, e, error))
 			return;
 		Stmt(db, "INSERT OR REPLACE INTO files VALUES (?, ?, 'f', ?, ?, ?, ?, ?, ?, ?, '', ?, 0)")
-			.Text(1, root).Text(2, rel).Int(3, st.st_dev).Int(4, st.st_ino).Int(5, st.st_nlink)
-			.Int(6, st.st_size).Int(7, (int64)st.st_mtim.tv_sec * 1000000000 + st.st_mtim.tv_nsec)
-			.Int(8, (int64)st.st_ctim.tv_sec * 1000000000 + st.st_ctim.tv_nsec)
-			.Int(9, st.st_mode & 07777).Text(10, hash).Run();
+			.Text(1, ids[side]).Text(2, rel).Int(3, e.dev).Int(4, e.ino).Int(5, e.nlink)
+			.Int(6, e.size).Int(7, e.mtime_ns).Int(8, e.ctime_ns).Int(9, e.mode).Text(10, hash).Run();
 	}
 
 	void Synced(const String& rel, const String& hash)
 	{
 		Stmt(db, "INSERT OR REPLACE INTO synced VALUES (?, ?, ?, ?)")
-			.Text(1, roots[0]).Text(2, roots[1]).Text(3, rel).Text(4, hash).Run();
+			.Text(1, ids[0]).Text(2, ids[1]).Text(3, rel).Text(4, hash).Run();
 	}
 
-	// Chunked copy for big files; every finished chunk is recorded, so a restart
-	// continues from the next one. Returns false with error "stopped" on Stop.
-	bool CopyBig(int seq, int sp, const String& name, int dp, const String& part,
-	             const String& rel, int64 size, CopyProgress& p, Clock::time_point t0, String& error)
+	// Chunked copy; every finished chunk is recorded, so a restart continues from
+	// the next one. Returns false with error "stopped" on Stop.
+	// out stays open for the caller, to verify and set attributes through it.
+	bool ChunkCopy(int seq, TreeFs& from, TreeFs& to, const String& rel, const String& part,
+	               int64 size, CopyProgress& p, Clock::time_point t0, One<TreeFile>& out, String& error)
 	{
 		int64 chunk = (int64)flags.chunk_mib << 20;
-		int in = openat(sp, name, O_RDONLY | O_CLOEXEC);
-		if(in < 0) {
-			error = Errno("cannot open source " + rel);
+		One<TreeFile> in = from.Open(rel, false, error);
+		if(!in)
 			return false;
-		}
-		int out = openat(dp, part, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
-		if(out < 0) {
-			error = Errno("cannot create " + part);
-			close(in);
+		out = to.Open(part, true, error);
+		if(!out)
 			return false;
-		}
 		Buffer<byte> buf((size_t)min(chunk, max<int64>(size, 1)));
-		auto read_at = [&](int fd, int64 off, int64 len) -> bool {
-			for(int64 got = 0; got < len;) {
-				ssize_t n = pread(fd, buf + got, (size_t)(len - got), off + got);
-				if(n < 0 && errno == EINTR)
-					continue;
-				if(n <= 0)
-					return false;
-				got += n;
-			}
-			return true;
-		};
 
 		// Chunks already done in an earlier, stopped attempt.
 		Vector<String> done;
@@ -127,40 +117,27 @@ struct Runner {
 		if(next > 0) {
 			// The last recorded chunk may have been torn by the stop: check it again.
 			int64 off = (next - 1) * chunk, len = min(chunk, size - off);
-			if(!read_at(out, off, len) || SHA256String(~buf, (dword)len) != done.Top())
+			String ignore;
+			if(!out->ReadAt(off, buf, len, ignore) || SHA256String(~buf, (dword)len) != done.Top())
 				next--;
 			Stmt(db, "DELETE FROM chunks WHERE run = ? AND seq = ? AND idx >= ?")
 				.Int(1, run).Int(2, seq).Int(3, next).Run();
 			report.WhenLine(Format("resuming %s at chunk %d of %d", rel, next + 1, count));
 		}
 
-		bool ok = true;
 		for(int64 idx = next; idx < count; idx++) {
 			if(report.Stopping()) {
 				error = "stopped";
-				ok = false;
-				break;
+				return false;
 			}
 			int64 off = idx * chunk, len = min(chunk, size - off);
-			if(!read_at(in, off, len)) {
-				error = Errno("cannot read " + rel);
-				ok = false;
-				break;
-			}
-			for(int64 put = 0; put < len;) {
-				ssize_t n = pwrite(out, buf + put, (size_t)(len - put), off + put);
-				if(n < 0 && errno == EINTR)
-					continue;
-				if(n <= 0) {
-					error = Errno("cannot write " + part);
-					ok = false;
-					break;
-				}
-				put += n;
-			}
-			if(!ok)
-				break;
-			fdatasync(out);
+			if(!in->ReadAt(off, buf, len, error) || !out->WriteAt(off, buf, len, error))
+				return false;
+			// A recorded chunk must really be on disk. A one-chunk file needs no flush:
+			// if it is cut short it is copied again, and a later scan catches a copy
+			// lost in a crash after its rename.
+			if(count > 1)
+				out->Flush();
 			Stmt(db, "INSERT OR REPLACE INTO chunks VALUES (?, ?, ?, ?, ?, ?)")
 				.Int(1, run).Int(2, seq).Int(3, idx).Int(4, off).Int(5, len)
 				.Text(6, SHA256String(~buf, (dword)len)).Run();
@@ -170,13 +147,7 @@ struct Runner {
 			if(p.done < p.size)
 				report.WhenProgress(p);
 		}
-		if(ok && ftruncate(out, size) != 0) {
-			error = Errno("cannot size " + part);
-			ok = false;
-		}
-		close(in);
-		close(out);
-		return ok;
+		return out->Truncate(size, error);
 	}
 
 	// Copies (or links, or re-creates a symlink) a.from.rel, verified, into place.
@@ -184,61 +155,40 @@ struct Runner {
 	{
 		const Action& a = s.a;
 		const Entry& e = a.from;
-		const String& from = roots[a.dir];
-		const String& to = roots[1 - a.dir];
-		String name = GetFileName(e.rel);
-		String part = PartName(name, run, s.seq);
-		int sp = OpenParent(from, e.rel);
-		int dp = OpenParent(to, e.rel);
-		if(sp < 0 || dp < 0) {
-			error = Errno("cannot open folder for " + e.rel);
-			if(sp >= 0) close(sp);
-			if(dp >= 0) close(dp);
-			return false;
-		}
-		bool ok = false;
-		auto finish = [&] { close(sp); close(dp); return ok; };
+		TreeFs& from = *fs[a.dir];
+		TreeFs& to = *fs[1 - a.dir];
+		String part = PartRel(e.rel, run, s.seq);
 
 		if(a.kind == ActionKind::Link) {
-			int fp = OpenParent(to, a.link_to);
-			ok = fp >= 0 && linkat(fp, GetFileName(a.link_to), dp, part, 0) == 0 &&
-			     renameat(dp, part, dp, name) == 0;
-			if(!ok)
-				error = Errno("cannot link " + e.rel + " to " + a.link_to);
-			else {
+			if(to.CanHardLink()) {
+				if(!to.HardLink(a.link_to, part, error) || !to.Rename(part, e.rel, error))
+					return false;
+				copy_index++;
 				report.WhenLine("linked " + e.rel + " -> " + a.link_to);
 				// A new link changes the inode's ctime: refresh the cache for both names.
-				Cache(to, e.rel, dp, name, e.hash);
-				Cache(to, a.link_to, fp, GetFileName(a.link_to), e.hash);
+				Cache(to, 1 - a.dir, e.rel, e.hash);
+				Cache(to, 1 - a.dir, a.link_to, e.hash);
 				Synced(e.rel, e.hash);
+				return true;
 			}
-			if(fp >= 0)
-				close(fp);
-			return finish();
+			report.WhenLine("hard link written out as a copy (the target cannot hard-link): " + e.rel);
 		}
 		if(e.type == 'l') {
-			unlinkat(dp, part, 0);
-			ok = symlinkat(e.link, dp, part) == 0 && renameat(dp, part, dp, name) == 0;
-			if(!ok)
-				error = Errno("cannot create symlink " + e.rel);
-			else
-				report.WhenLine("symlink " + e.rel + " -> " + e.link);
-			return finish();
+			if(!to.Symlink(part, e.link, error) || !to.Rename(part, e.rel, error))
+				return false;
+			report.WhenLine("symlink " + e.rel + " -> " + e.link);
+			return true;
 		}
 
 		// The source may have changed since the run was planned: then hash it again.
-		struct stat st;
-		if(fstatat(sp, name, &st, flags.follow_links ? 0 : AT_SYMLINK_NOFOLLOW) != 0) {
-			error = Errno("source gone: " + e.rel);
-			return finish();
-		}
+		Entry now;
+		if(!from.Stat(e.rel, flags.follow_links, now, error))
+			return false;
 		String expect = e.hash;
-		int64 size = st.st_size;
-		if(st.st_size != e.size || st.st_ino != e.ino ||
-		   (int64)st.st_mtim.tv_sec * 1000000000 + st.st_mtim.tv_nsec != e.mtime_ns) {
+		if(now.size != e.size || now.mtime_ns != e.mtime_ns || (from.IsLocal() && now.ino != e.ino)) {
 			report.WhenLine("source changed since planning, hashing again: " + e.rel);
-			if(!HashAt(sp, name, expect, error, report.stop, nullptr, flags.follow_links))
-				return finish();
+			if(!from.Hash(e.rel, flags.follow_links, expect, error, report.stop))
+				return false;
 		}
 
 		copy_index++;
@@ -246,95 +196,97 @@ struct Runner {
 		p.index = copy_index;
 		p.count = copy_count;
 		p.name = e.rel;
-		p.size = size;
+		p.size = now.size;
 		Clock::time_point t0 = Clock::now();
-		bool big = size >= ((int64)flags.big_file_mib << 20);
+		bool big = now.size >= ((int64)flags.big_file_mib << 20);
+		bool fast = from.IsLocal() && to.IsLocal() && !big;
+		bool ok = false;
+		One<TreeFile> out;
 		for(int attempt = 0; attempt <= flags.retries; attempt++) {
 			if(attempt) {
-				report.WhenLine(Format("retry %d of %d in %ds: %s (%s)", attempt, flags.retries,
+				report.WhenLine(Format("retry %d of %d in %d s: %s (%s)", attempt, flags.retries,
 				                       flags.retry_wait, e.rel, error));
 				std::this_thread::sleep_for(std::chrono::seconds(flags.retry_wait));
 			}
 			error.Clear();
-			ok = big ? CopyBig(s.seq, sp, name, dp, part, e.rel, size, p, t0, error)
-			         : CopySmall(sp, name, dp, part, error);
-			if(ok || error == "stopped" || report.Stopping())
+			if(fast) {
+				const LocalFs& lf = static_cast<const LocalFs&>(from);
+				const LocalFs& lt = static_cast<const LocalFs&>(to);
+				int sp = lf.ParentFd(e.rel), dp = lt.ParentFd(e.rel);
+				ok = sp >= 0 && dp >= 0 && CopySmall(sp, GetFileName(e.rel), dp, GetFileName(part), error);
+				if(sp < 0 || dp < 0)
+					error = "cannot open the folders of " + e.rel;
+				if(sp >= 0) close(sp);
+				if(dp >= 0) close(dp);
+			}
+			else
+				ok = ChunkCopy(s.seq, from, to, e.rel, part, now.size, p, t0, out, error);
+			if(ok || error == "stopped" || report.Stopping() || Permanent(error))
 				break;
 		}
 		if(!ok)
-			return finish();
-		if(!big)
-			result.bytes += size;
+			return false;
+		if(fast)
+			result.bytes += now.size;
 
-		// Read the copy back: it must have the source's SHA-256.
+		// Read the copy back: it must have the source's SHA-256. The chunked copy
+		// reads it through the handle it wrote with, and sets the attributes there too.
 		String got;
-		if(!HashAt(dp, part, got, error, report.stop))
-			return finish(), false;
+		if(fast ? !to.Hash(part, false, got, error, report.stop)
+		        : !out->Hash(now.size, got, error, report.stop))
+			return false;
 		if(got != expect) {
 			error = "verify failed: copy of " + e.rel + " has a different SHA-256; kept as " + part;
-			return ok = false, finish();
+			return false;
 		}
-		if(big) {
-			int fd = openat(dp, part, O_WRONLY | O_CLOEXEC);
-			if(fd >= 0) {
-				fchmod(fd, st.st_mode & 07777);
-				if(IsRoot() && fchown(fd, st.st_uid, st.st_gid) != 0)
-					report.WhenLine(Errno("warning: cannot set owner of " + e.rel));
-				timespec times[2] = { st.st_atim, st.st_mtim };
-				futimens(fd, times);
-				close(fd);
+		if(!fast) {   // cp --preserve already did this
+			FileAttrs fa;
+			fa.mode = now.mode;
+			fa.mtime_ns = now.mtime_ns;
+			if(from.IsLocal() && to.IsLocal() && IsRoot()) {
+				fa.uid = now.uid;
+				fa.gid = now.gid;
 			}
+			String warn;
+			if(!out->SetAttrs(fa, warn))
+				report.WhenLine("warning: " + warn);
+			out.Clear();   // close before the rename
 		}
-		if(renameat(dp, part, dp, name) != 0) {
-			error = Errno("cannot rename " + part + " into place");
-			return ok = false, finish();
-		}
+		if(!to.Rename(part, e.rel, error))
+			return false;
 		p.done = p.size;
 		p.seconds = Since(t0);
 		report.WhenProgress(p);
 		Synced(e.rel, expect);
-		Cache(to, e.rel, dp, name, expect);
-		return finish();
+		if(to.IsLocal())
+			Cache(to, 1 - a.dir, e.rel, expect);
+		else {
+			// Over SFTP everything needed is already known: save a round trip.
+			Entry placed;
+			placed.size = now.size;
+			placed.mtime_ns = now.mtime_ns / 1000000000 * 1000000000;   // SFTP keeps whole seconds
+			placed.mode = now.mode;
+			Cache(to, 1 - a.dir, e.rel, expect, &placed);
+		}
+		return true;
 	}
 
 	bool Mkdir(const Action& a, String& error)
 	{
-		const String& to = roots[1 - a.dir];
-		int dp = OpenParent(to, a.from.rel);
-		if(dp < 0)
-			return error = Errno("cannot open folder for " + a.from.rel), false;
-		String name = GetFileName(a.from.rel);
-		bool ok = mkdirat(dp, name, (a.from.mode & 07777) | 0700) == 0;
-		struct stat st;
-		if(!ok && errno == EEXIST && fstatat(dp, name, &st, AT_SYMLINK_NOFOLLOW) == 0 && S_ISDIR(st.st_mode))
-			ok = true;
-		if(!ok)
-			error = Errno("cannot create folder " + a.from.rel);
-		else
-			report.WhenLine("created folder " + a.from.rel);
-		close(dp);
-		return ok;
+		if(!fs[1 - a.dir]->Mkdir(a.from.rel, a.from.mode, error))
+			return false;
+		report.WhenLine("created folder " + a.from.rel);
+		return true;
 	}
 
 	bool Delete(const Action& a, String& error)
 	{
-		const String& to = roots[1 - a.dir];
-		int dp = OpenParent(to, a.from.rel);
-		if(dp < 0)
-			return error = Errno("cannot open folder for " + a.from.rel), false;
-		String name = GetFileName(a.from.rel);
-		bool dir = a.from.type == 'd';
-		bool ok = unlinkat(dp, name, dir ? AT_REMOVEDIR : 0) == 0 || errno == ENOENT;
-		if(!ok && dir && (errno == ENOTEMPTY || errno == EEXIST)) {
-			report.WhenLine("kept folder " + a.from.rel + ": it still holds excluded files");
-			ok = true;
-		}
-		else if(!ok)
-			error = Errno("cannot delete " + a.from.rel);
-		else
-			report.WhenLine("deleted " + a.from.rel);
-		close(dp);
-		return ok;
+		int r = fs[1 - a.dir]->Remove(a.from.rel, a.from.type == 'd', error);
+		if(r < 0)
+			return false;
+		report.WhenLine(r ? "kept folder " + a.from.rel + ": it still holds excluded files"
+		                  : "deleted " + a.from.rel);
+		return true;
 	}
 
 	bool Execute()
@@ -368,8 +320,9 @@ struct Runner {
 			s.state = q.Text(15);
 		}
 		result.planned = steps.GetCount();
+		// Links count too: on a target that cannot hard-link they are copied.
 		for(const Step& s : steps)
-			if(s.a.kind == ActionKind::Copy && s.a.from.type == 'f') {
+			if((s.a.kind == ActionKind::Copy || s.a.kind == ActionKind::Link) && s.a.from.type == 'f') {
 				copy_count++;
 				if(s.state == "done")
 					copy_index++;
@@ -431,30 +384,54 @@ struct Runner {
 	}
 };
 
+// Makes one side: a LocalFs, or an SftpFs that is connected.
+static One<TreeFs> MakeSide(const TreeEndpoint& e, const SyncSetup& setup, SyncReport& report, String& error)
+{
+	One<TreeFs> fs;
+	if(!e.remote) {
+		String path = CanonicalPath(e.path);
+		if(!PathAllowed(path)) {
+			error = RefusedPathMessage(path);
+			return fs;
+		}
+		fs.Create<LocalFs>(path);
+		return fs;
+	}
+	if(e.host.IsEmpty()) {
+		error = "a remote side needs a host (--source-host or --target-host)";
+		return fs;
+	}
+	report.WhenLine(Format("connecting to %s@%s:%d", Nvl(e.user, GetUserName()), e.host, e.port));
+	SftpFs& s = fs.Create<SftpFs>(e, setup.known_hosts, setup.flags.compress);
+	if(!s.Connect(error))
+		fs.Clear();
+	return fs;
+}
+
 }
 
 bool RunSync(const SyncSetup& setup, SyncReport& report, SyncResult& result, String& error)
 {
 	result = SyncResult();
 	const SyncFlags& flags = setup.flags;
-	if(setup.source.remote || setup.target.remote) {
-		error = "remote trees are not supported by the engine yet";
-		return false;
-	}
 	if(setup.source.path.IsEmpty() || setup.target.path.IsEmpty()) {
 		error = "both --source and --target are needed";
 		return false;
 	}
-	String src = CanonicalPath(setup.source.path);
-	String dst = CanonicalPath(setup.target.path);
-	if(IsUnder(dst, src) || IsUnder(src, dst)) {
-		error = "source and target overlap: " + src + " and " + dst;
-		return false;
+	if(!setup.source.remote && !setup.target.remote) {
+		String src = CanonicalPath(setup.source.path), dst = CanonicalPath(setup.target.path);
+		if(IsUnder(dst, src) || IsUnder(src, dst)) {
+			error = "source and target overlap: " + src + " and " + dst;
+			return false;
+		}
 	}
-	if(!PathAllowed(src) || !PathAllowed(dst)) {
-		error = RefusedPathMessage(PathAllowed(src) ? dst : src);
+	One<TreeFs> side[2];
+	side[0] = MakeSide(setup.source, setup, report, error);
+	if(!side[0])
 		return false;
-	}
+	side[1] = MakeSide(setup.target, setup, report, error);
+	if(!side[1])
+		return false;
 
 	Db db;
 	String db_path = Nvl(setup.db, DefaultDbPath());
@@ -466,8 +443,12 @@ bool RunSync(const SyncSetup& setup, SyncReport& report, SyncResult& result, Str
 	String key = Join(FlagArgs(key_flags), " ");
 
 	Runner r(db, report, result, flags);
-	r.roots[0] = src;
-	r.roots[1] = dst;
+	for(int i = 0; i < 2; i++) {
+		r.fs[i] = ~side[i];
+		r.ids[i] = side[i]->Id();
+	}
+	const String& src = r.ids[0];
+	const String& dst = r.ids[1];
 
 	// An unfinished run for the same trees and switches: continue it.
 	if(!setup.fresh && !flags.dry_run) {
@@ -489,28 +470,28 @@ bool RunSync(const SyncSetup& setup, SyncReport& report, SyncResult& result, Str
 		Stmt(db, "UPDATE runs SET state = 'abandoned' WHERE source = ? AND target = ? "
 		         "AND state IN ('running', 'stopped')").Text(1, src).Text(2, dst).Run();
 
-	std::error_code ec;
-	bool dst_exists = std::filesystem::is_directory(ToFs(dst), ec);
+	if(!side[0]->RootExists()) {
+		error = "source " + src + " does not exist or is not a folder";
+		return false;
+	}
+	bool dst_exists = side[1]->RootExists();
 	if(!dst_exists && !flags.dry_run) {
-		std::filesystem::create_directories(ToFs(dst), ec);
-		if(ec) {
-			error = "cannot create target " + dst + ": " + String(ec.message());
+		if(!side[1]->MakeRoot(error))
 			return false;
-		}
 		dst_exists = true;
 	}
 
 	Vector<Entry> se, de;
 	String sh, dh;
 	report.WhenLine("scanning source " + src);
-	if(!ScanTree(db, src, flags, report, se, sh, result.source, error))
+	if(!side[0]->Scan(db, flags, report, se, sh, result.source, error))
 		return error == "stopped" ? (result.stopped = true) : false;
 	report.WhenLine(Format("source: %d entries, %d hashed (%s), %d unchanged since last scan",
 	                       result.source.entries, result.source.hashed,
 	                       FormatBytes(result.source.hashed_bytes), result.source.reused));
 	if(dst_exists) {
 		report.WhenLine("scanning target " + dst);
-		if(!ScanTree(db, dst, flags, report, de, dh, result.target, error))
+		if(!side[1]->Scan(db, flags, report, de, dh, result.target, error))
 			return error == "stopped" ? (result.stopped = true) : false;
 		report.WhenLine(Format("target: %d entries, %d hashed (%s), %d unchanged since last scan",
 		                       result.target.entries, result.target.hashed,
