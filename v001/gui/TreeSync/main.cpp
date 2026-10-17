@@ -99,7 +99,7 @@ void TreeSyncWindow::SyncMenu(Bar& bar)
 {
 	bool idle = child == 0;
 	bar.Add(idle, "Run", [this] { StartSync(false); }).Key(K_F9)
-	   .Help("Run treesync-cli with the current settings (honours Dry run)");
+	   .Help("Sync for real, after a confirmation (changes the target)");
 	bar.Add(idle, "Dry run", [this] { StartSync(true); }).Key(K_SHIFT_F9)
 	   .Help("Show what would be done, change nothing");
 	bar.Add(!idle, "Stop", [this] { StopSync(); }).Key(K_ESCAPE)

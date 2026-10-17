@@ -146,6 +146,7 @@ class TreeSyncWindow : public TopWindow {
 	void Log(const String& line);
 	void ShowProgress(const String& line);   // an @file or @overall line from treesync-cli
 	void StartSync(bool dry_run);
+	bool ConfirmRun(const SyncSetup& s);
 	void StopSync();
 	void SyncFinished(int code);
 

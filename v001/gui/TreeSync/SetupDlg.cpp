@@ -104,6 +104,12 @@ void SetupDlg::FlagsPane::Sync()
 {
 	SyncMode m = (SyncMode)(int)~mode;
 	for(int i = 0; i < BOOL_OPTION_COUNT; i++) {
+		// In the GUI the Sync menu decides: Run is real, Dry run previews.
+		if(BOOL_OPTIONS[i].field == &SyncFlags::dry_run)
+		{
+			opt[i].Disable();
+			opt[i].Tip("In the GUI, use Sync > Run or Sync > Dry run (--dry-run is for treesync-cli)");
+		}
 		// Mirror already deletes extras, --keep-extra opts out; Merge never deletes.
 		if(BOOL_OPTIONS[i].field == &SyncFlags::keep_extra)
 			opt[i].Enable(m == SyncMode::Mirror);

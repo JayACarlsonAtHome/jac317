@@ -78,7 +78,7 @@ The point of the GUI is to see what is going on. So the engine reports each step
   ```
 
 - **Thermometers**: in the terminal, the passing status line of a file in progress carries a text bar, `45% [=========           ]`. In the GUI, a strip between the trees and the log shows a bar for the whole run (bytes done of bytes planned) and one row with its own bar per file being copied right now, so with `--threads=4` up to four move at once. Bars move within a chunk too, about four times a second.
-- **GUI**: Sync > Run (F9) starts `treesync-cli` and shows its output in a log pane under the trees; Sync > Stop (Esc) stops it after the current file or chunk, and the trees reload when it ends. Warnings appear in a dialog and are also printed to the terminal.
+- **GUI**: Sync > Run (F9) syncs for real, after a confirmation that says what will change; Sync > Dry run (Shift+F9) only shows the list of changes. (The `--dry-run` switch is for `treesync-cli`; in the GUI the menu decides.) The GUI starts `treesync-cli` and shows its output in a log pane under the trees; Sync > Stop (Esc) stops it after the current file or chunk, and the trees reload when it ends. Warnings appear in a dialog and are also printed to the terminal.
 
 **Restarts**: every step is recorded in the SQLite database before the next one starts, so a stopped or crashed run continues where it left off: run the same command again. Big files are copied in chunks, each chunk recorded as it finishes, so a restart continues part-way through the file instead of from the start (for example "resuming big one.bin at chunk 7 of 19"). `--fresh` starts over instead. Inode numbers identify unchanged files, so they are not read again. Details are in [`v001/docs/engine.md`](v001/docs/engine.md).
 

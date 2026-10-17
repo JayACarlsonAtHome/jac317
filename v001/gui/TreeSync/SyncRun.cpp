@@ -50,6 +50,32 @@ void TreeSyncWindow::ShowProgress(const String& line)
 		active.Set(row, Vector<Value>{ id, what, permille, rate, FormatBytes(size) });
 }
 
+// What a real run will do to the target, in plain words, before it starts.
+bool TreeSyncWindow::ConfirmRun(const SyncSetup& s)
+{
+	auto where = [](const TreeEndpoint& e) {
+		return e.remote ? Nvl(e.user, GetUserName()) + "@" + e.host + ":" + e.path : e.path;
+	};
+	if(s.source.path.IsEmpty() || s.target.path.IsEmpty()) {
+		Exclamation("Choose a source and a target first.");
+		return false;
+	}
+	String what;
+	switch(s.flags.mode) {
+	case SyncMode::Copy:   what = "copy new and changed files into it"; break;
+	case SyncMode::Mirror: what = "make it match the source, removing files the source does not have"; break;
+	case SyncMode::Merge:  what = "copy changes both ways, so the source can change too"; break;
+	}
+	String old = s.flags.safe_delete
+	           ? "Removed and replaced files are moved to [C " + DeQtf(where(s.target)) + ".old] (safe delete)."
+	           : "[* Safe delete is off: removed and replaced files are deleted.]";
+	return PromptYesNo("[* Run the sync for real?]&&"
+	                   "From: [C " + DeQtf(where(s.source)) + "]&"
+	                   "To: [C " + DeQtf(where(s.target)) + "]&&"
+	                   "This will " + DeQtf(what) + ".&" + old + "&&"
+	                   "Use Sync > Dry run first to see the list of changes.");
+}
+
 void TreeSyncWindow::StartSync(bool dry_run)
 {
 	if(child > 0)
@@ -59,9 +85,11 @@ void TreeSyncWindow::StartSync(bool dry_run)
 		Log("cannot find " + cli + "; build it with v001/build.sh");
 		return;
 	}
+	// The menu decides, not the Dry run switch: Run is real, Dry run previews.
 	SyncSetup s = setup;
-	if(dry_run)
-		s.flags.dry_run = true;
+	s.flags.dry_run = dry_run;
+	if(!dry_run && !ConfirmRun(s))
+		return;
 	Vector<String> args;
 	if(as_root)
 		args.Add("/usr/bin/pkexec");
