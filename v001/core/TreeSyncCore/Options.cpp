@@ -23,12 +23,16 @@ const BoolOption BOOL_OPTIONS[] = {
 	{ "dst-tolerance", &SyncFlags::dst_tolerance, "/DST", "Allow exact 1-hour (DST) time shifts",
 	  "Treats file times exactly one hour apart as equal. For FAT disks and Windows shares whose times "
 	  "jump by an hour when daylight saving time starts or ends." },
-	{ "follow-links", &SyncFlags::follow_links, "", "Write out symlink targets, not the links",
-	  "A symlink (soft link) is a small pointer to another file or folder, like a shortcut. "
-	  "Off (normal): the pointer itself is copied, so the copy points to the same place. "
-	  "On: whatever it points to is copied instead, as real files. "
-	  "Example: docs/latest points to docs/v3. Off copies the pointer 'latest'; on copies all of v3 a "
-	  "second time under the name 'latest'." },
+	{ "follow-links", &SyncFlags::follow_links, "", "Copy what symlinks point to, not the links",
+	  "A symlink (symbolic or soft link) is a tiny file that holds only a path to another file or "
+	  "folder, like a shortcut.\n"
+	  "Off (normal): the symlink itself is copied, holding the same path. A relative path such as "
+	  "'v3' then finds the copy of v3 on the target. An absolute path such as '/home/jay/docs/v3' "
+	  "points to that path on the target machine, which may not exist there.\n"
+	  "On: each symlink is replaced by a real copy of what it points to.\n"
+	  "Example: docs/latest is a symlink to v3. Off: the target gets docs/latest as a symlink to v3. "
+	  "On: the target gets docs/latest as a real folder with all of v3's files in it, so those "
+	  "files take up space twice, once in v3 and once in latest." },
 	{ "hard-links", &SyncFlags::hard_links, "", "Relink hard-linked files, not copies",
 	  "A hard link is one file with two or more names: change it under one name and it changes under "
 	  "all of them. On (normal): such a file is copied once and its other names are linked to it on "

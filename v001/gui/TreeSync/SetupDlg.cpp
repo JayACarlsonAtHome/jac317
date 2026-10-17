@@ -144,7 +144,11 @@ SetupDlg::FlagsPane::FlagsPane()
 
 void SetupDlg::FlagsPane::ShowHelp(const String& title, const String& text)
 {
-	help.SetQTF("[2 [* " + DeQtf(title) + "]&" + DeQtf(text) + "]");   // [2: the dialog's text size
+	// [2: the dialog's text size; each line of the text is its own paragraph.
+	String qtf = "[2 [* " + DeQtf(title) + "]";
+	for(const String& line : Split(text, '\n'))
+		qtf << "&" << DeQtf(line);
+	help.SetQTF(qtf + "]");
 }
 
 void SetupDlg::FlagsPane::Sync()
