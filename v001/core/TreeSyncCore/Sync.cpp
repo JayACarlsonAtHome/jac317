@@ -41,6 +41,10 @@ One<TreeFs> MakeSide(const TreeEndpoint& e, const SyncSetup& setup, SyncReport& 
 	SftpFs& s = fs.Create<SftpFs>(e, setup.known_hosts, setup.flags.compress);
 	if(!s.Connect(error))
 		fs.Clear();
+	else
+		report.WhenLine(s.HashesOnServer()
+		                ? e.host + " hashes its own files (sha256sum there): copies are checked without reading them back"
+		                : e.host + " cannot run sha256sum for us: files are read over SFTP to hash and check them");
 	return fs;
 }
 

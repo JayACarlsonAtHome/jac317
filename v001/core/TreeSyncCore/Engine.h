@@ -252,6 +252,13 @@ struct TreeFile {
 	virtual void Flush() = 0;
 	virtual bool SetAttrs(const FileAttrs& a, String& error) = 0;
 	virtual int  Fd() const   { return -1; }   // local files: the descriptor
+	// SHA-256 of [off, off + len) worked out where the file is (a remote server hashes
+	// it itself), so the bytes need not come back over the network. Only when
+	// HashesOnServer(); else read it with ReadAt.
+	virtual bool HashesOnServer() const                                    { return false; }
+	// Below this size reading it back costs less than starting a command on the server.
+	static constexpr int64 SERVER_HASH_MIN = 256 << 10;
+	virtual bool HashRange(int64 off, int64 len, String& hash, String& error)  { error = "not here"; return false; }
 	virtual ~TreeFile() {}
 };
 
@@ -301,6 +308,9 @@ public:
 	virtual bool   Chown(const String& rel, int64 uid, int64 gid, String& error) = 0;   // never follows symlinks
 	virtual String Name() const = 0;         // for reports: "local" or user@host
 	virtual bool   StableIds()               { return false; }   // inode numbers usable by the hash cache
+	// Hash() runs on the machine the files are on (a remote server's sha256sum): no
+	// file content crosses the network to hash it.
+	virtual bool   HashesOnServer() const    { return false; }
 	virtual int64  EntryEstimate()           { return 0; }       // likely entry count (statvfs), 0 = unknown
 	// A remote side whose connection broke (network down, server gone): every call
 	// fails until Reconnect succeeds. Reconnect only with no files open.
@@ -384,6 +394,7 @@ public:
 	bool   Lost() override;
 	bool   Reconnect(String& error) override;
 	String Host() const override;
+	bool   HashesOnServer() const override;
 
 	SftpFs(const TreeEndpoint& e, const String& known_hosts, bool compress);
 	~SftpFs();
@@ -451,8 +462,13 @@ struct CheckResult {
 bool RunCheck(const SyncSetup& setup, CheckMode mode, SyncReport& report, CheckResult& result, String& error);
 
 // --clear-old: deletes the --safe-delete folders (<source>.old, <target>.old or
-// --safe-delete-dir) for good. dry: only counts.
-bool ClearOld(const SyncSetup& setup, bool dry, SyncReport& report, String& error);
+// --safe-delete-dir) for good. dry: only counts. The totals of all of them.
+struct ClearResult {
+	int   found = 0;              // .old folders that were there
+	int64 files = 0, folders = 0, bytes = 0;
+};
+
+bool ClearOld(const SyncSetup& setup, bool dry, SyncReport& report, String& error, ClearResult *result = nullptr);
 
 // Sync.cpp -------------------------------------------------------------------
 

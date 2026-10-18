@@ -570,8 +570,9 @@ bool RemoveTree(TreeFs& fs, const String& rel, bool dry, SyncReport& report, int
 
 }
 
-bool ClearOld(const SyncSetup& setup, bool dry, SyncReport& report, String& error)
+bool ClearOld(const SyncSetup& setup, bool dry, SyncReport& report, String& error, ClearResult *result)
 {
+	ClearResult total;
 	for(int i = 0; i < 2; i++) {
 		const TreeEndpoint& e = i ? setup.target : setup.source;
 		if(e.path.IsEmpty())
@@ -618,6 +619,12 @@ bool ClearOld(const SyncSetup& setup, bool dry, SyncReport& report, String& erro
 			return false;
 		report.WhenLine(Format("%s %s: %d files, %d folders, %s", dry ? "would delete" : "deleted", old,
 		                       files, folders, FormatBytes(bytes)));
+		total.found++;
+		total.files += files;
+		total.folders += folders;
+		total.bytes += bytes;
 	}
+	if(result)
+		*result = total;
 	return true;
 }

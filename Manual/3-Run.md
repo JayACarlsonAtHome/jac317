@@ -151,7 +151,9 @@ To start over instead, use `--fresh` on the command line.
     folders. No content is copied.
 - **Sync > Clear .old folders...**: deletes the safe-delete folders (`<target>.old`)
     for good, after a confirmation that says how many files and bytes. Folders made by
-    a root run need **Run as root**.
+    a root run need **Run as root**. On the command line, without `--no-dry-run` it
+    only counts; its result says *Counted, not deleted*, *Good* (deleted) or *Nothing
+    to clear*.
 
 ## 3.8 History, logs and AI export
 
@@ -199,6 +201,12 @@ usual one). On the command line: `--target-host=server --target-user=jay`.
 
 If the network drops, the run waits (default up to 30 minutes, *Wait for the
 network*), shows **NETWORK UNAVAILABLE**, and carries on when the machine is back.
+
+**Checking copies on the server.** When the login may run commands and the server has
+`sha256sum`, the server hashes its own files: copies are checked there and remote
+scans hash there, so nothing is read back over the network. The log says which way
+it works (`server hashes its own files` or `files are read over SFTP`). An SFTP-only
+account still works, just with twice the traffic for a verified copy.
 
 ## 3.11 The command line
 

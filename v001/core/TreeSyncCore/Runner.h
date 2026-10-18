@@ -331,6 +331,16 @@ struct Runner {
 		// SHA-256 of [off, off + len) of a file, in slices. show: the read-back of a chunk
 		// just written, so the file's bar moves while it is checked.
 		auto hash_range = [&](TreeFile& f, int64 off, int64 len, bool count, String& hash, bool show = false) -> bool {
+			if(f.HashesOnServer() && len >= TreeFile::SERVER_HASH_MIN) {   // the server hashes it, nothing comes back
+				if(show) {
+					p.verifying = true;
+					p.done = off;
+					p.seconds = Since(t0);
+					Progress(p);
+					p.verifying = false;
+				}
+				return f.HashRange(off, len, hash, error);
+			}
 			Sha256 sha;
 			for(int64 k = 0; k < len; k += SLICE) {
 				int64 n = min(SLICE, len - k);

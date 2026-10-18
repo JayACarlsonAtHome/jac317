@@ -52,6 +52,7 @@ struct SftpFs::Impl {
 	String           root;
 	bool             compress = false;
 	bool             lost = false;
+	bool             server_hash = false;   // the server can run sha256sum for us (Probe)
 
 	LIBSSH2_SESSION *S()    { return session; }
 
@@ -141,9 +142,133 @@ struct SftpFs::Impl {
 		return n > 0 ? String(buf, n) : String();
 	}
 
-	bool HashPath(const String& path, String& hash, String& error, const std::atomic<bool> *stop, int64 *bytes,
-	              Throttle *throttle = nullptr)
+	// Hashing on the server ---------------------------------------------------------
+	// A verified copy used to read every byte back over the network, and hashing a
+	// remote file read all of it here: twice the traffic, at the speed of the link.
+	// When the login may run commands (an SSH exec channel) and the server has
+	// sha256sum, it hashes the file itself and only the 64-character answer comes back.
+	// An SFTP-only login (internal-sftp, a restricted shell) keeps reading over SFTP.
+
+	static String Quote(const String& path)   // for sh: 'path', any character
 	{
+		String q = path;
+		q.Replace("'", "'\\''");
+		return "'" + q + "'";
+	}
+
+	// Runs cmd on the server; out: what it printed. Fails if it wrote to stderr or did
+	// not exit 0. The wait is not bound by the session timeout (hashing a big file can
+	// take long), but a dead link still ends it (TCP keep-alive), and so does Stop.
+	bool Exec(const String& cmd, String& out, String& error, const std::atomic<bool> *stop)
+	{
+		out.Clear();
+		LIBSSH2_CHANNEL *ch = libssh2_channel_open_session(session);
+		if(!ch) {
+			error = Err("cannot open a command channel to " + e.host);
+			return false;
+		}
+		if(libssh2_channel_exec(ch, cmd) != 0) {
+			error = Err("cannot run a command on " + e.host);
+			libssh2_channel_free(ch);
+			return false;
+		}
+		libssh2_session_set_blocking(session, 0);
+		String err;
+		bool ok = true;
+		char buf[4096];
+		for(;;) {
+			ssize_t n = libssh2_channel_read(ch, buf, sizeof(buf));
+			ssize_t m = libssh2_channel_read_stderr(ch, buf + 2048, 2048);
+			if(n > 0)
+				out.Cat(buf, (int)n);
+			if(m > 0)
+				err.Cat(buf + 2048, (int)m);
+			if(n > 0 || m > 0)
+				continue;
+			if((n < 0 && n != LIBSSH2_ERROR_EAGAIN) || (m < 0 && m != LIBSSH2_ERROR_EAGAIN)) {
+				error = Err("command on " + e.host);
+				ok = false;
+				break;
+			}
+			if(libssh2_channel_eof(ch))
+				break;
+			if(stop && *stop) {
+				error = "stopped";
+				ok = false;
+				break;
+			}
+			pollfd p = { sock, 0, 0 };
+			int dir = libssh2_session_block_directions(session);
+			p.events = (dir & LIBSSH2_SESSION_BLOCK_INBOUND ? POLLIN : 0) | (dir & LIBSSH2_SESSION_BLOCK_OUTBOUND ? POLLOUT : 0);
+			poll(&p, 1, 100);
+		}
+		libssh2_session_set_blocking(session, 1);
+		int status = -1;
+		if(ok && libssh2_channel_close(ch) == 0)
+			status = libssh2_channel_get_exit_status(ch);
+		libssh2_channel_free(ch);
+		if(ok && (status != 0 || err.GetCount())) {
+			error = "on " + e.host + ": " + Nvl(TrimBoth(err), Format("exit code %d", status));
+			ok = false;
+		}
+		return ok;
+	}
+
+	// The 64 hex digits sha256sum printed first.
+	static bool HexHash(const String& out, String& hash)
+	{
+		hash = out.Left(64);
+		if(hash.GetCount() != 64)
+			return false;
+		for(char c : hash)
+			if(!IsDigit(c) && !(c >= 'a' && c <= 'f'))
+				return false;
+		return true;
+	}
+
+	// [off, off + len) of path, or all of it (len < 0), hashed by the server.
+	bool ServerHash(const String& path, int64 off, int64 len, String& hash, String& error,
+	                const std::atomic<bool> *stop)
+	{
+		String cmd = len < 0 ? "sha256sum < " + Quote(path)
+		           : Format("dd if=%s bs=4M iflag=skip_bytes,count_bytes skip=%lld count=%lld status=none | sha256sum",
+		                    Quote(path), off, len);
+		String out;
+		if(!Exec(cmd, out, error, stop))
+			return false;
+		if(!HexHash(out, hash)) {
+			error = "unexpected answer from sha256sum on " + e.host + ": " + out.Left(100);
+			return false;
+		}
+		return true;
+	}
+
+	// Whether the server hashes right: a known string, whole and a slice of it.
+	// TREESYNC_NO_SERVER_HASH=1 turns it off (to compare, and for tests).
+	void Probe()
+	{
+		server_hash = false;
+		if(GetEnv("TREESYNC_NO_SERVER_HASH") == "1")
+			return;
+		String out, h, error;
+		server_hash = Exec("printf treesync-probe | sha256sum", out, error, nullptr) && HexHash(out, h) &&
+		              h == Sha256Hex("treesync-probe") &&
+		              Exec("printf treesync-probe | dd bs=4M iflag=skip_bytes,count_bytes skip=3 count=5 status=none "
+		                   "| sha256sum", out, error, nullptr) && HexHash(out, h) && h == Sha256Hex("esync");
+	}
+
+	// size: the file's, when known; a small one is read (cheaper than a command).
+	bool HashPath(const String& path, String& hash, String& error, const std::atomic<bool> *stop, int64 *bytes,
+	              Throttle *throttle = nullptr, int64 size = -1)
+	{
+		if(server_hash && (size < 0 || size >= TreeFile::SERVER_HASH_MIN)) {
+			LIBSSH2_SFTP_ATTRIBUTES a;
+			if(!ServerHash(path, 0, -1, hash, error, stop))
+				return false;
+			if(bytes)
+				*bytes = Attrs(path, true, a) ? (int64)a.filesize : 0;
+			return true;
+		}
 		LIBSSH2_SFTP_HANDLE *h = libssh2_sftp_open_ex(sftp, path, path.GetCount(), LIBSSH2_FXF_READ, 0,
 		                                              LIBSSH2_SFTP_OPENFILE);
 		if(!h) {
@@ -373,7 +498,13 @@ bool SftpFs::Connect(String& error)
 		m.root = real;
 	else if(!m.root.StartsWith("/"))
 		m.root = AppendFileName(m.RealPath("."), m.root);
+	m.Probe();
 	return true;
+}
+
+bool SftpFs::HashesOnServer() const
+{
+	return impl->server_hash;
 }
 
 bool SftpFs::RootExists()
@@ -526,7 +657,7 @@ struct RemoteScanner {
 				else {
 					String error;
 					int64 bytes = 0;
-					if(!m.HashPath(p, e.hash, error, report.stop, &bytes, report.throttle)) {
+					if(!m.HashPath(p, e.hash, error, report.stop, &bytes, report.throttle, e.size)) {
 						if(report.Stopping() || m.CheckLost())
 							return Null;
 						Warn(error);
@@ -661,6 +792,14 @@ struct RemoteFile : TreeFile {
 	}
 
 	void Flush() override   { libssh2_sftp_fsync(h); }   // servers without fsync@openssh.com just refuse
+
+	// Everything written so far has been acknowledged by the server, so it reads the
+	// same bytes this handle would.
+	bool HashesOnServer() const override   { return m->server_hash; }
+	bool HashRange(int64 off, int64 len, String& hash, String& error) override
+	{
+		return m->ServerHash(path, off, len, hash, error, nullptr);
+	}
 
 	bool SetAttrs(const FileAttrs& fa, String& error) override
 	{

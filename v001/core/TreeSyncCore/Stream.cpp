@@ -464,7 +464,10 @@ struct Streamer {
 	bool Same(Ctx& c, Entry& e, Entry& t, String& th, bool& same, String& error)
 	{
 		int64 big = (int64)flags.big_file_mib << 20;
-		if(e.size >= big && (e.hash.IsEmpty() || th.IsEmpty())) {
+		// A side that hashes on its server makes both hashes cheaper than reading the
+		// remote file here to compare it byte by byte.
+		bool server = c.fs[0]->HashesOnServer() || c.fs[1]->HashesOnServer();
+		if(e.size >= big && (e.hash.IsEmpty() || th.IsEmpty()) && !server) {
 			One<TreeFile> a = c.fs[0]->Open(e.rel, false, error);
 			One<TreeFile> b = a ? c.fs[1]->Open(t.rel, false, error) : One<TreeFile>();
 			if(!a || !b)

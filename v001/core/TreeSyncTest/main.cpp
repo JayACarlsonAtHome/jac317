@@ -1108,8 +1108,12 @@ static void TestChecks(const String& root)
 
 	// --clear-old: the replaced f2.txt went to <target>.old.
 	EXPECT(DirectoryExists(dst + ".old"), "safe delete made " + dst + ".old");
-	EXPECT(ClearOld(s, true, report, err) && DirectoryExists(dst + ".old"), "clear .old, counting only: " + err);
-	EXPECT(ClearOld(s, false, report, err) && !DirectoryExists(dst + ".old"), "clear .old deletes it: " + err);
+	ClearResult cr;
+	EXPECT(ClearOld(s, true, report, err, &cr) && DirectoryExists(dst + ".old") && cr.found == 1 && cr.files >= 1,
+	       Format("clear .old, counting only: %d folder, %lld files (%s)", cr.found, cr.files, err));
+	EXPECT(ClearOld(s, false, report, err, &cr) && !DirectoryExists(dst + ".old") && cr.found == 1,
+	       "clear .old deletes it: " + err);
+	EXPECT(ClearOld(s, true, report, err, &cr) && cr.found == 0, "clear .old with nothing there finds nothing");
 	SyncSetup bad = s;
 	bad.safe_delete_dir = src;
 	EXPECT(!ClearOld(bad, false, report, err) && err.Find("refuses") >= 0 && DirectoryExists(src),

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # SFTP traffic test: copies 128 MiB to a private sshd on 127.0.0.1:2298 and counts
-# what crossed the connections. A verified copy should send about the file's size
-# and receive about the same again (the read-back), not several times more.
+# what crossed the connections. A verified copy should send about the file's size and
+# receive next to nothing: the server hashes the copy itself (sha256sum over an SSH
+# command channel) instead of sending it back. With TREESYNC_NO_SERVER_HASH=1 the copy
+# is read back over SFTP: then about the file's size comes back too, not several times.
 # Usage: tests/sftp-traffic.sh [gcc|clang]   (needs /usr/sbin/sshd; no root)
 set -u
 CLI=$(cd "$(dirname "$0")/.." && pwd)/out/${1:-clang}/treesync-cli
@@ -43,8 +45,10 @@ fail=0
 limit=$((134217728 * 5 / 4))
 
 measure --source="$T/src" --target-host=127.0.0.1 --target-port=2298 --target-key="$T/sshd/user_key" --target="$T/dst"
-echo "local -> remote, exit $rc: sent $(mib $sent) MiB, received $(mib $recv) MiB (about 128 each way expected)"
-[ $rc = 0 ] && [ $sent -lt $limit ] && [ $recv -lt $limit ] && cmp -s "$T/src/file.bin" "$T/dst/file.bin" || { echo "FAIL"; fail=1; }
+if [ "${TREESYNC_NO_SERVER_HASH:-0}" = 1 ]; then back=$limit; expect="about 128 each way"
+else back=$((8 * 1048576)); expect="about 128 sent, under 8 received: the server checks the copy"; fi
+echo "local -> remote, exit $rc: sent $(mib $sent) MiB, received $(mib $recv) MiB ($expect)"
+[ $rc = 0 ] && [ $sent -lt $limit ] && [ $recv -lt $back ] && cmp -s "$T/src/file.bin" "$T/dst/file.bin" || { echo "FAIL"; fail=1; }
 
 measure --source-host=127.0.0.1 --source-port=2298 --source-key="$T/sshd/user_key" --source="$T/dst" --target="$T/back"
 echo "remote -> local, exit $rc: sent $(mib $sent) MiB, received $(mib $recv) MiB (about 128 received expected)"

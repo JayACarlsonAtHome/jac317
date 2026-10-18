@@ -229,8 +229,9 @@ CONSOLE_APP_MAIN
 	// The start goes at the top too; stop and duration come in the table at the end.
 	Print("started: " + DateTimeText(started));
 	CheckResult check;
+	ClearResult cleared;
 	bool ok = scan_only || sync_attrs ? RunCheck(setup, scan_only ? CheckMode::Scan : CheckMode::Attrs, report, check, error)
-	        : clear_old ? ClearOld(setup, setup.flags.dry_run, report, error)
+	        : clear_old ? ClearOld(setup, setup.flags.dry_run, report, error, &cleared)
 	        : RunSync(setup, report, result, error);
 	if(scan_only || sync_attrs) {
 		result.run = check.run;
@@ -262,9 +263,11 @@ CONSOLE_APP_MAIN
 		                    : Format("%d of %d attribute differences %s, %d failed", check.fixed, check.attr_diffs,
 		                             setup.flags.dry_run ? "would be set" : "set", check.failed);
 	}
-	else if(clear_old) {
-		status = "Good";
-		summary = setup.flags.dry_run ? "counted" : "cleared";
+	else if(clear_old) {   // a count only is not a clear: the status says which it was
+		status = cleared.found == 0 ? "Nothing to clear" : setup.flags.dry_run ? "Counted, not deleted" : "Good";
+		summary = cleared.found == 0 ? String("no .old folder")
+		        : Format("%d files, %d folders, %s %s", cleared.files, cleared.folders, FormatBytes(cleared.bytes),
+		                 setup.flags.dry_run ? "would be deleted (--no-dry-run deletes them)" : "deleted");
 	}
 	else if(result.stopped) {
 		if(result.run)
