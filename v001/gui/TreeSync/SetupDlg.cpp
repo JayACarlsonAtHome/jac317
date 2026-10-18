@@ -289,6 +289,15 @@ void SetupDlg::Set(const SyncSetup& s)
 	flags.Set(s.flags);
 }
 
+bool SetupDlg::Key(dword key, int count)
+{
+	if(key == K_F1) {
+		OpenManual("3-Run");   // 3.4: Setup, mode and options
+		return true;
+	}
+	return TopWindow::Key(key, count);
+}
+
 SyncSetup SetupDlg::Get() const
 {
 	SyncSetup s;

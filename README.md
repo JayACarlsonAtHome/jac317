@@ -4,6 +4,8 @@ TreeSync keeps two directory trees in sync. The trees can be on the same machine
 
 > **Use at your own risk.** TreeSync is experimental testing software. It copies, overwrites and deletes files, and can suggest commands that change user accounts. Use it at your own risk: try it on copies first and keep backups. It is provided "AS IS", without warranty of any kind, and the authors and contributors are not liable for any damage or loss of data arising from its use. See sections 7 and 8 of the Apache License 2.0 (LICENSE).
 
+**The manual** is in [`Manual/`](Manual/README.md): bootstrap, build and run, step by step. The GUI's **Help** menu opens its chapters as PDFs (`Manual/pdf/`, built from the Markdown by `Manual/build-pdf.sh`); F1 opens the chapter for the window you are in.
+
 ## Goals
 
 TreeSync is three things at once:

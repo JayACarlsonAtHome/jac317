@@ -89,6 +89,7 @@ class SetupDlg : public TopWindow {
 	Button       ok, cancel;
 
 public:
+	bool Key(dword key, int count) override;   // F1: the manual's Run chapter
 	SetupDlg();
 	void      Set(const SyncSetup& s);
 	SyncSetup Get() const;
@@ -116,6 +117,13 @@ String DisplayName(const String& d);
 void   ExecOnDisplay(const String& exe, const Vector<String>& args, const String& display);
 void   ApplyDisplayChoice();                       // restart on the chosen display if needed
 String LatestLog(const String& db_path);
+
+// The manual: Manual/pdf/<chapter>.pdf, three folders above the program (out/<compiler>/),
+// built from the Markdown next to it by Manual/build-pdf.sh. Opened in the desktop's
+// PDF viewer. chapter: "TreeSync-Manual" (all), "1-Bootstrap", "2-Build", "3-Run",
+// "4-Files-and-Troubleshooting".
+void   OpenManual(const String& chapter);
+void   HelpMenu(Bar& bar);
 
 // Messages.cpp: core messages shown in a dialog and printed to the terminal.
 void   WarnNotRoot();

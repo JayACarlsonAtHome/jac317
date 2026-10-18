@@ -173,6 +173,14 @@ public:
 	void Run()                         { Start(); }
 	void Snap(const String& folder);   // --screenshot: the three screens as PNGs
 	void Close() override;
+	bool Key(dword key, int count) override
+	{
+		if(key == K_F1) {   // the manual's Build chapter
+			OpenManual("2-Build");
+			return true;
+		}
+		return TopWindow::Key(key, count);
+	}
 
 	BuildWindow();
 	~BuildWindow();

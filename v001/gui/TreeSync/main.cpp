@@ -82,6 +82,7 @@ void TreeSyncWindow::MainMenu(Bar& bar)
 	bar.Sub("File", [this](Bar& bar) { FileMenu(bar); });
 	bar.Sub("View", [this](Bar& bar) { ViewMenu(bar); });
 	bar.Sub("Sync", [this](Bar& bar) { SyncMenu(bar); });
+	bar.Sub("Help", [](Bar& bar) { HelpMenu(bar); });
 }
 
 void TreeSyncWindow::FileMenu(Bar& bar)
@@ -219,6 +220,36 @@ void TreeSyncWindow::SetSetup(const SyncSetup& s)
 	setup = s;
 	LoadTrees();
 	ShowStatus();
+}
+
+// The manual -------------------------------------------------------------------------
+
+void OpenManual(const String& chapter)
+{
+	String folder = NormalizePath(AppendFileName(GetExeFolder(), "../../../Manual"));
+	String pdf = AppendFileName(folder, "pdf/" + chapter + ".pdf");
+	if(!FileExists(pdf)) {
+		Exclamation("The manual is not built yet: [C " + DeQtf(pdf) + "] is missing.&&"
+		            "Build it with [C " + DeQtf(AppendFileName(folder, "build-pdf.sh")) + "], or read the "
+		            "Markdown sources in [C " + DeQtf(folder) + "].");
+		return;
+	}
+	LaunchWebBrowser(pdf);   // the desktop's PDF viewer (xdg-open)
+}
+
+void HelpMenu(Bar& bar)
+{
+	bar.Add("Manual (all chapters)", [] { OpenManual("TreeSync-Manual"); })
+	   .Help("The whole manual as one PDF");
+	bar.Separator();
+	bar.Add("1. Bootstrap", [] { OpenManual("1-Bootstrap"); })
+	   .Help("From a fresh machine to a first build: requirements, U++, bootstrap.sh");
+	bar.Add("2. Build", [] { OpenManual("2-Build"); })
+	   .Help("build.sh, the Build page, debug and release, tests, verify.sh and the pre-push hook");
+	bar.Add("3. Run", [] { OpenManual("3-Run"); }).Key(K_F1)
+	   .Help("The GUI step by step, the command line, remote trees, root, checking and attributes");
+	bar.Add("4. Files and troubleshooting", [] { OpenManual("4-Files-and-Troubleshooting"); })
+	   .Help("Where everything is kept, and what to do when something goes wrong");
 }
 
 void SaveScreenshot(Ctrl& c, const String& path)
