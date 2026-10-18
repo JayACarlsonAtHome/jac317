@@ -813,14 +813,20 @@ void BuildWindow::UseButtons()
 	}
 }
 
+bool CanBuild()
+{
+	return BuildScript().GetCount() && !IsRoot();
+}
+
 void ShowBuild()
 {
-	BuildWindow().Execute();
+	if(CanBuild())
+		BuildWindow().Execute();
 }
 
 bool BuildPageAtStart()
 {
-	if(BuildScript().IsEmpty())   // not run from a build tree: nothing to build
+	if(!CanBuild())   // installed, or root: nothing to build here
 		return false;
 	for(const String& line : Split(LoadFile(BuildSettingsPath()), '\n'))
 		if(line == "at_start=0")

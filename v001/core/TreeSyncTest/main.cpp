@@ -297,6 +297,9 @@ static void TestMessages()
 	String m = NotRootMessage();
 	EXPECT(Split(m, '\n').GetCount() == 3, "not-root message has 3 lines: " + Show(m));
 	EXPECT(m.Find("run TreeSync as root") >= 0, "not-root message says how to fix it: " + Show(m));
+	EXPECT(IsAdminGroup("wheel") && IsAdminGroup("sudo") && IsAdminGroup("admin") && !IsAdminGroup("users") &&
+	       !IsAdminGroup("wheels"), "administrator groups: wheel, sudo, admin");
+	EXPECT(!IsRoot() || IsAdmin(), "root is an administrator");
 	String r = RefusedPathMessage("/my dir");
 	EXPECT(r.StartsWith("/my dir is outside"), "refused message names the path: " + Show(r));
 }

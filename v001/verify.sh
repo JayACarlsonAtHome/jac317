@@ -40,7 +40,9 @@ step() {
   local took=$(( $(date +%s) - t0 ))
   # The tests say which type they are (a debug build skips the 4.5 GiB copy): a step
   # that tested the wrong type has not checked what it claims.
-  if grep -q "skipped in a debug build" "$log"; then
+  if [ -z "$result" ]; then
+    rc=${rc/#0/1}; result="did not build, or the tests did not run"
+  elif grep -q "skipped in a debug build" "$log"; then
     [ "$type" = release ] && { rc=1; result="the release step ran a debug build"; }
   else
     [ "$type" = debug ] && { rc=1; result="the debug step ran a release build"; }

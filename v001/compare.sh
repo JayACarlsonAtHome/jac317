@@ -19,6 +19,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 . "$HERE/tools.sh"
+trap 'give_back "$HERE/out"' EXIT   # as root: out/ stays the user's
 case "$COMPILER" in
   gcc)   CXX=$(find_gcc) ;;
   clang) CXX=$(find_clang) ;;

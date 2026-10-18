@@ -71,7 +71,8 @@ TreeSyncWindow::TreeSyncWindow()
 	};
 
 	LoadTrees();
-	status = String(IsRoot() ? "Ready" : "Not running as root: limited to " + HomeDir()) +
+	status = String(IsRoot() ? "Ready" : run_as_root ? "Ready: syncs run as root"
+	                : "Not running as root: limited to " + HomeDir()) +
 	         (TS_CONTRACTS_NATIVE ? " (native contracts)" : "");
 	Sizeable().Zoomable();
 	SetRect(0, 0, Zx(1000), Zy(620));
@@ -88,8 +89,12 @@ void TreeSyncWindow::MainMenu(Bar& bar)
 void TreeSyncWindow::FileMenu(Bar& bar)
 {
 	bar.Add("Setup..", [this] { EditSetup(); });
-	bar.Add("Build...", [] { ShowBuild(); })
-	   .Help("Compile TreeSync with gcc, clang or both, and run the tests if ticked (v001/build.sh)");
+	if(CanBuild()) {   // in the source tree, as yourself; the installed copy only runs
+		bar.Add("Build...", [] { ShowBuild(); })
+		   .Help("Compile TreeSync with gcc, clang or both, and run the tests if ticked (v001/build.sh)");
+		bar.Add("Install for root...", [this] { InstallForRoot(); })
+		   .Help("Copy this build to /usr/local/bin, owned by root, for Run as root (v001/install.sh, through pkexec)");
+	}
 	bar.Separator();
 	bar.Add("About..", [this] {
 		String qtf = "[* TreeSync]&&Sync two directory trees by SHA-256.&&[*@6 Use at your own risk.]&";
@@ -144,7 +149,14 @@ void TreeSyncWindow::SyncMenu(Bar& bar)
 	bar.Add(idle, "Clear .old folders...", [this] { StartSync(false, "--clear-old"); })
 	   .Help("Delete the safe-delete folders (<target>.old) for good, after a confirmation");
 	bar.Separator();
-	bar.Add(idle, "Run as root (pkexec)", [this] { as_root = !as_root; }).Check(as_root)
+	if(InstalledCopy() && IsAdmin())   // the installed TreeSync syncs as root for an administrator
+		bar.Add(false, "Runs as root (installed)", [] {}).Check(true)
+		   .Help("The installed TreeSync runs every sync as root, through pkexec");
+	else if(InstalledCopy())           // anyone else: as themselves, inside their home
+		bar.Add(false, "Run as root (administrators only)", [] {}).Check(false)
+		   .Help("Syncing as root needs an administrator (a member of wheel); you sync as yourself, inside your home");
+	else
+		bar.Add(idle, "Run as root (pkexec)", [this] { as_root = !as_root; }).Check(as_root)
 	   .Help("Start treesync-cli through pkexec; the GUI itself stays an ordinary user");
 	bar.Add("Clear log", [this] { log.Clear(); });
 }
@@ -204,7 +216,7 @@ void TreeSyncWindow::EditSetup()
 	if(same_source)   // the checked paths are relative to the source
 		s.flags.include_paths = setup.flags.include_paths;
 	for(TreeEndpoint *e : { &s.source, &s.target })
-		if(!e->remote && !PathAllowed(e->path)) {
+		if(!e->remote && !run_as_root && !PathAllowed(e->path)) {   // runs as root: any path
 			RefusePath(e->path);
 			e->path.Clear();
 		}
@@ -226,7 +238,11 @@ void TreeSyncWindow::SetSetup(const SyncSetup& s)
 
 void OpenManual(const String& chapter)
 {
+	// In the source tree: Manual/ three folders up; installed: share/doc/treesync next to bin/.
 	String folder = NormalizePath(AppendFileName(GetExeFolder(), "../../../Manual"));
+	String installed = NormalizePath(AppendFileName(GetExeFolder(), "../share/doc/treesync"));
+	if(!DirectoryExists(folder) && DirectoryExists(installed))
+		folder = installed;
 	String pdf = AppendFileName(folder, "pdf/" + chapter + ".pdf");
 	if(!FileExists(pdf)) {
 		Exclamation("The manual is not built yet: [C " + DeQtf(pdf) + "] is missing.&&"
@@ -354,9 +370,12 @@ GUI_APP_MAIN
 		pass.Add("--from-start-page");
 		ExecOnDisplay(TreeSyncExe(use), pass, DisplayChoice());
 	}
-	WarnNotRoot();
+	if(InstalledCopy() && IsAdmin())   // the installed TreeSync syncs as root: any path, no warning
+		run_as_root = true;
+	else
+		WarnNotRoot();
 	for(TreeEndpoint *e : { &setup.source, &setup.target })
-		if(!e->remote && !PathAllowed(e->path)) {
+		if(!e->remote && !run_as_root && !PathAllowed(e->path)) {
 			RefusePath(e->path);
 			e->path.Clear();
 		}

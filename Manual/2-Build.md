@@ -124,10 +124,52 @@ git config core.hooksPath v001/setup/hooks
 
 To push once without the check: `git push --no-verify`.
 
-## 2.6 After changing code
+## 2.6 Install for root
+
+You build as yourself; most syncs need root. Root must not run programs your user can
+change (anything running as you could swap them first), so the release programs are
+**installed** into the usual system folders, owned by root:
+
+```bash
+./install.sh                    # the gcc release build; asks for your sudo password
+./install.sh --compiler clang   # the clang one
+./install.sh --dry-run          # only say what it would do
+./install.sh --uninstall        # remove it all again
+```
+
+| Installed | Where |
+|---|---|
+| The programs | `/usr/local/bin/treesync`, `/usr/local/bin/treesync-cli` (`root:root`, mode 755, like every program in `/usr/bin`) |
+| The manual | `/usr/local/share/doc/treesync/pdf/` (the Help menu finds it there) |
+| What was installed | `/usr/local/share/doc/treesync/INSTALLED`: compiler, commit, who, when, the SHA-256 of `treesync-cli` |
+| Desktop menu entry | `/usr/local/share/applications/treesync.desktop`: **TreeSync** in the app list |
+| polkit action | `/usr/share/polkit-1/actions/org.treesync.run-as-root.policy`: the GUI's root runs ask for the password once, then not again for a few minutes |
+
+It refuses a debug build: run `./verify.sh` (or `./build.sh --compiler gcc --release`)
+first. Programs go in under a temporary name and are renamed into place, so a
+TreeSync that is running keeps its copy. In the GUI, **File > Install for root...**
+does the same through `pkexec`.
+
+**Run it again after every build you want to use as root.** The installed copy does
+not follow `out/` by itself.
+
+**The installed copy only runs.** It has no Build page and no Build menu: there is no
+source next to it. It syncs as root for administrators, and as themselves for anyone
+else (see [3.9](3-Run.md)).
+
+## 2.7 Building as root
+
+You do not need to, and the GUI offers Build only to a normal user in the source tree
+(not to root, nor in the installed copy). The scripts still work as root, through
+`sudo`, `pkexec` or a root login: they use the U++ of the user the TreeSync folder
+belongs to (root's home has none), and give everything they made in `out/` back to
+that user, so your own next build can overwrite it.
+
+## 2.8 After changing code
 
 1. Build and test while working: `./build.sh --compiler gcc --test`.
 2. Before pushing (or let the hook do it): `./verify.sh`.
 3. When threads, locks or memory handling changed, also the sanitizer runs (2.4).
 
 `verify.sh` leaves release builds in `out/`, so the GUI is fast again afterwards.
+4. To use the new build as root: `./install.sh`.

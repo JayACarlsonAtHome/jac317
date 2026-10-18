@@ -44,6 +44,7 @@ done
 [ "$CLEAN" = 1 ] && MODE="${MODE}a"   # umk -a: rebuild all
 
 . "$HERE/tools.sh"
+trap 'give_back "$HERE/out"' EXIT   # as root: out/ stays the user's
 
 # The compiler: gcc 15+ or clang 21+, wherever this machine has it. The build methods
 # in bm/ name RHEL's paths; a copy with the compiler found here goes in out/bm/.

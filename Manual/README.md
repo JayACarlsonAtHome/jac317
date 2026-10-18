@@ -37,12 +37,19 @@ cd jac317/v001
 # 2. Check the machine, install what is missing (it asks first), build and test
 ./bootstrap.sh
 
-# 3. Build the release programs the GUI runs (with all tests, both compilers)
+# 3. Build the release programs (with all tests, both compilers)
 ./verify.sh
 
-# 4. Start the GUI
-out/gcc/treesync
+# 4. Install them for root (asks for your sudo password)
+./install.sh
+
+# 5. Start TreeSync: "TreeSync" in the desktop's app list, or
+treesync
 ```
+
+The installed TreeSync syncs as root for administrators (members of wheel); you build
+as yourself in `v001/`, and
+run `./install.sh` again after each build you want to use.
 
 In the GUI: pick a **source** and a **target** folder, check what to sync in the
 source tree, then **Sync > Dry run** (Shift+F9) to see what would happen and

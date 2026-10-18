@@ -2,28 +2,32 @@
 
 ## 3.1 Start the GUI
 
-```bash
-cd jac317/v001
-out/gcc/treesync          # or out/clang/treesync
-```
+There are two copies of TreeSync, for two jobs:
 
-Run the **release** build (see [2. Build](2-Build.md)); `./verify.sh` leaves one in
-`out/`.
+| | The installed TreeSync | The build in the source tree |
+|---|---|---|
+| Start it | **TreeSync** in the desktop's app list, or `treesync` | `v001/out/gcc/treesync` (or `out/clang/`) |
+| Syncs as | **root** for an administrator (each run through `pkexec`); anyone else: themselves | you; root only with **Sync > Run as root** |
+| Paths | any (administrator); inside their home (anyone else) | only inside your home, unless Run as root |
+| Build page | none: it only runs | yes (File > Build..., and at start if ticked) |
+| Comes from | `./install.sh` (see [2.6](2-Build.md)) | `./build.sh` or `./verify.sh` |
 
-If **Show this page when TreeSync starts** is ticked, the Build page comes first:
-click **Continue to TreeSync using GCC exe** (or Clang) to go on, or **Build** first.
+For everyday syncs use the **installed** TreeSync. The source-tree build is for
+working on TreeSync itself: it starts on the Build page if **Show this page when
+TreeSync starts** is ticked (click **Continue to TreeSync using GCC exe** to go on).
+
+Always start the GUI as yourself, not with `sudo`: it is an ordinary desktop program,
+and only the syncs run as root.
 
 Options on the command line set up the window and become the saved settings:
 
 ```bash
-out/gcc/treesync --source=/home/jay/Photos --target=/run/media/jay/Backup/Photos --mirror
+treesync --source=/home/jay/Photos --target=/run/media/jay/Backup/Photos --mirror
 ```
 
 Without options, the settings saved last time are used
 (`~/.config/treesync/settings`, saved on every change).
 
-**Run as yourself, not with sudo.** The GUI is an ordinary desktop program. When a
-sync needs root, use **Sync > Run as root** (3.9); only the sync itself runs as root.
 
 ## 3.2 The main window
 
@@ -175,15 +179,36 @@ To start over instead, use `--fresh` on the command line.
 ## 3.9 Running as root
 
 A sync often meets files your user cannot read or replace (other users' files,
-system files). Without root, local trees must be inside your home folder.
+system files), so the installed TreeSync **syncs as root for an administrator**: root,
+or a member of `wheel` (`sudo` or `admin` on Debian, Ubuntu and Mint), the users who
+may use sudo. A tool that can overwrite any file as root is as powerful as root, so
+nobody else gets that: **anyone else runs the installed TreeSync as themselves**,
+inside their own home, with no password asked (the Sync menu shows *Run as root
+(administrators only)*, greyed out).
 
-- **In the GUI**: tick **Sync > Run as root (pkexec)**. Each run then starts
-    `treesync-cli` through `pkexec`, which asks for your password; the GUI itself stays
-    an ordinary program.
-- **In a terminal**: `sudo out/gcc/treesync-cli ...`.
+For an administrator:
+
+- **The installed GUI** runs every sync through `pkexec`. The first run asks for your
+    password; polkit then remembers it for a few minutes. **Sync > Runs as root
+    (installed)** is shown ticked and cannot be turned off. Any path may be chosen.
+- **The installed `treesync-cli`**, started from a terminal by an administrator, starts
+    itself again through `sudo`: `treesync-cli --source=... --target=...` runs as root
+    (sudo asks for your password). `--help` does not need it.
+- **The source-tree build** syncs as you, limited to your home folder. Ticking
+    **Sync > Run as root (pkexec)** makes its runs use the **installed**
+    `treesync-cli`, which only root can change. If that is not this build, the log says
+    so (`File > Install for root` updates it); if nothing is installed, it warns that it
+    runs a copy your user could change.
 
 A root run keeps its own database and logs under `/root/.local/share/treesync/`,
 separate from yours. To resume a root run, run it as root again.
+
+**History and logs of root runs.** The GUI's **History** and **Show log file** read
+*your* database and logs, and root's are not readable by you. To look at a root run:
+`sudo ls /root/.local/share/treesync/logs/`, or have root export it:
+`treesync-cli --export-ai-logs` (the installed one runs as root by itself; it writes into
+root's `logs/ai/`). Note that `sudo treesync-cli` does not work on RHEL: sudo does not
+search `/usr/local/bin`; the installed `treesync-cli` needs no sudo in front.
 
 ## 3.10 Remote trees (SFTP)
 
@@ -211,32 +236,33 @@ account still works, just with twice the traffic for a verified copy.
 ## 3.11 The command line
 
 `treesync-cli` takes the same options the GUI saves. **It does a dry run unless you
-give `--no-dry-run`.**
+give `--no-dry-run`.** The examples use the installed `treesync-cli` (it runs as root);
+in the source tree it is `v001/out/gcc/treesync-cli` (it runs as you).
 
 ```bash
 # What would a mirror do?
-out/gcc/treesync-cli --source=/home/jay/Photos --target=/run/media/jay/Backup/Photos --mirror
+treesync-cli --source=/home/jay/Photos --target=/run/media/jay/Backup/Photos --mirror
 
 # Do it
-out/gcc/treesync-cli --source=/home/jay/Photos --target=/run/media/jay/Backup/Photos --mirror --no-dry-run
+treesync-cli --source=/home/jay/Photos --target=/run/media/jay/Backup/Photos --mirror --no-dry-run
 
 # Copy only new and changed files, 8 threads, at low priority
-out/gcc/treesync-cli --source=/data --target=/backup/data --copy --threads=8 --low-priority --no-dry-run
+treesync-cli --source=/data --target=/backup/data --copy --threads=8 --low-priority --no-dry-run
 
 # Only one folder and one file of the source
-out/gcc/treesync-cli --source=/data --target=/backup/data --include-path=projects/2026 --include-path=notes.txt --no-dry-run
+treesync-cli --source=/data --target=/backup/data --include-path=projects/2026 --include-path=notes.txt --no-dry-run
 
 # To a remote machine
-out/gcc/treesync-cli --source=/data --target-host=server --target-user=jay --target=/backup/data --no-dry-run
+treesync-cli --source=/data --target-host=server --target-user=jay --target=/backup/data --no-dry-run
 
 # Prove a copy: hash both sides, change nothing
-out/gcc/treesync-cli --source=/data --target=/backup/data --scan-only
+treesync-cli --source=/data --target=/backup/data --scan-only
 
 # Set only differing permissions and times
-out/gcc/treesync-cli --source=/data --target=/backup/data --sync-attrs --no-dry-run
+treesync-cli --source=/data --target=/backup/data --sync-attrs --no-dry-run
 
 # Delete <target>.old for good (without --no-dry-run it only counts)
-out/gcc/treesync-cli --source=/data --target=/backup/data --clear-old --no-dry-run
+treesync-cli --source=/data --target=/backup/data --clear-old --no-dry-run
 ```
 
 `treesync-cli --help` lists every option. In a terminal it shows one line per copied

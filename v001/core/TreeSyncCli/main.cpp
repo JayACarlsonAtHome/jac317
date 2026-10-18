@@ -17,6 +17,10 @@
 #include <pthread.h>
 #include <thread>
 #include <unistd.h>
+#include <sys/stat.h>
+#include <cerrno>
+#include <cstring>
+#include <vector>
 
 static std::atomic<bool> stop_requested;
 
@@ -76,9 +80,33 @@ static void *WatchStdin(void *)
 	return nullptr;
 }
 
+// The installed treesync-cli (install.sh: owned by root, only root may change it) runs
+// as root for an administrator: started by one, it starts itself again through sudo.
+// Anyone else runs it as themselves, inside their own home; so does the build in out/.
+static void AsRootIfInstalled(const Vector<String>& args)
+{
+	struct stat st;
+	String self = GetExeFilePath();
+	if(IsRoot() || !IsAdmin() || stat(self, &st) != 0 || st.st_uid != 0 || (st.st_mode & 022))
+		return;
+	for(const String& a : args)
+		if(a == "--help" || a == "-h")
+			return;
+	std::vector<char *> argv;
+	argv.push_back((char *)"sudo");
+	argv.push_back((char *)~self);
+	for(const String& a : args)
+		argv.push_back((char *)~a);
+	argv.push_back(nullptr);
+	execv("/usr/bin/sudo", argv.data());
+	Cerr() << "treesync-cli: cannot start sudo (" << strerror(errno) << "); run it as root\n";
+	exit(2);
+}
+
 CONSOLE_APP_MAIN
 {
 	Vector<String> args = clone(CommandLine());
+	AsRootIfInstalled(args);
 	// Developer switches for comparing compilers (the Build window's compare step):
 	// facts about this build, one "key<TAB>value" per line.
 	if(args.GetCount() == 1 && (args[0] == "--toolchain" || args[0] == "--bench")) {

@@ -135,6 +135,8 @@ build the faster **release** programs, which is what the GUI should run:
 
 ```bash
 ./verify.sh          # debug and release, all tests, both compilers; ends with release builds
+./install.sh         # copy them to /usr/local/bin for root (asks for your sudo password)
 ```
 
-Then go on to [3. Run](3-Run.md).
+Most syncs need root, and root runs the installed copy: see
+[2.6 Install for root](2-Build.md). Then go on to [3. Run](3-Run.md).

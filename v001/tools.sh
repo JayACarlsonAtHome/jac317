@@ -8,6 +8,9 @@
 #
 # UPP_DIR (a U++ folder holding umk and uppsrc) is tried before the usual places;
 # with UPP_ONLY=1 it is the only place (to test a fresh install next to an old one).
+#
+#   owner_home           as root: the home of the user TreeSync belongs to
+#   give_back DIR        as root: DIR's files back to that user
 
 major_of() {   # major version of a compiler, or 0
   "$1" -dumpversion 2>/dev/null | cut -d. -f1 | grep -E '^[0-9]+$' || echo 0
@@ -27,8 +30,30 @@ find_clang() {
   done
 }
 
+# As root (sudo, pkexec or a root login) the user is the one this TreeSync folder belongs
+# to: their home holds the U++ they build with (root's does not), and what a root build
+# makes in out/ goes back to them, or their next build could not overwrite it.
+owner_uid() {
+  [ "$(id -u)" = 0 ] || return 0
+  local uid; uid=$(stat -c %u "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null)
+  [ -n "$uid" ] && [ "$uid" != 0 ] && echo "$uid"
+}
+owner_home() {
+  local uid; uid=$(owner_uid)
+  [ -n "$uid" ] && getent passwd "$uid" | cut -d: -f6
+}
+give_back() {
+  local uid; uid=$(owner_uid)
+  [ -n "$uid" ] && [ -d "$1" ] && chown -R "$uid" "$1" 2>/dev/null
+  return 0
+}
+
+# A umk that cannot start here (built for another distribution: its libraries are
+# missing, exit 127) is passed over.
+runs_here() { "$1" > /dev/null 2>&1 < /dev/null; [ $? -ne 127 ]; }
+
 find_upp() {
-  local g u s
+  local g u s home; home=$(owner_home)
   if [ "${UPP_ONLY:-0}" = 1 ]; then
     [ -x "${UPP_DIR:-}/umk" ] && [ -d "$UPP_DIR/uppsrc/Core" ] && echo "$UPP_DIR/umk $UPP_DIR/uppsrc"
     return
@@ -36,9 +61,10 @@ find_upp() {
   for g in /run/media/jay/GFS /media/jay/GFS /mnt/GFS; do
     [ -d "$g/upp/uppsrc" ] && { GFS="$g"; break; }
   done
-  for u in ${UPP_DIR:+"$UPP_DIR/umk"} ${GFS:+"$GFS/upp-bin/rhel/umk"} "$HOME/u++/umk" ${GFS:+"$GFS/upp-bin/mint/umk"}; do
-    [ -x "$u" ] || continue
-    for s in ${UPP_DIR:+"$UPP_DIR/uppsrc"} ${GFS:+"$GFS/upp/uppsrc"} "$HOME/u++/uppsrc"; do
+  for u in ${UPP_DIR:+"$UPP_DIR/umk"} ${GFS:+"$GFS/upp-bin/rhel/umk"} "$HOME/u++/umk" ${home:+"$home/u++/umk"} \
+           ${GFS:+"$GFS/upp-bin/mint/umk"}; do
+    [ -x "$u" ] && runs_here "$u" || continue
+    for s in ${UPP_DIR:+"$UPP_DIR/uppsrc"} ${GFS:+"$GFS/upp/uppsrc"} "$HOME/u++/uppsrc" ${home:+"$home/u++/uppsrc"}; do
       [ -d "$s/Core" ] && { echo "$u $s"; return; }
     done
   done

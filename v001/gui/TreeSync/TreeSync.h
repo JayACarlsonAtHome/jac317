@@ -106,6 +106,14 @@ void   HistoryScreenshot(const String& db_path, const String& png);
 void   ShowLogFile(const String& path);
 void   ExportForAi(const String& db_path, int64 run, bool logs, bool sql);   // run 0: the newest
 void   ShowBuild();                                // Build.cpp: build (and test, if ticked), like jac313's runner
+// Building is for the user, in the source tree: this program came from v001/out/<compiler>/
+// and is not running as root. An installed copy, and root, only run TreeSync.
+bool   CanBuild();
+// The installed copy (install.sh: root owns it, in /usr/local/bin): it always syncs as root.
+bool   InstalledCopy();
+// Run as root: a treesync-cli only root can change (the installed one); note: what to
+// tell the user about it (it differs from this build, or none is installed).
+String RootCli(String& note);
 void   BuildScreenshots(const String& folder);
 void   BuildRun();
 bool   BuildPageAtStart();                         // the options page is the first screen
@@ -272,6 +280,7 @@ class TreeSyncWindow : public TopWindow {
 	void SyncMenu(Bar& bar);
 	void EditSetup();
 	void LoadTrees();
+	void InstallForRoot();   // File > Install for root: install.sh through pkexec
 
 public:
 	void SetSetup(const SyncSetup& s);

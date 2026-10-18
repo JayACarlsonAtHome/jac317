@@ -290,6 +290,12 @@ Vector<String> RunLogs(const String& db_path, int64 run);   // in order
 // Root.cpp. The messages are plain text, one paragraph per line; the GUI shows
 // them in a dialog and also prints them to the terminal.
 bool   IsRoot();
+// An administrator: root, or a member of the group that may use sudo and polkit's
+// admin authentication (wheel on RHEL and Fedora; sudo or admin on Debian, Ubuntu,
+// Mint). The installed TreeSync syncs as root only for them; anyone else runs it as
+// themselves, inside their own home.
+bool   IsAdmin();
+bool   IsAdminGroup(const String& group);
 String HomeDir();
 bool   PathAllowed(const String& p);   // always true as root; else only inside HomeDir()
 String CanonicalPath(const String& p);  // symlinks and ".." resolved

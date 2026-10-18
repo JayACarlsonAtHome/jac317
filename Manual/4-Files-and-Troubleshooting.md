@@ -4,7 +4,11 @@
 
 | What | Where |
 |---|---|
-| The programs | `v001/out/gcc/` and `v001/out/clang/`: `treesync`, `treesync-cli`, `treesync-test` |
+| Installed programs | `/usr/local/bin/treesync`, `/usr/local/bin/treesync-cli` (`root:root`, 755; by `install.sh`) |
+| Installed manual | `/usr/local/share/doc/treesync/pdf/`, and `INSTALLED`: which build, commit, when |
+| Desktop entry | `/usr/local/share/applications/treesync.desktop` |
+| polkit action | `/usr/share/polkit-1/actions/org.treesync.run-as-root.policy` |
+| Built programs | `v001/out/gcc/` and `v001/out/clang/`: `treesync`, `treesync-cli`, `treesync-test` |
 | Build and test output | `v001/out/` (`verify/` logs, `bootstrap-*.txt`); ignored by git |
 | GUI settings | `~/.config/treesync/settings`: one option per line, as on the command line |
 | Build page choices | `~/.config/treesync/build` |
@@ -22,8 +26,30 @@
 ## 4.2 Troubleshooting
 
 **"TreeSync is not running as root ... only inside your home directory"**
-: Local trees outside your home need root: tick **Sync > Run as root**, or run
-  `sudo treesync-cli ...`. Inside your home nothing is needed.
+: That is the source-tree build running as you. Use the installed TreeSync, which
+  syncs as root for administrators (`./install.sh`, then **TreeSync** in the app list or
+  `treesync-cli ...`), or tick **Sync > Run as root**. Inside your home nothing is needed.
+
+**Root runs use an older TreeSync, or the log says the installed one "is not this build"**
+: The installed copy does not follow `out/`: run `./install.sh` (or **File > Install for
+  root**) after building. `cat /usr/local/share/doc/treesync/INSTALLED` shows which
+  build is installed.
+
+**"ask an administrator (a member of wheel) to run TreeSync as root"**
+: You are not an administrator, so TreeSync syncs as you, inside your home. To sync
+  other folders, an administrator runs it, or adds you to wheel
+  (`sudo usermod -aG wheel NAME`; log in again), which also lets you use sudo.
+
+**The password is asked at every run**
+: The polkit action is missing: it is installed only when `install.sh` runs as root
+  (the default, through sudo), not for a `--prefix` of your own.
+
+**`sudo treesync-cli`: "command not found"**
+: sudo does not search `/usr/local/bin` on RHEL. Leave the sudo out: the installed
+  `treesync-cli` starts itself through sudo.
+
+**TreeSync is not in the app list**
+: Run `./install.sh`; log out and in again if the desktop does not pick it up at once.
 
 **A path is refused**
 : Without root, a path that leaves your home (also through `..` or a symlink) is
@@ -36,6 +62,12 @@
 
 **build.sh: "U++ (umk + uppsrc) not found"**
 : Run `./bootstrap.sh`, or point to an existing U++ with `export UPP_DIR=/path/to/u++`.
+
+**Building as root fails: "U++ not found", or umk "error while loading shared libraries"**
+: Older scripts looked for U++ in root's home and then picked a U++ built for another
+  distribution. Current ones use the U++ of the folder's owner (`~owner/u++`) and skip
+  one that cannot run here. Root-owned leftovers in `out/` from such a build:
+  `sudo chown -R $USER v001/out`.
 
 **A gcc release build crashes at start**
 : The U++ heap fix is missing (`uppfix`); `./bootstrap.sh` applies it.

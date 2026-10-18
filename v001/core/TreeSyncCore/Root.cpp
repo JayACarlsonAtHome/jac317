@@ -3,6 +3,7 @@
 // are limited to the user's home directory.
 #include "TreeSyncCore.h"
 
+#include <grp.h>
 #include <unistd.h>
 
 namespace fs = std::filesystem;
@@ -10,6 +11,24 @@ namespace fs = std::filesystem;
 bool IsRoot()
 {
 	return geteuid() == 0;
+}
+
+bool IsAdminGroup(const String& group)
+{
+	return group == "wheel" || group == "sudo" || group == "admin";
+}
+
+bool IsAdmin()
+{
+	if(IsRoot())
+		return true;
+	int n = getgroups(0, nullptr);
+	Buffer<gid_t> ids(max(n, 1));
+	n = getgroups(n, ids);
+	for(int i = 0; i < n; i++)
+		if(group *g = getgrgid(ids[i]); g && IsAdminGroup(g->gr_name))
+			return true;
+	return false;
 }
 
 // Resolves symlinks and "..", so neither can step outside the home directory.
@@ -36,8 +55,9 @@ bool PathAllowed(const String& p)
 String NotRootMessage()
 {
 	return "TreeSync is not running as root.\n"
-	       "It will still work, but only inside your home directory: " + HomeDir() + "\n"
-	       "To sync other folders, run TreeSync as root.";
+	       "It will still work, but only inside your home directory: " + HomeDir() + "\n" +
+	       String(IsAdmin() ? "To sync other folders, run TreeSync as root."
+	                        : "To sync other folders, ask an administrator (a member of wheel) to run TreeSync as root.");
 }
 
 String RefusedPathMessage(const String& p)

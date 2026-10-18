@@ -6,6 +6,7 @@
 #include "TreeSync.h"
 
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -384,11 +385,74 @@ bool TreeSyncWindow::ConfirmExtra(const SyncSetup& s, const String& extra)
 	return true;
 }
 
+// Root must not run a program the user can change: anything running as the user could
+// swap it, and then run as root. So Run as root uses a treesync-cli that belongs to root
+// and only root may write (install.sh puts one in /usr/local/bin).
+static bool RootOwned(const String& path)
+{
+	struct stat st;
+	return stat(path, &st) == 0 && st.st_uid == 0 && !(st.st_mode & 022);
+}
+
+static String FileHash(const String& path)
+{
+	return Sha256Hex(LoadFile(path));
+}
+
+bool InstalledCopy()
+{
+	return RootOwned(AppendFileName(GetExeFolder(), "treesync-cli"));
+}
+
+String RootCli(String& note)
+{
+	note.Clear();
+	String own = AppendFileName(GetExeFolder(), "treesync-cli");
+	if(RootOwned(own))   // this program is the installed one
+		return own;
+	for(const char *p : { "/usr/local/bin/treesync-cli", "/usr/bin/treesync-cli" })
+		if(RootOwned(p)) {
+			if(FileExists(own) && FileHash(own) != FileHash(p))
+				note = String("note: running the installed ") + p + " as root, which is not this build; "
+				       "File > Install for root installs this one";
+			return p;
+		}
+	note = "warning: no treesync-cli installed for root; running " + own + " as root, which your user can "
+	       "change. File > Install for root installs a root-owned copy (v001/install.sh)";
+	return own;
+}
+
+void TreeSyncWindow::InstallForRoot()
+{
+	String script = NormalizePath(AppendFileName(GetExeFolder(), "../../install.sh"));
+	String compiler = GetFileName(GetExeFolder());   // gcc or clang: the build this program came from
+	if(!FileExists(script)) {
+		Exclamation("Cannot find [C " + DeQtf(script) + "].");
+		return;
+	}
+	if(!PromptYesNo("[* Install this build for root?]&&The " + DeQtf(compiler) + " release build of treesync and "
+	                "treesync-cli goes to [C /usr/local/bin], owned by root, with the manual in "
+	                "[C /usr/local/share/doc/treesync]. Sync > Run as root then runs it.&&"
+	                "You will be asked for your password (pkexec)."))
+		return;
+	String out;
+	int code = Sys("/usr/bin/pkexec '" + script + "' --compiler " + compiler, out);
+	LogText(out);
+	if(code == 0)
+		PromptOK("[* Installed for root.]&&" + DeQtf(out.Mid(max(0, out.Find("TreeSync installed")))));
+	else
+		Exclamation(code == 126 || code == 127 ? String("Not installed: pkexec was refused or cancelled.")
+		            : "Not installed (exit code " + AsString(code) + "):&[C " + DeQtf(out.Right(600)) + "]");
+}
+
 void TreeSyncWindow::StartSync(bool dry_run, const String& extra)
 {
 	if(child > 0)
 		return;
 	String cli = AppendFileName(GetExeFolder(), "treesync-cli");
+	String root_note;
+	if(as_root)
+		cli = RootCli(root_note);
 	if(!FileExists(cli)) {
 		Log("cannot find " + cli + "; build it with v001/build.sh");
 		return;
@@ -442,7 +506,10 @@ void TreeSyncWindow::StartSync(bool dry_run, const String& extra)
 	child_stdin = in[1];
 	sync_started = (int64)time(nullptr);
 	sync_dry = dry_run;
-	Log(String(as_root ? "[as root] " : "") + CommandLineText(ToArgs(s)) + (extra.GetCount() ? " " + extra : String()));
+	Log(String(as_root ? "[as root: " + cli + "] " : "") + CommandLineText(ToArgs(s)) +
+	    (extra.GetCount() ? " " + extra : String()));
+	if(root_note.GetCount())
+		Log(root_note);
 	status = "Running...";
 	active.Clear();
 	copy_started.Clear();

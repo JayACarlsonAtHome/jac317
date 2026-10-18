@@ -4,6 +4,8 @@ TreeSync keeps two directory trees in sync. The trees can be on the same machine
 
 > **Use at your own risk.** TreeSync is experimental testing software. It copies, overwrites and deletes files, and can suggest commands that change user accounts. Use it at your own risk: try it on copies first and keep backups. It is provided "AS IS", without warranty of any kind, and the authors and contributors are not liable for any damage or loss of data arising from its use. See sections 7 and 8 of the Apache License 2.0 (LICENSE).
 
+**Install for root**: build as yourself, then `v001/install.sh` copies the release programs to `/usr/local/bin` (owned by root), with the manual, a desktop menu entry and a polkit action. The installed TreeSync syncs as root for administrators (others: as themselves, inside their home) and has no Build page; see the manual's chapter 2.6.
+
 **The manual** is in [`Manual/`](Manual/README.md): bootstrap, build and run, step by step. The GUI's **Help** menu opens its chapters as PDFs (`Manual/pdf/`, built from the Markdown by `Manual/build-pdf.sh`); F1 opens the chapter for the window you are in.
 
 ## Goals
@@ -129,7 +131,7 @@ The point of the GUI is to see what is going on. So the engine reports each step
 
 TreeSync is meant to run as root, because a sync often meets files the current user cannot read or replace. Without root it still runs, after a warning, but local trees are limited to your home directory.
 
-The GUI itself never runs as root, so it stays an ordinary Wayland client. Sync > Run as root starts `treesync-cli` through `pkexec` instead, and then paths outside home are allowed. In a terminal, run `sudo treesync-cli ...` or `pkexec treesync-cli ...`. Note that root has its own database (`/root/.local/share/treesync/treesync.db`) unless `--db` says otherwise. Paths are resolved before they are checked, so `..` and symlinks cannot step outside home. Remote trees are not limited this way; what they can reach depends on the remote login.
+The GUI itself never runs as root, so it stays an ordinary Wayland client. The installed TreeSync (`v001/install.sh`: `/usr/local/bin`, owned by root) syncs as root for an administrator (root, or a member of `wheel`; `sudo`/`admin` on Debian, Ubuntu, Mint): its GUI runs each sync through `pkexec` (polkit remembers the password for a few minutes), and its `treesync-cli` started by an administrator starts itself again through `sudo`. Anyone else runs it as themselves, inside their own home: a tool that can overwrite any file as root is as powerful as root. In the source-tree build, Sync > Run as root runs the installed `treesync-cli` through `pkexec`, and then paths outside home are allowed; it warns when the installed copy is not this build, or when none is installed. (`sudo treesync-cli` does not work on RHEL, whose sudo does not search `/usr/local/bin`; the installed one needs no sudo.) Note that root has its own database (`/root/.local/share/treesync/treesync.db`) unless `--db` says otherwise. Paths are resolved before they are checked, so `..` and symlinks cannot step outside home. Remote trees are not limited this way; what they can reach depends on the remote login.
 
 ## Command line
 
