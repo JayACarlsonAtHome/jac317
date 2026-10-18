@@ -86,6 +86,10 @@ Output goes to `v001/out/<compiler>/treesync` (and `treesync-test`). U++'s stock
 
 The tests build a scratch tree under `$TMPDIR` with awkward names and a folder chain deeper than `PATH_MAX`. They also check option round trips (including shell quoting through a real `sh`), the home-only limit, and the progress-line layout. The scratch tree is removed afterwards.
 
+## Choosing what to sync
+
+The source tree in the GUI has a checkbox on every folder and file. Checking a folder checks everything below it, including files added there later; unchecking it unchecks everything below. Unchecking one file inside a checked folder leaves the rest of that folder checked. A folder with only some of its contents checked shows a partly checked box. The top box checks or unchecks the whole tree. What is checked is saved as `--include-path` options (a checked folder is stored once, not file by file) and works together with the include and exclude names: exclude still wins. Changing the source folder starts again with everything checked.
+
 ## Seeing what happens
 
 The point of the GUI is to see what is going on. So the engine reports each step as it happens (scan, hash, compare, copy, skip, conflict) instead of handing the whole job to a tool that only prints a summary.
@@ -156,12 +160,13 @@ The switches are modelled on robocopy. TreeSync adds `--merge`, which copies cha
 | `--exclude-dir=GLOB` | Skip matching folders (repeatable) | `/XD` |
 | `--include-file=GLOB` | Only matching files (repeatable); e.g. `--include-file=win11.qcow2` syncs just that file, with the folders on its way | file list |
 | `--include-dir=GLOB` | Only what is inside matching folders, at any depth (repeatable) | |
+| `--include-path=REL` | Only this file or folder (relative to the source) and everything below it (repeatable); the GUI's checkboxes. The folders above it are made only as needed, and Mirror deletes nothing outside the checked paths | |
 | `--retries=N` | Retries on a failed copy (default 3) | `/R:n` |
 | `--retry-wait=N` | Seconds between retries (default 5) | `/W:n` |
 | `--time-tolerance=N` | Times of the two sides N seconds apart or less count as equal (default 3; 0 = exact). Clocks and file times differ between machines, network shares and FAT disks | `/FFT` (for all systems) |
 | `--threads=N` | Files copied at the same time (default 4); each thread has its own SSH connection to a remote side | `/MT:n` |
 | `--big-file-mib=N` | A same-size file this big or bigger, with no saved hash, is compared with the target's copy side by side, stopping at the first difference (default 1024) | |
-| `--chunk-mib=N` | Chunk size for big files (default 64) | |
+| `--chunk-mib=N` | Copies are made in chunks this big; a file of more than one chunk resumes at its last checked chunk (default 64) | |
 | `--safe-delete` | Files a sync would delete or overwrite are moved to `<target>.old` instead, same folder layout; a name already there gets `.1`, `.2`, ... (default on; `--no-safe-delete` really deletes) | |
 | `--safe-delete-dir=PATH` | Where `--safe-delete` moves target-side files (default `<target>.old`; must be on the same disk, outside both trees) | |
 | `--preserve-owner` | Copy owner and group, matched by **name** (default on; needs root on the side being written) | `/COPY:O` |

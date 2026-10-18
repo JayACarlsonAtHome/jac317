@@ -116,6 +116,7 @@ CONSOLE_APP_MAIN
 	}
 	bool stop_on_eof = false, compare_ids = false, scan_only = false, sync_attrs = false, clear_old = false;
 	static bool gui_progress = false;
+	static bool checking = false;   // Scan only / Sync attributes: the pre-scan counts folders
 	for(int i = args.GetCount() - 1; i >= 0; i--) {
 		bool *flag = args[i] == "--compare-ids" ? &compare_ids : args[i] == "--stop-on-eof" ? &stop_on_eof
 		           : args[i] == "--gui-progress" ? &gui_progress : args[i] == "--scan-only" ? &scan_only
@@ -150,6 +151,7 @@ CONSOLE_APP_MAIN
 			pthread_detach(t);
 	}
 
+	checking = scan_only || sync_attrs;
 	SyncReport report;
 	report.stop = &stop_requested;
 	report.WhenLine = [](const String& s) { Print(s, s.Find("] Total") >= 0 ? run_started : -1); };
@@ -160,7 +162,8 @@ CONSOLE_APP_MAIN
 			name.Replace("\t", " ");
 			name.Replace("\n", " ");
 			Cout() << std::format("@file\t{}\t{}\t{}\t{:.2f}\t{}\t{}\t", p.id, p.done, p.size, p.seconds,
-			                      p.index, std::to_string(p.count) + (p.more ? "+" : "")) << name << (p.verifying ? "\tverify" : "") << "\n";
+			                      p.index, std::to_string(p.count) + (p.more ? "+" : "")) << name
+			       << (p.verifying ? "\tverify" : p.check ? "\tcheck" : "") << "\n";
 		}
 		if(p.done >= p.size && !p.verifying)
 			Print(ProgressLine(p), NowMicros() - (int64)(p.seconds * 1e6));
@@ -176,7 +179,7 @@ CONSOLE_APP_MAIN
 			       << d << "\n";
 		}
 		if(s.finished)
-			Print(s.stage == 0 ? Format("pre-scan done: %s entries", AsString(s.done))
+			Print(s.stage == 0 ? Format(checking ? "pre-scan done: %s folders listed" : "pre-scan done: %s entries", AsString(s.done))
 			                   : Format("post-scan done: %s folders checked", AsString(s.done)), run_started);
 	};
 	// The messages themselves come as lines; this is for the GUI's banner.
@@ -212,6 +215,7 @@ CONSOLE_APP_MAIN
 		for(int n = 1; FileExists(log_path); n++)   // two runs in the same second
 			log_path = log_path.Left(log_path.GetCount() - 4) + "." + AsString(n) + ".log";
 		run_log.Open(log_path);
+		run_log << LogHeader((int64)time(nullptr));
 	}
 	Vector<String> shown = ToArgs(setup);
 	if(scan_only) shown.Add("--scan-only");

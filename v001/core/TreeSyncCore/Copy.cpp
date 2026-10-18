@@ -16,7 +16,7 @@ bool HashAt(int dirfd, const String& name, String& hash, String& error,
 		return false;
 	}
 	posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);
-	Sha256Stream sha;
+	Sha256 sha;
 	Buffer<byte> buf(1 << 20);
 	int64 total = 0;
 	for(;;) {

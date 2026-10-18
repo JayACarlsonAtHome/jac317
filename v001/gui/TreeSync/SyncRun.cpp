@@ -110,8 +110,35 @@ double TreeSyncWindow::BenchLog(int n)
 	return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
 }
 
+// The boxes and the list say what this run does: a scan copies nothing.
+void TreeSyncWindow::StageLabels(const String& extra)
+{
+	run_extra = extra;
+	bool scan = extra == "--scan-only", check = scan || extra == "--sync-attrs";
+	stage_box[0].SetLabel(check ? "Pre-scan: list both trees" : "Pre-scan: source");
+	stage_box[1].SetLabel(scan ? "Check: SHA-256 of both sides" : extra == "--sync-attrs" ? "Attributes" : "Copy");
+	stage_box[2].SetLabel(check ? "Post-scan: folders checked" : "Post-scan: target");
+	active.HeaderTab(0).SetText(scan ? "Checking" : "Copying");
+}
+
+// --screenshot: a Scan only run part-way.
+void TreeSyncWindow::DemoScanProgress()
+{
+	StageLabels("--scan-only");
+	ProgressVisible(true);
+	active.Clear();
+	for(const char *l : {
+		"@stage\t0\t412\t412\t1\t",
+		"@overall\t2576980377\t8589934592",
+		"@file\t3\t0\t4294967296\t3.1\t3\t140\tVMs/win11.qcow2\tcheck",
+		"@file\t7\t0\t209715200\t0.4\t7\t140\tVMs/notes/install.log\tcheck",
+		"@stage\t2\t180\t413\t0\t" })
+		ShowProgress(l);
+}
+
 void TreeSyncWindow::DemoProgress()
 {
+	StageLabels(String());
 	ProgressVisible(true);
 	eta_t0 = std::chrono::steady_clock::now() - std::chrono::seconds(754);
 	eta_samples.Clear();
@@ -239,7 +266,8 @@ void TreeSyncWindow::ShowProgress(const String& line)
 		// out the same as the target's drop out of it again.
 		EtaSample(done, total);
 		StageShow(1, done, total, FormatBytes(done) + " of " + FormatBytes(total) +
-		          (prescan_done ? String() : String("  (so far: the pre-scan is still finding files)")));
+		          (run_extra == "--scan-only" ? String(" read  (reading files only, nothing is copied)")
+		           : prescan_done ? String() : String("  (so far: the pre-scan is still finding files)")));
 		return;
 	}
 	if(f[0] == "@stage" && f.GetCount() >= 6) {
@@ -249,7 +277,11 @@ void TreeSyncWindow::ShowProgress(const String& line)
 		String detail = f.GetCount() > 5 ? f[5] : String();
 		if(stage == 0 && finished)
 			prescan_done = true;
-		if(stage == 0)
+		if(stage == 0 && run_extra.GetCount())   // Scan only / Sync attributes: folders of both trees listed
+			StageShow(0, done, total,
+			          finished ? Format("done: %s folders listed", AsString(done))
+			                   : Format("%s of %s folders listed  ", AsString(done), AsString(total)) + detail);
+		else if(stage == 0)
 			StageShow(0, done, finished ? done : total,
 			          finished ? Format("done: %s entries", AsString(done))
 			                   : AsString(done) + (total ? " of ~" + AsString(total) : String()) + " entries  " + detail);
@@ -265,6 +297,7 @@ void TreeSyncWindow::ShowProgress(const String& line)
 	int64 done = ScanInt64(f[2]), size = ScanInt64(f[3]);
 	double seconds = ScanDouble(f[4]);
 	bool verifying = f.GetCount() >= 9 && f[8] == "verify";
+	bool checking = f.GetCount() >= 9 && f[8] == "check";   // Scan only: hashed on both sides
 	int row = active.Find(id);
 	if(done >= size && !verifying) {   // finished: its line is in the log
 		if(row >= 0)
@@ -275,8 +308,9 @@ void TreeSyncWindow::ShowProgress(const String& line)
 	if(copy_started.Find(id) < 0)
 		copy_started.Add(id, std::chrono::steady_clock::now());
 	String elapsed = MinSec(std::chrono::duration<double>(std::chrono::steady_clock::now() - copy_started.Get(id)).count());
-	String rate = verifying ? String("checking") : seconds > 0 ? FormatBytes((int64)(done / seconds)) + "/s" : String();
-	String what = Format("[%s/%s] ", f[5], f[6]) + f[7] + (verifying ? "   (verifying the copy)" : "");
+	String rate = verifying || checking ? String("checking") : seconds > 0 ? FormatBytes((int64)(done / seconds)) + "/s" : String();
+	String what = Format("[%s/%s] ", f[5], f[6]) + f[7] +
+	              (verifying ? "   (verifying the copy)" : checking ? "   (hashing both sides)" : "");
 	int permille = size > 0 ? (int)(done * 1000 / size) : 0;
 	if(row < 0)
 		active.Add(id, what, permille, rate, FormatBytes(size), elapsed);
@@ -359,12 +393,16 @@ void TreeSyncWindow::StartSync(bool dry_run, const String& extra)
 		Log("cannot find " + cli + "; build it with v001/build.sh");
 		return;
 	}
+	if(source_panel.tree.NothingChecked() && extra != "--clear-old") {
+		Exclamation("Nothing is checked in the source tree: check what to sync (the top box checks everything).");
+		return;
+	}
 	// The menu decides, not the Dry run switch: Run is real, Dry run previews.
 	SyncSetup s = setup;
 	s.flags.dry_run = dry_run;
 	if(extra.GetCount() ? !ConfirmExtra(s, extra) : !dry_run && !ConfirmRun(s))
 		return;
-	run_extra = extra;
+	StageLabels(extra);
 	Vector<String> args;
 	if(as_root)
 		args.Add("/usr/bin/pkexec");

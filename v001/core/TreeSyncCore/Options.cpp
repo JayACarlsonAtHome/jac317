@@ -242,6 +242,8 @@ Vector<String> FlagArgs(const SyncFlags& f)
 		args.Add("--include-file=" + p);
 	for(const String& p : Split(f.include_dirs, ';'))
 		args.Add("--include-dir=" + p);
+	for(const String& p : Split(f.include_paths, '\n'))
+		args.Add("--include-path=" + p);
 	return args;
 }
 
@@ -374,6 +376,12 @@ int ParseCommandLine(const Vector<String>& args, SyncSetup& s, String& error)
 			list << (list.GetCount() ? ";" : "") << value;
 			done = true;
 		}
+		if(name == "include-path") {   // relative to the source; one per option, kept one per line
+			if(!need())
+				return PARSE_ERROR;
+			s.flags.include_paths << (s.flags.include_paths.GetCount() ? "\n" : "") << value;
+			done = true;
+		}
 		for(const char *side : { "source", "target" }) {
 			TreeEndpoint& e = String(side) == "source" ? s.source : s.target;
 			String key = name.StartsWith(side) ? name.Mid(strlen(side)) : String("?");
@@ -445,6 +453,8 @@ String Usage()
 	  << "  --exclude-dir=GLOB     Skip matching folders, repeatable (robocopy /XD)\n"
 	  << "  --include-file=GLOB    Only matching files, repeatable (robocopy file list)\n"
 	  << "  --include-dir=GLOB     Only what is inside matching folders, repeatable\n"
+	  << "  --include-path=REL     Only this file or folder (relative to the source) and what is\n"
+	  << "                         below it, repeatable (the GUI's checkboxes)\n"
 	  << "                         (a blank list filters nothing; exclude wins over include)\n\n"
 	  << "Run:\n"
 	  << "  --fresh                Start over instead of resuming an unfinished run\n"

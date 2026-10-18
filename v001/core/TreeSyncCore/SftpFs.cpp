@@ -150,7 +150,7 @@ struct SftpFs::Impl {
 			error = Err("cannot open " + path);
 			return false;
 		}
-		Sha256Stream sha;
+		Sha256 sha;
 		Buffer<char> buf(1 << 20);
 		int64 total = 0;
 		for(;;) {
@@ -482,7 +482,7 @@ struct RemoteScanner {
 			Status(e.rel);
 
 			if(LIBSSH2_SFTP_S_ISDIR(a.permissions)) {
-				if(filter.SkipDir(name))
+				if(filter.SkipDir(e.rel))
 					continue;
 				String real = follow ? m.RealPath(p) : p;
 				if(open_dirs.Find(real) >= 0) {
@@ -494,12 +494,12 @@ struct RemoteScanner {
 				e.size = 0;
 				int at = out.GetCount();
 				out.Add(e);
-				bool in = filter.Inside(inside, name);
+				bool in = filter.Inside(inside, e.rel);
 				String hsh = Dir(p, e.rel, in);
 				open_dirs.Drop();
 				if(IsNull(hsh))
 					return Null;
-				if(out.GetCount() == at + 1 && !filter.KeepEmptyDir(in)) {   // nothing included in it
+				if(out.GetCount() == at + 1 && !filter.KeepEmptyDir(in, e.rel)) {   // nothing included in it
 					out.Drop();
 					continue;
 				}
@@ -508,17 +508,17 @@ struct RemoteScanner {
 				ListingLine(listing, 'd', hsh, name);
 			}
 			else if(LIBSSH2_SFTP_S_ISLNK(a.permissions)) {
-				if(!filter.KeepFile(inside, name))
+				if(!filter.KeepFile(inside, e.rel))
 					continue;
 				e.type = 'l';
 				e.link = m.ReadLink(p);
-				e.hash = SHA256String("symlink\n" + e.link);
+				e.hash = Sha256Hex("symlink\n" + e.link);
 				out.Add(e);
 				cache.Store(e);
 				ListingLine(listing, 'l', e.hash, name);
 			}
 			else if(LIBSSH2_SFTP_S_ISREG(a.permissions)) {
-				if(!filter.KeepFile(inside, name))
+				if(!filter.KeepFile(inside, e.rel))
 					continue;
 				e.type = 'f';
 				if(cache.Lookup(e, e.hash))
@@ -542,7 +542,7 @@ struct RemoteScanner {
 			else
 				Warn("skipped special file (device, pipe or socket): " + p);
 		}
-		return SHA256String(listing);
+		return Sha256Hex(listing);
 	}
 };
 

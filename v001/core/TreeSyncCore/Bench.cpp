@@ -35,7 +35,7 @@ String BenchFacts()
 		buf[i] = (byte)(i * 2654435761u >> 24);
 	String digest;
 	double t = Best([&] {
-		Sha256Stream sha;
+		Sha256 sha;
 		for(int i = 0; i < SLICES; i++)
 			sha.Put(buf, SLICE);
 		digest = sha.FinishString();

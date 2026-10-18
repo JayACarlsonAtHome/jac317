@@ -328,11 +328,10 @@ struct Runner {
 		bool count_back = !to.IsLocal();
 
 		Clock::time_point last_shown = Clock::now();
-		// SHA-256 of [off, off + len) of a file, in slices; feeds `also` too. show: the
-		// read-back of a chunk just written, so the file's bar moves while it is checked.
-		auto hash_range = [&](TreeFile& f, int64 off, int64 len, bool count, Sha256Stream *also,
-		                      String& hash, bool show = false) -> bool {
-			Sha256Stream sha;
+		// SHA-256 of [off, off + len) of a file, in slices. show: the read-back of a chunk
+		// just written, so the file's bar moves while it is checked.
+		auto hash_range = [&](TreeFile& f, int64 off, int64 len, bool count, String& hash, bool show = false) -> bool {
+			Sha256 sha;
 			for(int64 k = 0; k < len; k += SLICE) {
 				int64 n = min(SLICE, len - k);
 				if(!f.ReadAt(off + k, buf, n, error))
@@ -340,8 +339,6 @@ struct Runner {
 				if(count)
 					report.Count(n);
 				sha.Put(buf, (int)n);
-				if(also)
-					also->Put(buf, (int)n);
 				if(show && Since(last_shown) >= 0.25) {
 					p.verifying = true;
 					p.done = off + k + n;
@@ -367,12 +364,19 @@ struct Runner {
 		}
 		int64 count = (size + chunk - 1) / chunk;
 		int next = done.GetCount();
-		Sha256Stream src_sha, dst_sha;
+		// Hashing is most of the work of a local copy, so each byte is hashed as few times
+		// as it can be: the source once for the file, once more for its chunk when the file
+		// has several (a one-chunk file's chunk hash is the file's), and the read-back once
+		// per chunk. Every chunk reads back as what was sent, so the copy as a whole is the
+		// source: its SHA-256 is the source's.
+		Sha256 src_sha;
+		bool one = count == 1;
+		String whole;   // one chunk: the file's hash, worked out as the chunk's
 		if(next > 0) {
 			// The last recorded chunk may have been torn by the stop: check it again.
 			int64 off = (next - 1) * chunk, len = min(chunk, size - off);
 			String h, ignore = error;
-			if(!hash_range(*out, off, len, count_back, nullptr, h) || h != done.Top())
+			if(!hash_range(*out, off, len, count_back, h) || h != done.Top())
 				next--;
 			error = ignore;
 			{
@@ -391,7 +395,6 @@ struct Runner {
 				if(count_read)
 					report.Count(n);
 				src_sha.Put(buf, (int)n);
-				dst_sha.Put(buf, (int)n);
 			}
 		}
 		// Locally, whatever lies past the checked chunks goes (a torn chunk, an older and
@@ -409,14 +412,15 @@ struct Runner {
 			}
 			int64 off = idx * chunk, len = min(chunk, size - off);
 			// 1. read and hash, 2. write, slice by slice
-			Sha256Stream chunk_sha;
+			Sha256 chunk_sha;
 			for(int64 k = 0; k < len; k += SLICE) {
 				int64 n = min(SLICE, len - k);
 				if(!in.ReadAt(off + k, buf, n, error))
 					return false;
 				if(count_read)
 					report.Count(n);
-				chunk_sha.Put(buf, (int)n);
+				if(!one)
+					chunk_sha.Put(buf, (int)n);
 				src_sha.Put(buf, (int)n);
 				if(!sparse || !AllZero(buf, n)) {
 					if(!out->WriteAt(off + k, buf, n, error))
@@ -452,8 +456,8 @@ struct Runner {
 			if(count > 1)
 				out->Flush();
 			// 3. read the chunk back and check it against what was read
-			String sent = chunk_sha.FinishString(), back;
-			if(!hash_range(*out, off, len, count_back, &dst_sha, back, true))
+			String sent = one ? (whole = src_sha.FinishString()) : chunk_sha.FinishString(), back;
+			if(!hash_range(*out, off, len, count_back, back, true))
 				return false;
 			if(back != sent) {
 				error = Format("verify failed: chunk %d of %s reads back differently; kept as %s", idx + 1, rel, part);
@@ -474,8 +478,8 @@ struct Runner {
 		}
 		if((!sparse || written_end < size) && !out->Truncate(size, error))   // sparse: a hole at the end
 			return false;
-		src_hash = src_sha.FinishString();
-		dst_hash = dst_sha.FinishString();
+		src_hash = one ? whole : src_sha.FinishString();
+		dst_hash = src_hash;   // every chunk read back as sent
 		return true;
 	}
 

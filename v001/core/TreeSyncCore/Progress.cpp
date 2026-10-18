@@ -7,7 +7,9 @@
 #include "TreeSyncCore.h"
 
 #include <format>
+#include <openssl/evp.h>
 #include <time.h>
+#include <unistd.h>
 
 static String Rate(int64 done, double seconds)
 {
@@ -48,7 +50,11 @@ String ProgressLine(const CopyProgress& p, int width, bool bar)
 		int fill = pct * W / 100;
 		thermo = " [" + std::string(fill, '=') + std::string(W - fill, ' ') + "]";
 	}
-	std::string tail = std::format(" {:>3}%{} | {:>12} | {:>10} | {:>7}", pct, thermo,
+	// Scan only reads both sides and copies nothing: its lines say what it found.
+	std::string tail = p.check && !bar
+	                 ? std::format(" {:<7} | {:>12} | {:>10} | {:>7}", Nvl(p.state, String("hashing")).ToStd(),
+	                               Rate(p.done, p.seconds).ToStd(), FormatBytes(p.done).ToStd(), Elapsed(p.seconds))
+	                 : std::format(" {:>3}%{} | {:>12} | {:>10} | {:>7}", pct, thermo,
 	                               Rate(p.done, p.seconds).ToStd(), FormatBytes(p.done).ToStd(),
 	                               Elapsed(p.seconds));
 	int name_width = max(10, width - (int)counter.size() - (int)tail.size());
@@ -167,6 +173,17 @@ String LogStampFine(int64 start_us, int64 stop_us)
 	       String(std::format(".{:06}", d % 1000000)) + " : ";
 }
 
+String LogHeader(int64 unix_time)
+{
+	char host[256] = {};
+	gethostname(host, sizeof(host) - 1);
+	auto pad = [](const char *s, int w) { String r = s; return r + String(' ', max(w - r.GetCount(), 0)); };
+	return " TreeSync log, started " + DateTimeText(unix_time) + "  on " + host + " as " + GetUserName() +
+	       (IsRoot() ? " (root)" : "") + "\n\n"
+	       " " + pad("Start", 15) + " : " + pad("Stop", 15) + " : " + pad("Duration", 23) + " : Message\n"
+	       " HH:MM:SS.ffffff : HH:MM:SS.ffffff : YYY:DDD:HH:MM:SS.ffffff :\n " + String('=', 127) + "\n";
+}
+
 String ResultsHeader(int64 unix_time)
 {
 	String date, utc;
@@ -185,4 +202,41 @@ String ResultsLine(int64 start, int64 stop, const String& what, int result, cons
 	if(comment.GetCount())
 		line << " : " << comment;
 	return line;
+}
+
+// SHA-256 --------------------------------------------------------------------------
+
+Sha256::Sha256()
+:	ctx(EVP_MD_CTX_new())
+{
+	EVP_DigestInit_ex((EVP_MD_CTX *)ctx, EVP_sha256(), nullptr);
+}
+
+Sha256::~Sha256()
+{
+	EVP_MD_CTX_free((EVP_MD_CTX *)ctx);
+}
+
+void Sha256::Put(const void *data, int64 len)
+{
+	EVP_DigestUpdate((EVP_MD_CTX *)ctx, data, (size_t)len);
+}
+
+String Sha256::FinishString()
+{
+	unsigned char md[EVP_MAX_MD_SIZE];
+	unsigned int n = 0;
+	EVP_DigestFinal_ex((EVP_MD_CTX *)ctx, md, &n);
+	static const char hex[] = "0123456789abcdef";
+	String r;
+	for(unsigned int i = 0; i < n; i++)
+		r << hex[md[i] >> 4] << hex[md[i] & 15];
+	return r;
+}
+
+String Sha256Hex(const String& data)
+{
+	Sha256 sha;
+	sha.Put(data);
+	return sha.FinishString();
 }

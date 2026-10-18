@@ -60,10 +60,93 @@ void DirTree::StopRemote()
 	remote.reset();
 }
 
+// Checkboxes ----------------------------------------------------------------------
+
+String DirTree::Rel(int id) const
+{
+	String key = Key(id);
+	if(key == root_key)
+		return String();
+	return key.Mid(root_key.GetCount() + (root_key.EndsWith("/") ? 0 : 1));
+}
+
+// The folders on the way to the node are listed (it is on screen): their names come
+// from the tree.
+void DirTree::Toggle(int id)
+{
+	VectorMap<String, int> node;   // rel -> id, for the node and its parents
+	for(int n = id; ; n = GetParent(n)) {
+		node.Add(Rel(n), n);
+		if(n == 0)
+			break;
+	}
+	checked.Toggle(Rel(id), [&](const String& folder) {
+		Vector<String> names;
+		int f = node.Get(folder, -1);
+		for(int k = 0; f >= 0 && k < GetChildCount(f); k++) {
+			int c = GetChild(f, k);
+			if(boxes.Find(c) >= 0) {   // not a "(loading...)" line
+				String r = Rel(c);
+				names.Add(r.Mid(r.ReverseFind('/') + 1));
+			}
+		}
+		return names;
+	});
+	ShowChecks();
+	WhenChecks();
+}
+
+void DirTree::ShowChecks()
+{
+	for(int i = 0; i < boxes.GetCount(); i++) {
+		int st = checked.State(Rel(boxes.GetKey(i)));
+		boxes[i].Set(st == CheckedPaths::PART ? (int)Null : st);
+	}
+}
+
+void DirTree::DropBoxes(int id)
+{
+	for(int k = 0; k < GetChildCount(id); k++) {
+		int c = GetChild(id, k);
+		DropBoxes(c);
+		boxes.RemoveKey(c);
+	}
+}
+
+// A node; with checkboxes, its box carries the label.
+void DirTree::AddNode(int parent, const Image& img, const String& key, const String& label, bool folder)
+{
+	if(!checks) {
+		Add(parent, img, key, label, folder);
+		return;
+	}
+	Option& box = boxes.Create<Option>(-1);   // keyed by the node id once it has one
+	box.SetLabel(label);
+	box.NoNotNull();
+	Node n(img, box);
+	n.key = key;
+	n.CanOpen(folder);
+	int id = Add(parent, n);
+	boxes.SetKey(boxes.GetCount() - 1, id);
+	box << [this, id] { Toggle(id); };
+	int st = checked.State(Rel(id));
+	box.Set(st == CheckedPaths::PART ? (int)Null : st);
+}
+
+void DirTree::SetLabel(int id, const String& key, const String& label)
+{
+	int i = boxes.Find(id);
+	if(i >= 0)
+		boxes[i].SetLabel(label);
+	else
+		Set(id, key, label);
+}
+
 void DirTree::Load(const char *caption, const TreeEndpoint& e, bool follow, const String& known_hosts)
 {
 	StopRemote();
 	Clear();
+	boxes.Clear();
 	follow_links = follow;
 	is_remote = e.remote;
 	if(e.path.IsEmpty()) {
@@ -71,14 +154,41 @@ void DirTree::Load(const char *caption, const TreeEndpoint& e, bool follow, cons
 		return;
 	}
 	if(!e.remote) {
-		SetRoot(Node(CtrlImg::Dir(), e.path, String(caption) + ": " + e.path).CanOpen());
+		root_key = e.path;
+		String label = String(caption) + ": " + e.path;
+		if(checks) {
+			Option& box = boxes.Create<Option>(0);
+			box.SetLabel(label);
+			box.NoNotNull();
+			Node n(CtrlImg::Dir(), box);
+			n.key = e.path;
+			n.CanOpen();
+			SetNode(0, n);   // not SetRoot: that does not add the box as a child
+			box << [this] { Toggle(0); };
+			ShowChecks();
+		}
+		else
+			SetRoot(Node(CtrlImg::Dir(), e.path, label).CanOpen());
 		Open(0);
 		return;
 	}
 
 	String where = Nvl(e.user, GetUserName()) + "@" + e.host + ":" + e.path;
 	root_label = String(caption) + ": " + where;
-	SetRoot(Node(CtrlImg::Network(), "/", root_label + "   (connecting...)").CanOpen());
+	root_key = "/";
+	if(checks) {
+		Option& box = boxes.Create<Option>(0);
+		box.SetLabel(root_label + "   (connecting...)");
+		box.NoNotNull();
+		Node n(CtrlImg::Network(), box);
+		n.key = "/";
+		n.CanOpen();
+		SetNode(0, n);
+		box << [this] { Toggle(0); };
+		ShowChecks();
+	}
+	else
+		SetRoot(Node(CtrlImg::Network(), "/", root_label + "   (connecting...)").CanOpen());
 	Add(0, Null, Null, "(connecting to " + e.host + "...)");
 
 	// Remote node keys are "/" + rel, so the root ("/") is never an empty, Null key.
@@ -142,14 +252,16 @@ void *DirTree::RemoteWorker(void *arg)
 
 void DirTree::Connected(bool ok, const String& error)
 {
-	Set(0, "/", root_label + (ok ? String() : "   (not connected)"));
+	SetLabel(0, "/", root_label + (ok ? String() : "   (not connected)"));
 	if(ok) {
+		DropBoxes(0);
 		RemoveChildren(0);
 		Add(0, Null, Null, "(loading...)");
 		Request(0, "");
 		Open(0);
 	}
 	else {
+		DropBoxes(0);
 		RemoveChildren(0);
 		Add(0, Null, Null, "(" + error + ")");
 	}
@@ -184,32 +296,34 @@ void DirTree::Fill(int id, const String& parent_key, const Vector<FolderEntry>& 
 	Upp::Sort(links);
 	Upp::Sort(files);
 
-	for(const String& d : dirs) {
-		String key = is_remote ? (parent_key == "/" ? "/" + d : parent_key + "/" + d)
-		                       : AppendFileName(parent_key, d);
-		Add(id, CtrlImg::Dir(), key, d, true);
-	}
+	// Every node has its path as key (files too: the checkboxes need it).
+	auto key = [&](const String& name) {
+		return is_remote ? (parent_key == "/" ? "/" + name : parent_key + "/" + name) : AppendFileName(parent_key, name);
+	};
+	for(const String& d : dirs)
+		AddNode(id, CtrlImg::Dir(), key(d), d, true);
 	for(const String& l : links)
-		Add(id, CtrlImg::Dir(), Null, l + " ->");
+		AddNode(id, CtrlImg::Dir(), key(l), l + " ->", false);
 	for(const String& f : files)
-		Add(id, CtrlImg::File(), Null, f);
+		AddNode(id, CtrlImg::File(), key(f), f, false);
 }
 
 void DirTree::Listed(int id, const Vector<FolderEntry>& entries, const String& error)
 {
 	if(!IsValid(id))
 		return;
+	DropBoxes(id);
 	RemoveChildren(id);
 	if(error.GetCount())
 		Add(id, Null, Null, "(" + error + ")");
 	else
-		Fill(id, String(Get(id)), entries);
+		Fill(id, Key(id), entries);
 }
 
 void DirTree::LoadChildren(int id)
 {
-	String key = Get(id);
-	if(GetChildCount(id) || key.IsEmpty())
+	String key = Key(id);
+	if(GetChildCount(id) || key.IsEmpty() || !GetNode(id).canopen)
 		return;
 
 	if(is_remote) {

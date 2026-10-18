@@ -132,16 +132,16 @@ struct Checker {
 				String rel = d.rel.IsEmpty() ? s.name : d.rel + "/" + s.name;
 				bool inside = d.inside;
 				if(s.type == 'd') {
-					if(filter.SkipDir(s.name))
+					if(filter.SkipDir(rel))
 						continue;
-					inside = filter.Inside(d.inside, s.name);
+					inside = filter.Inside(d.inside, rel);
 					Dir& sub = stack.Add();
 					sub.rel = rel;
 					sub.inside = inside;
-					if(!inside)
+					if(!inside || !filter.Checked(rel))   // a folder only on the way to checked ones
 						continue;
 				}
-				else if(s.type != 'f' || !filter.KeepFile(d.inside, s.name))
+				else if(s.type != 'f' || !filter.KeepFile(d.inside, rel))
 					continue;   // symlinks and special files are not checked
 				Item it;
 				it.rel = rel;
@@ -158,16 +158,54 @@ struct Checker {
 					files.Add(pick(it));
 				}
 			}
+			// The pre-scan box: folders listed of the folders found so far.
+			listed++;
 			StageProgress st;
 			st.stage = 0;
-			st.done = files.GetCount() + dirs.GetCount();
+			st.done = listed;
+			st.total = listed + stack.GetCount();
 			st.detail = d.rel;
 			report.WhenStage(st);
 		}
 		StageProgress st;
 		st.stage = 0;
-		st.done = files.GetCount() + dirs.GetCount();
+		st.done = st.total = listed;
 		st.finished = true;
+		report.WhenStage(st);
+	}
+
+	// The post-scan box: folders whose files have all been checked.
+	VectorMap<String, int> waiting;   // folder -> its files not checked yet
+	int64            folders_done = 0, folders_total = 0;
+	int              listed = 0;
+
+	static String FolderOf(const String& rel)   { return rel.Left(max(rel.ReverseFind('/'), 0)); }
+
+	void FoldersStart(const Vector<Item>& files, const Vector<Item>& dirs)
+	{
+		for(const Item& f : files)
+			waiting.GetAdd(FolderOf(f.rel), 0)++;
+		folders_total = dirs.GetCount() + 1;   // and the top
+		folders_done = folders_total - waiting.GetCount();
+		FoldersShow(false);
+	}
+
+	void FolderStep(const String& rel)   // under m: one more file of rel's folder checked
+	{
+		int i = waiting.Find(FolderOf(rel));
+		if(i >= 0 && --waiting[i] == 0) {
+			folders_done++;
+			FoldersShow(false);
+		}
+	}
+
+	void FoldersShow(bool finished)
+	{
+		StageProgress st;
+		st.stage = 2;
+		st.done = folders_done;
+		st.total = folders_total;
+		st.finished = finished;
 		report.WhenStage(st);
 	}
 
@@ -222,10 +260,25 @@ struct Checker {
 	}
 
 	// One file: hash both sides (Scan), compare, record. ctx: this thread's sides.
-	void File(TreeFs *side[2], const Item& it)
+	// n: the file's place in the list, its id in the progress shown.
+	void File(TreeFs *side[2], const Item& it, int n)
 	{
 		CheckRow r = Row(it, 'f');
 		String error;
+		// Scan only: shown while it is hashed (the GUI's list, the terminal's status line),
+		// then one line with what it found. It reads both sides; it copies nothing.
+		CopyProgress p;
+		p.id = n;
+		p.check = true;
+		p.name = it.rel;
+		p.size = r.size[0] * (r.side[1] ? 2 : 1);   // bytes to read
+		p.count = file_total;
+		auto t0 = std::chrono::steady_clock::now();
+		if(mode == CheckMode::Scan && p.size > 0) {
+			std::lock_guard<std::mutex> l(m);
+			p.index = result.files + 1;
+			report.WhenProgress(p);
+		}
 		if(mode == CheckMode::Scan)
 			for(int i = 0; i < 2 && r.side[i] && !report.Stopping(); i++)
 				if(!side[i]->Hash(it.rel, false, r.sha[i], error, report.stop)) {
@@ -257,14 +310,14 @@ struct Checker {
 			result.missing++;
 		if(r.attr_diff.GetCount())
 			result.attr_diffs++;
-		CopyProgress p;
-		p.id = r.seq;
-		p.index = result.files;
-		p.count = file_total;
-		p.name = it.rel;
-		p.size = p.done = r.size[0];
-		if(mode == CheckMode::Scan)
+		FolderStep(it.rel);
+		if(mode == CheckMode::Scan) {
+			p.index = result.files;
+			p.done = p.size;
+			p.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+			p.state = r.result.GetCount() ? "failed" : !r.side[1] ? "missing" : r.sha[0] == r.sha[1] ? "same" : "DIFFERS";
 			report.WhenProgress(p);
+		}
 	}
 
 	// Sets what differs on the target, row by row, as the SQL finds it.
@@ -430,10 +483,11 @@ bool RunCheck(const SyncSetup& setup, CheckMode mode, SyncReport& report, CheckR
 	// one at a time over SFTP (a connection must not be shared between threads).
 	int threads = k.local ? max(1, flags.threads) : 1;
 	k.file_total = files.GetCount();
+	k.FoldersStart(files, dirs);
 	auto work = [&] {
 		TreeFs *s[2] = { k.fs[0], k.fs[1] };
 		for(int i; !report.Stopping() && (i = k.index++) < files.GetCount();)
-			k.File(s, files[i]);
+			k.File(s, files[i], i);
 	};
 	std::vector<std::thread> pool;
 	for(int t = 1; t < threads; t++)
@@ -442,6 +496,8 @@ bool RunCheck(const SyncSetup& setup, CheckMode mode, SyncReport& report, CheckR
 	for(auto& t : pool)
 		t.join();
 	db.Exec("COMMIT");
+	if(!report.Stopping())
+		k.FoldersShow(true);
 
 	result.stopped = report.Stopping();
 	if(!result.stopped && mode == CheckMode::Attrs) {

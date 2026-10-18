@@ -135,6 +135,9 @@ String Guide()
 	"- A copied file's line runs from when its copy began to when it finished (DURATION is "
 	"years:days:hours:minutes:seconds.microseconds). Logs from older versions have whole seconds only.\n"
 	"- Lines about the whole run (pre-scan done, post-scan done, Total, finished, took) run from the start of the run.\n"
+	"- A Scan only run (`--scan-only`) copies nothing: each file's line ends in what it found, `same`, `DIFFERS`, "
+	"`missing` (not on the target) or `failed`, where a copy shows its percentage; the size is what was read on both sides.\n"
+	"- Every log starts with a header: when it started, the machine and the user, and the column titles.\n"
 	"- Other lines (folders created, deletes, moves to `.old`, warnings, `network:` events, `FAILED`, `CONFLICT`) "
 	"show the moment they happened.\n"
 	"- `[ 35/240+]`: the 35th file copied of 240 that may need copying; `+` while the pre-scan is still finding files. "
@@ -224,7 +227,7 @@ bool ExportAiLogs(const String& db_path, int64 run, String& out_path, String& er
 		String first, last, result;
 		for(const String& line : all[i].lines) {
 			LogLine l = ParseLine(line);
-			if(l.seconds >= 0) {
+			if(l.seconds >= 0 && line.Find(" : Result = ") < 0) {   // not the whole-second results table
 				if(first.IsEmpty())
 					first = l.start;
 				last = l.stop;

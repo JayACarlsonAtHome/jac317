@@ -50,7 +50,16 @@ TreeSyncWindow::TreeSyncWindow()
 	log.SetFont(Monospace());
 	Add(vsplit.SizePos());
 
+	// The source tree's checkboxes choose what is synced (--include-path, relative to
+	// the source: a new source starts with everything checked).
+	source_panel.tree.Checks();
+	source_panel.tree.WhenChecks = [this] {
+		setup.flags.include_paths = source_panel.tree.GetChecked();
+		ShowStatus();
+	};
 	source_panel.picker.WhenPath = [this] {
+		if(setup.source.path != source_panel.picker.Get())
+			setup.flags.include_paths.Clear();
 		setup.source.path = source_panel.picker.Get();
 		LoadTrees();
 		ShowStatus();
@@ -78,8 +87,8 @@ void TreeSyncWindow::MainMenu(Bar& bar)
 void TreeSyncWindow::FileMenu(Bar& bar)
 {
 	bar.Add("Setup..", [this] { EditSetup(); });
-	bar.Add("Build and test..", [] { ShowBuild(); })
-	   .Help("Compile TreeSync with gcc, clang or both and run the tests (v001/build.sh)");
+	bar.Add("Build...", [] { ShowBuild(); })
+	   .Help("Compile TreeSync with gcc, clang or both, and run the tests if ticked (v001/build.sh)");
 	bar.Separator();
 	bar.Add("About..", [this] {
 		String qtf = "[* TreeSync]&&Sync two directory trees by SHA-256.&&[*@6 Use at your own risk.]&";
@@ -143,6 +152,7 @@ void TreeSyncWindow::LoadTrees()
 {
 	source_panel.picker.Set(setup.source.path);
 	source_panel.picker.Remote(setup.source.remote);
+	source_panel.tree.SetChecked(setup.flags.include_paths);
 	source_panel.tree.Load("Source", setup.source, setup.flags.follow_links, setup.known_hosts);
 	target_panel.picker.Set(setup.target.path);
 	target_panel.picker.Remote(setup.target.remote);
@@ -184,6 +194,14 @@ void TreeSyncWindow::EditSetup()
 	if(dlg.Execute() != IDOK)
 		return;
 	SyncSetup s = dlg.Get();
+	// What the dialog does not edit stays as it was (it used to be lost here).
+	s.db = setup.db;
+	s.known_hosts = setup.known_hosts;
+	s.safe_delete_dir = setup.safe_delete_dir;
+	bool same_source = s.source.path == setup.source.path && s.source.host == setup.source.host &&
+	                   s.source.remote == setup.source.remote;
+	if(same_source)   // the checked paths are relative to the source
+		s.flags.include_paths = setup.flags.include_paths;
 	for(TreeEndpoint *e : { &s.source, &s.target })
 		if(!e->remote && !PathAllowed(e->path)) {
 			RefusePath(e->path);
@@ -206,6 +224,13 @@ void TreeSyncWindow::SetSetup(const SyncSetup& s)
 void SaveScreenshot(Ctrl& c, const String& path)
 {
 	Size sz = c.GetRect().GetSize();
+	// Never shown, so lay it out here: a tree adds and places its checkboxes while it
+	// paints (a first, thrown-away draw), then the layout puts them where they belong.
+	{
+		ImageDraw warm(sz);
+		c.DrawCtrl(warm);
+	}
+	c.RefreshLayoutDeep();
 	ImageDraw iw(sz);
 	iw.DrawRect(sz, SColorFace());
 	c.DrawCtrl(iw);
@@ -227,7 +252,7 @@ GUI_APP_MAIN
 			from_start_page = true;
 			args.Remove(i);
 		}
-		else if(args[i] == "--build-run") {   // a developer aid: Build and test, started at once
+		else if(args[i] == "--build-run") {   // a developer aid: Build, started at once
 			BuildRun();
 			return;
 		}
@@ -263,6 +288,8 @@ GUI_APP_MAIN
 			SaveScreenshot(w, AppendFileName(shots, "main.png"));
 			w.DemoProgress();
 			SaveScreenshot(w, AppendFileName(shots, "main-running.png"));
+			w.DemoScanProgress();
+			SaveScreenshot(w, AppendFileName(shots, "main-scan.png"));
 			SetupDlg dlg;
 			dlg.Set(setup);
 			dlg.Screenshots(shots);

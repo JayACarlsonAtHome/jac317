@@ -221,7 +221,7 @@ static String Digest(const Vector<Tuple<String, String>>& xattrs)
 	for(const auto& x : xattrs)
 		if(x.a != "security.selinux")
 			all << x.a << '\0' << (int64)x.b.GetCount() << '\0' << x.b;
-	return all.IsEmpty() ? String() : SHA256String(all);
+	return all.IsEmpty() ? String() : Sha256Hex(all);
 }
 
 String XattrDigest(TreeFile& f)

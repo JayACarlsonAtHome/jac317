@@ -385,6 +385,14 @@ static void TestProgress()
 		       "log stamp padded to the microsecond: " + Show(a));
 		EXPECT(a.Mid(37, 23) == "000:000:00:00:00.006519" && b.Mid(37, 23) == "000:000:02:05:09.028106",
 		       "log stamp duration: " + Show(b));
+		// The log's header: its column titles line up with the stamps.
+		Vector<String> h = Split(LogHeader(t / 1000000), '\n', false);   // keep the blank line
+		bool lined = h.GetCount() >= 5;
+		for(int i = 2; lined && i < 4; i++)   // the titles and the formats, below a blank line
+			for(int at : { 16, 34, 60 })
+				lined = h[i].Mid(at, 2) == " :" && a.Mid(at, 2) == " :";
+		EXPECT(h.GetCount() >= 5 && h[0].StartsWith(" TreeSync log, started ") && lined,
+		       "log header columns line up with the stamps: " + Show(LogHeader(t / 1000000)));
 	}
 	EXPECT(DurationWords(2 * 3600 + 5 * 60 + 9) == " 2 hours 05 minutes 09 seconds", "duration words: " + DurationWords(7509));
 	EXPECT(DurationWords(61) == " 0 hours 01 minute  01 second", "duration words, singular: " + DurationWords(61));
@@ -693,6 +701,75 @@ static void TestEngineMerge(const String& root)
 	       Format("merge: changed on both sides is a conflict, nothing overwritten (%d)", r.conflicts));
 	EXPECT(LoadFile(b + ".old/same.txt") == "same\n" && LoadFile(a + ".old/same.txt") == "changed in a\n",
 	       "merge: replaced versions on both sides kept in their .old folders");
+}
+
+// Checked paths (--include-path, the GUI's checkboxes): a checked folder brings
+// everything below it, a checked file only itself; the folders above are made only
+// as needed; Mirror deletes only below checked paths; exclude still wins.
+static void TestCheckedPaths(const String& root)
+{
+	// The checkbox model, on a made-up tree: a/{x.txt, sub/{z.txt, deeper}}, b/{w.txt,
+	// other.txt}, c, top.txt.
+	VectorMap<String, Vector<String>> tree;
+	tree.Add("") = { "a", "b", "c", "top.txt" };
+	tree.Add("a") = { "x.txt", "sub" };
+	tree.Add("a/sub") = { "z.txt", "deeper" };
+	tree.Add("b") = { "w.txt", "other.txt" };
+	auto children = [&](const String& folder) { return clone(tree.Get(folder)); };
+	CheckedPaths cp;
+	cp.Set("");
+	EXPECT(cp.Get() == "" && cp.State("a/sub/z.txt") == CheckedPaths::YES, "checkboxes: nothing given = all checked");
+	cp.Toggle("a/sub/z.txt", children);   // checked through the top: the rest of each folder stays
+	EXPECT(cp.Get() == "a/sub/deeper\na/x.txt\nb\nc\ntop.txt", "unchecking a file below a checked folder: " + Show(cp.Get()));
+	EXPECT(cp.State("a/sub/z.txt") == CheckedPaths::NO && cp.State("a") == CheckedPaths::PART &&
+	       cp.State("") == CheckedPaths::PART && cp.State("b/w.txt") == CheckedPaths::YES, "checkbox states after it");
+	cp.Toggle("a", children);   // partly checked: checking takes the whole folder
+	EXPECT(cp.Get() == "a\nb\nc\ntop.txt" && cp.State("a/sub/z.txt") == CheckedPaths::YES,
+	       "checking a folder checks everything below: " + Show(cp.Get()));
+	cp.Toggle("a", children);
+	EXPECT(cp.Get() == "b\nc\ntop.txt" && cp.State("a/x.txt") == CheckedPaths::NO,
+	       "unchecking a folder unchecks everything below: " + Show(cp.Get()));
+	cp.Toggle("", children);
+	EXPECT(cp.Get() == "", "checking the top checks everything");
+	cp.Toggle("", children);
+	EXPECT(cp.Nothing() && cp.State("b") == CheckedPaths::NO, "unchecking the top unchecks everything");
+	cp.Toggle("b/w.txt", children);
+	EXPECT(cp.Get() == "b/w.txt" && cp.State("b") == CheckedPaths::PART && cp.State("") == CheckedPaths::PART,
+	       "one file checked: its folders are partly checked");
+
+
+	String src = root + "/psrc", dst = root + "/pdst", db = root + "/paths.db";
+	for(const char *f : { "a/x.txt", "a/sub/z.txt", "a/sub/deeper/q.txt", "a/sub/skip.tmp", "b/w.txt", "b/other.txt",
+	                      "c/v.txt", "top.txt" })
+		Put(src + "/" + f, String(f) + "\n");
+	RealizeDirectory(src + "/a/sub/empty");
+	Put(dst + "/c/old.txt", "outside the checked paths\n");
+	Put(dst + "/a/sub/extra.txt", "inside a checked folder\n");
+	Put(dst + "/b/stray.txt", "next to a checked file\n");
+
+	SyncSetup s = Setup(src, dst, db);
+	s.flags.mode = SyncMode::Mirror;
+	s.flags.include_paths = "a/sub\nb/w.txt";
+	s.flags.exclude_files = "*.tmp";
+	Vector<String> args = ToArgs(s);
+	EXPECT(FindIndex(args, String("--include-path=a/sub")) >= 0 && FindIndex(args, String("--include-path=b/w.txt")) >= 0,
+	       "--include-path given once per checked path");
+	SyncSetup back;
+	String err;
+	EXPECT(ParseCommandLine(args, back, err) == PARSE_OK && back.flags.include_paths == s.flags.include_paths,
+	       "--include-path parses back: " + Show(back.flags.include_paths));
+	SyncResult r;
+	Sync(s, r);
+	EXPECT(r.failed == 0, "checked paths: no failures");
+	EXPECT(FileExists(dst + "/a/sub/z.txt") && FileExists(dst + "/a/sub/deeper/q.txt"), "a checked folder brings everything below");
+	EXPECT(DirectoryExists(dst + "/a/sub/empty"), "an empty folder below a checked one is made");
+	EXPECT(FileExists(dst + "/b/w.txt") && !FileExists(dst + "/b/other.txt"), "a checked file comes alone");
+	EXPECT(!FileExists(dst + "/a/x.txt") && !FileExists(dst + "/top.txt") && !FileExists(dst + "/c/v.txt"),
+	       "nothing outside the checked paths");
+	EXPECT(!FileExists(dst + "/a/sub/skip.tmp"), "exclude wins inside a checked folder");
+	EXPECT(FileExists(dst + "/c/old.txt") && FileExists(dst + "/b/stray.txt"), "Mirror leaves what is outside the checked paths");
+	EXPECT(!FileExists(dst + "/a/sub/extra.txt") && FileExists(dst + ".old/a/sub/extra.txt"),
+	       "Mirror removes extras below a checked folder (to .old)");
 }
 
 // Include and exclude: blank boxes filter nothing, every filled box narrows, exclude
@@ -1223,6 +1300,7 @@ CONSOLE_APP_MAIN
 	TestEngineResume(eroot);
 	TestEngineMerge(eroot);
 	TestFilters(eroot);
+	TestCheckedPaths(eroot);
 	TestEngineRefusals(eroot);
 	TestThreads(eroot);
 	TestCliLikeGui(eroot);

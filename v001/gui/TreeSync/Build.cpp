@@ -1,5 +1,5 @@
-// Build and test: compiles TreeSync with the chosen compilers and runs the tests,
-// like jac313's Jac313Runner. A presenter: v001/build.sh does the work; this window
+// Build: compiles TreeSync with the chosen compilers and, when "Run the tests" is
+// ticked, runs the tests and the checked runs under it, like jac313's Jac313Runner. A presenter: v001/build.sh does the work; this window
 // builds its command lines, runs them one after another as child processes,
 // streams their output and sums up how each went.
 //
@@ -180,7 +180,7 @@ public:
 
 BuildWindow::BuildWindow()
 {
-	Title("TreeSync - Build and test");
+	Title("TreeSync - Build");
 	Sizeable().Zoomable();
 	SetRect(0, 0, Zx(900), Zy(760));
 	Add(s1.SizePos());
@@ -196,19 +196,19 @@ BuildWindow::BuildWindow()
 	s1.Add(type_label.SetText("Type:").LeftPosZ(20, 60).TopPosZ(86, 22));
 	type.Add("debug", "Debug").Add("release", "Release (optimized)");
 	s1.Add(type.LeftPosZ(80, 400).TopPosZ(86, 22));
-	tests.SetLabel("Build and run the tests (treesync-test)");
+	// One switch for testing: unticked, Build only builds. The checked runs below it
+	// keep their ticks but run only with it (greyed out without it).
+	tests.SetLabel("Run the tests (treesync-test) after building");
 	s1.Add(tests.LeftPosZ(20, 600).TopPosZ(112, 22));
-	tsan.SetLabel("Then run the tests under ThreadSanitizer (clang; finds data races between threads)");
-	s1.Add(tsan.LeftPosZ(20, 700).TopPosZ(136, 22));
-	asan.SetLabel("Then run the tests under AddressSanitizer + UBSan (each compiler; memory errors, "
-	              "leaks, undefined behaviour such as int overflow)");
-	s1.Add(asan.LeftPosZ(20, 860).TopPosZ(160, 22));
-	valgrind.SetLabel("Then run the tests under valgrind memcheck (each compiler; reads of "
-	                  "uninitialised memory; slow)");
-	s1.Add(valgrind.LeftPosZ(20, 860).TopPosZ(184, 22));
-	helgrind.SetLabel("Then run the tests under valgrind helgrind (once, gcc when both; data races, "
-	                  "lock order; very slow)");
-	s1.Add(helgrind.LeftPosZ(20, 860).TopPosZ(208, 22));
+	tsan.SetLabel("Also under ThreadSanitizer (clang; finds data races between threads)");
+	s1.Add(tsan.LeftPosZ(44, 700).TopPosZ(136, 22));
+	asan.SetLabel("Also under AddressSanitizer + UBSan (each compiler; memory errors, leaks, "
+	              "undefined behaviour such as int overflow)");
+	s1.Add(asan.LeftPosZ(44, 836).TopPosZ(160, 22));
+	valgrind.SetLabel("Also under valgrind memcheck (each compiler; reads of uninitialised memory; slow)");
+	s1.Add(valgrind.LeftPosZ(44, 836).TopPosZ(184, 22));
+	helgrind.SetLabel("Also under valgrind helgrind (once, gcc when both; data races, lock order; very slow)");
+	s1.Add(helgrind.LeftPosZ(44, 836).TopPosZ(208, 22));
 	clean.SetLabel("Clean build: compile everything, not only what changed (fair build times)");
 	s1.Add(clean.LeftPosZ(20, 700).TopPosZ(232, 22));
 	compare.SetLabel("Compare the compilers: versions, C++26 features, import std, speed, size");
@@ -236,7 +236,7 @@ BuildWindow::BuildWindow()
 
 	command.SetFont(Monospace());
 	s1.Add(command.HSizePosZ(8, 8).BottomPosZ(42, 156));   // up to 10 steps, one line each
-	s1.Add(start.SetLabel("Start").RightPosZ(116, 100).BottomPosZ(8, 28));
+	s1.Add(start.SetLabel("Build").RightPosZ(116, 100).BottomPosZ(8, 28));
 	s1.Add(close1.SetLabel("Close").RightPosZ(8, 100).BottomPosZ(8, 28));
 	at_start.SetLabel("Show this page when TreeSync starts");
 	s1.Add(at_start.LeftPosZ(8, 400).BottomPosZ(10, 24));
@@ -348,6 +348,8 @@ void BuildWindow::Plan()
 			s.args << "--compiler" << cc;
 			s.title = String("compare ") + cc + ": features, import std, speed, size";
 		}
+	if(!tests)   // Build only builds
+		return;
 	if(tsan) {
 		BuildStep& s = steps.Add();
 		s.compiler = "clang";
@@ -389,6 +391,8 @@ void BuildWindow::ShowCommand()
 	for(const BuildStep& s : steps)
 		text << (text.GetCount() ? "\n" : "") << (s.compare ? "compare.sh " : "build.sh ") << Join(s.args, " ");
 	command = text;
+	for(Option *o : { &tsan, &asan, &valgrind, &helgrind })
+		o->Enable(tests);
 	start.Enable(BuildScript().GetCount() && steps.GetCount());
 }
 
@@ -771,10 +775,11 @@ void BuildWindow::Snap(const String& folder)
 void BuildWindow::Startup()
 {
 	startup = true;
-	Title("TreeSync - compiler and test options");
+	Title("TreeSync - build options");
 	SetRect(0, 0, Zx(1000), Zy(760));
-	// Bottom row, right to left: Exit, Continue (Clang), Continue (GCC), Build and test.
-	start.SetLabel("Build and test").RightPosZ(612, 140);
+	// Bottom row, right to left: Exit, Continue (Clang), Continue (GCC), Build (with the
+	// tests when "Run the tests" is ticked).
+	start.SetLabel("Build").RightPosZ(612, 140);
 	exit1.Show();
 	exit3.Show();
 	at_start.SetLabel("Show this page at start").LeftPosZ(8, 220);
@@ -796,7 +801,7 @@ void BuildWindow::UseButtons()
 		b->Show();
 		b->RightPosZ(c == "gcc" ? 354 : 96, 250);
 		b->Enable(built);
-		b->Tip(built ? "Starts " + TreeSyncExe(c) : "Not built yet: Build and test with " + c + " first");
+		b->Tip(built ? "Starts " + TreeSyncExe(c) : "Not built yet: Build with " + c + " first");
 	}
 }
 
@@ -815,7 +820,7 @@ bool BuildPageAtStart()
 	return true;
 }
 
-// The first screen: compiler and test options, Build and test, then Continue with the
+// The first screen: compiler and test options, Build, then Continue with the
 // gcc or the clang build. Returns which ("gcc" or "clang"); empty for Exit (or the
 // window's close box): quit TreeSync.
 String BuildStartPage()

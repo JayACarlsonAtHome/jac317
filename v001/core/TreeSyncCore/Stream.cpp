@@ -126,7 +126,7 @@ struct Streamer {
 		}
 		if(dry)
 			assume_empty = true;
-		r.Line(Format("%s the target first: %d entries%s", dry ? "would empty" : "emptied", n,
+		r.Line(Format("%s the target first: %d %s%s", dry ? "would empty" : "emptied", n, n == 1 ? "entry" : "entries",
 		              flags.safe_delete ? " moved to " + r.old_roots[1] : String(" deleted")));
 		return true;
 	}
@@ -323,7 +323,7 @@ struct Streamer {
 				}
 			}
 			if(f.type == 'd') {
-				if(filter.SkipDir(f.name))
+				if(filter.SkipDir(crel))
 					continue;
 				if(c.fs[0]->IsLocal() && f.dev) {   // symlink loops (--follow-links)
 					Tuple<int64, int64> id = { f.dev, f.ino };
@@ -342,7 +342,7 @@ struct Streamer {
 				r.Line("warning: skipped special file (device, pipe or socket): " + crel);
 				continue;
 			}
-			if((f.type == 'f' || f.type == 'l') && !filter.KeepFile(inside, f.name))
+			if((f.type == 'f' || f.type == 'l') && !filter.KeepFile(inside, crel))
 				continue;
 			if(filter.include && !EnsureFolder(c, rel))
 				continue;
@@ -363,7 +363,7 @@ struct Streamer {
 			e.link = f.link;
 			it.folder = rel;
 			if(e.type == 'l')
-				e.hash = SHA256String("symlink\n" + e.link);
+				e.hash = Sha256Hex("symlink\n" + e.link);
 			else {
 				Lock l(r.mx);
 				if(r.caches[0]->Lookup(e, e.hash)) {
@@ -413,14 +413,14 @@ struct Streamer {
 				break;
 			bool ok;
 			if(filter.include) {
-				bool in = filter.Inside(inside, list[i].name);
+				bool in = filter.Inside(inside, crel);
 				{
 					Lock l(r.mx);
 					Folder& fd = folders.GetAdd(crel);
 					fd.inside = in;
 					fd.src = list[i];
 				}
-				ok = !filter.KeepEmptyDir(in) || EnsureFolder(c, crel);
+				ok = !filter.KeepEmptyDir(in, crel) || EnsureFolder(c, crel);
 			}
 			else
 				ok = TargetFolder(c, list[i], crel);
@@ -471,7 +471,7 @@ struct Streamer {
 				return false;
 			const int64 SLICE = 1 << 20;
 			Buffer<byte> x((size_t)SLICE), y((size_t)SLICE);
-			Sha256Stream sha;
+			Sha256 sha;
 			same = true;
 			for(int64 off = 0; off < e.size && same; off += SLICE) {
 				if(r.report.Stopping()) {
@@ -689,17 +689,18 @@ struct Streamer {
 		if(r.report.Stopping())
 			return false;
 		if(type == 'd') {
-			bool in = filter.Inside(inside, GetFileName(rel)), all = true;
+			bool in = filter.Inside(inside, rel), all = true;
 			Vector<FolderEntry> list;
 			String error;
 			if(r.Net(c, [&] { list.Clear(); return c.fs[1]->List(rel, list, error); }))
 				for(const FolderEntry& f : list) {
 					if(SkipName(f.name))
 						continue;
-					if(f.type == 'd' ? filter.SkipDir(f.name) : !filter.KeepFile(in, f.name))
+					String sub = rel + "/" + f.name;
+					if(f.type == 'd' ? filter.SkipDir(sub) : !filter.KeepFile(in, sub))
 						all = false;
 					else
-						all = RemoveExtra(c, rel + "/" + f.name, f.type, in) && all;
+						all = RemoveExtra(c, sub, f.type, in) && all;
 				}
 			if(!all) {
 				r.Line("kept folder " + rel + ": it holds what the name filters leave out");
@@ -751,11 +752,12 @@ struct Streamer {
 		for(const FolderEntry& f : list) {
 			if(SkipName(f.name) || names.Find(f.name) >= 0)
 				continue;
-			// What the name filters leave out is left alone on the target too.
-			if(f.type == 'd' ? filter.SkipDir(f.name) : !filter.KeepFile(inside, f.name))
+			// What the filters leave out is left alone on the target too.
+			String sub = rel.IsEmpty() ? f.name : rel + "/" + f.name;
+			if(f.type == 'd' ? filter.SkipDir(sub) : !filter.KeepFile(inside, sub))
 				continue;
 			if(purge)
-				RemoveExtra(c, rel.IsEmpty() ? f.name : rel + "/" + f.name, f.type, inside);
+				RemoveExtra(c, sub, f.type, inside);
 		}
 	}
 

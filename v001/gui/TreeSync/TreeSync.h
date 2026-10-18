@@ -104,7 +104,7 @@ void   ShowHistory(const String& db_path);
 void   HistoryScreenshot(const String& db_path, const String& png);
 void   ShowLogFile(const String& path);
 void   ExportForAi(const String& db_path, int64 run, bool logs, bool sql);   // run 0: the newest
-void   ShowBuild();                                // Build.cpp: build and test, like jac313's runner
+void   ShowBuild();                                // Build.cpp: build (and test, if ticked), like jac313's runner
 void   BuildScreenshots(const String& folder);
 void   BuildRun();
 bool   BuildPageAtStart();                         // the options page is the first screen
@@ -131,6 +131,23 @@ class DirTree : public TreeCtrl {
 	bool   follow_links = false;
 	bool   is_remote = false;
 	String root_label;
+	String root_key;      // the root node's key: a node's path in the tree is its key past it
+
+	// Checkboxes (the source tree): what is checked is synced, a folder with everything
+	// below it. The model is the set of checked paths (CheckedPaths); each box shows
+	// checked, partly checked (something below is) or not, worked out from it, so
+	// folders not listed yet need no state of their own.
+	bool                  checks = false;
+	CheckedPaths          checked;
+	ArrayMap<int, Option> boxes;    // node id -> its box
+
+	void   AddNode(int parent, const Image& img, const String& key, const String& label, bool folder);
+	void   SetLabel(int id, const String& key, const String& label);
+	String Key(int id) const   { return GetNode(id).key; }   // Get() gives a box's value, not the key
+	String Rel(int id) const;
+	void   Toggle(int id);
+	void   ShowChecks();
+	void   DropBoxes(int id);                // the boxes below id, before its children go
 
 	void LoadChildren(int id);
 	void Fill(int id, const String& parent_key, const Vector<FolderEntry>& entries);
@@ -140,6 +157,13 @@ class DirTree : public TreeCtrl {
 	void StopRemote();
 
 public:
+	Event<> WhenChecks;                      // a box was clicked: GetChecked has changed
+
+	DirTree& Checks(bool b = true)           { checks = b; return *this; }
+	void     SetChecked(const String& include_paths)   { checked.Set(include_paths); }   // before Load
+	String   GetChecked() const              { return checked.Get(); }   // for --include-path
+	bool     NothingChecked() const          { return checks && checked.Nothing(); }
+
 	DirTree();
 	~DirTree();
 	void Load(const char *caption, const TreeEndpoint& e, bool follow_links, const String& known_hosts);
@@ -227,6 +251,7 @@ class TreeSyncWindow : public TopWindow {
 	// extra: "" a sync, or --scan-only, --sync-attrs, --clear-old (one of the checks).
 	String      run_extra;
 	void StartSync(bool dry_run, const String& extra = String());
+	void StageLabels(const String& extra);
 	bool ConfirmRun(const SyncSetup& s);
 	bool ConfirmExtra(const SyncSetup& s, const String& extra);
 	void StopSync();
@@ -243,6 +268,7 @@ class TreeSyncWindow : public TopWindow {
 public:
 	void SetSetup(const SyncSetup& s);
 	void DemoProgress();   // --screenshot: the progress boxes with sample values
+	void DemoScanProgress();
 	double BenchLog(int n);   // --bench-log: seconds to take in n lines of child output
 	void Close() override;
 

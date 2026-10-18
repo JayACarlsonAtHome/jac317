@@ -45,6 +45,31 @@ bool AnyPattern(const String& patterns)
 	return false;
 }
 
+NameFilter::NameFilter(const SyncFlags& f)
+:	f(f), names(AnyPattern(f.include_files) || AnyPattern(f.include_dirs))
+{
+	for(String p : Split(f.include_paths, '\n')) {
+		p.TrimStart("/");
+		p.TrimEnd("/");
+		if(p.IsEmpty() || p == ".")   // the whole tree: nothing to narrow
+			continue;
+		paths.FindAdd(p);
+		for(int at = p.ReverseFind('/'); at > 0; at = p.ReverseFind('/', at - 1))
+			on_the_way.FindAdd(p.Left(at));
+	}
+	include = names || paths.GetCount();
+}
+
+bool NameFilter::Checked(const String& rel) const
+{
+	if(paths.IsEmpty())
+		return true;
+	for(int at = rel.GetCount(); at > 0; at = rel.ReverseFind('/', at - 1))
+		if(paths.Find(rel.Left(at)) >= 0)
+			return true;
+	return false;
+}
+
 static int64 Ns(const timespec& t)
 {
 	return (int64)t.tv_sec * 1000000000 + t.tv_nsec;
@@ -202,7 +227,7 @@ struct Scanner {
 			Status(e.rel);
 
 			if(S_ISDIR(st.st_mode)) {
-				if(filter.SkipDir(name))
+				if(filter.SkipDir(e.rel))
 					continue;
 				Tuple<int64, int64> id = { e.dev, e.ino };
 				if(open_dirs.Find(id) >= 0) {
@@ -219,13 +244,13 @@ struct Scanner {
 				e.size = 0;
 				int at = out.GetCount();
 				out.Add(e);
-				bool in = filter.Inside(inside, name);
+				bool in = filter.Inside(inside, e.rel);
 				String h = Dir(child, e.rel, in);
 				open_dirs.Drop();
 				close(child);
 				if(IsNull(h))
 					return Null;
-				if(out.GetCount() == at + 1 && !filter.KeepEmptyDir(in)) {   // nothing included in it
+				if(out.GetCount() == at + 1 && !filter.KeepEmptyDir(in, e.rel)) {   // nothing included in it
 					out.Drop();
 					continue;
 				}
@@ -234,19 +259,19 @@ struct Scanner {
 				ListingLine(listing, 'd', h, name);
 			}
 			else if(S_ISLNK(st.st_mode)) {
-				if(!filter.KeepFile(inside, name))
+				if(!filter.KeepFile(inside, e.rel))
 					continue;
 				char buf[PATH_MAX + 1];
 				ssize_t n = readlinkat(fd, name, buf, PATH_MAX);
 				e.type = 'l';
 				e.link = String(buf, (int)max<ssize_t>(n, 0));
-				e.hash = SHA256String("symlink\n" + e.link);
+				e.hash = Sha256Hex("symlink\n" + e.link);
 				out.Add(e);
 				cache.Store(e);
 				ListingLine(listing, 'l', e.hash, name);
 			}
 			else if(S_ISREG(st.st_mode)) {
-				if(!filter.KeepFile(inside, name))
+				if(!filter.KeepFile(inside, e.rel))
 					continue;
 				e.type = 'f';
 				if(cache.Lookup(e, e.hash))
@@ -270,7 +295,7 @@ struct Scanner {
 			else
 				Warn("skipped special file (device, pipe or socket): " + AppendFileName(root, e.rel));
 		}
-		return SHA256String(listing);
+		return Sha256Hex(listing);
 	}
 };
 

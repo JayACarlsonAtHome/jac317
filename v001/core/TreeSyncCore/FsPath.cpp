@@ -115,3 +115,66 @@ String CleanPath(String p)
 	}
 	return p;
 }
+
+// CheckedPaths -------------------------------------------------------------------
+
+void CheckedPaths::Set(const String& include_paths)
+{
+	paths.Clear();
+	for(String p : Split(include_paths, '\n')) {
+		p.TrimStart("/");
+		p.TrimEnd("/");
+		paths.FindAdd(p == "." ? String() : p);
+	}
+	if(paths.IsEmpty())
+		paths.Add(String());   // no paths: the whole tree
+}
+
+String CheckedPaths::Get() const
+{
+	if(paths.Find(String()) >= 0)
+		return String();
+	Vector<String> list = clone(paths.GetKeys());
+	Sort(list);
+	return Join(list, "\n");
+}
+
+int CheckedPaths::State(const String& rel) const
+{
+	if(paths.Find(String()) >= 0)
+		return YES;
+	for(int at = rel.GetCount(); at > 0; at = rel.ReverseFind('/', at - 1))
+		if(paths.Find(rel.Left(at)) >= 0)
+			return YES;
+	String below = rel.IsEmpty() ? String() : rel + "/";
+	for(const String& p : paths)
+		if(p.StartsWith(below))
+			return PART;
+	return NO;
+}
+
+void CheckedPaths::Toggle(const String& rel, Function<Vector<String>(const String&)> children)
+{
+	if(State(rel) != YES) {
+		String below = rel.IsEmpty() ? String() : rel + "/";
+		for(int i = paths.GetCount() - 1; i >= 0; i--)
+			if(paths[i].StartsWith(below))
+				paths.Remove(i);
+		paths.Add(rel);
+		return;
+	}
+	// Checked itself, or through the folder `top` above it.
+	String top = rel;
+	while(paths.Find(top) < 0)
+		top = top.Left(max(top.ReverseFind('/'), 0));
+	paths.RemoveKey(top);
+	// Each folder from top down to rel's: everything in it except the way down.
+	for(String folder = top; folder != rel;) {
+		String rest = rel.Mid(folder.GetCount() + (folder.IsEmpty() ? 0 : 1));
+		String step = rest.Left(rest.Find('/') < 0 ? rest.GetCount() : rest.Find('/'));
+		for(const String& name : children(folder))
+			if(name != step)
+				paths.FindAdd(folder.IsEmpty() ? name : folder + "/" + name);
+		folder = folder.IsEmpty() ? step : folder + "/" + step;
+	}
+}

@@ -154,25 +154,40 @@ bool UnstableInodes(int fd);         // FAT, FUSE, network filesystems
 bool GlobMatch(const String& patterns, const String& name);   // name matches one of the ';' globs
 bool AnyPattern(const String& patterns);                      // not blank: something to match
 
-// The name filters (--exclude-file/-dir, --include-file/-dir). A blank list filters
-// nothing, and exclude wins. With includes, a file (or symlink) is synced only inside
-// an included folder (anywhere when --include-dir is blank) and, with --include-file,
-// only if its name matches; folders are made only where something included goes,
-// except an included folder itself. The same rule decides what Mirror may delete.
+// The name filters (--exclude-file/-dir, --include-file/-dir) and the checked paths
+// (--include-path). Blank lists filter nothing, and exclude wins. With include names,
+// a file (or symlink) is synced only inside an included folder (anywhere when
+// --include-dir is blank) and, with --include-file, only if its name matches. With
+// checked paths, only what is at or below a checked path is synced; the folders above
+// a checked path are walked to reach it. Folders are made only where something
+// included goes, except an included or checked folder itself. The same rule decides
+// what Mirror may delete. Every call takes the path relative to the tree root.
 struct NameFilter {
 	const SyncFlags& f;
-	bool             include;   // an include list is given
+	bool             include;      // an include list (names or paths) is given
+	bool             names;        // include names are given
+	Index<String>    paths;        // the checked paths
+	Index<String>    on_the_way;   // the folders above them
 
-	NameFilter(const SyncFlags& f) : f(f), include(AnyPattern(f.include_files) || AnyPattern(f.include_dirs)) {}
+	explicit NameFilter(const SyncFlags& f);
 
-	bool RootInside() const                             { return !AnyPattern(f.include_dirs); }
-	bool SkipDir(const String& name) const              { return GlobMatch(f.exclude_dirs, name); }
-	bool Inside(bool parent, const String& name) const  { return parent || GlobMatch(f.include_dirs, name); }
-	bool KeepEmptyDir(bool inside) const                { return !include || (inside && AnyPattern(f.include_dirs)); }
-	bool KeepFile(bool inside, const String& name) const
+	static String Name(const String& rel)              { return rel.Mid(rel.ReverseFind('/') + 1); }
+	bool Checked(const String& rel) const;             // rel or a folder above it is checked (no paths: true)
+	bool RootInside() const                            { return !AnyPattern(f.include_dirs); }
+	bool SkipDir(const String& rel) const
 	{
+		return GlobMatch(f.exclude_dirs, Name(rel)) || (paths.GetCount() && on_the_way.Find(rel) < 0 && !Checked(rel));
+	}
+	bool Inside(bool parent, const String& rel) const  { return parent || GlobMatch(f.include_dirs, Name(rel)); }
+	bool KeepEmptyDir(bool inside, const String& rel) const
+	{
+		return !include || ((!names || (inside && AnyPattern(f.include_dirs))) && Checked(rel));
+	}
+	bool KeepFile(bool inside, const String& rel) const
+	{
+		String name = Name(rel);
 		return inside && !GlobMatch(f.exclude_files, name) &&
-		       (!AnyPattern(f.include_files) || GlobMatch(f.include_files, name));
+		       (!AnyPattern(f.include_files) || GlobMatch(f.include_files, name)) && Checked(rel);
 	}
 };
 

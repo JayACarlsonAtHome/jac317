@@ -61,6 +61,8 @@ struct SyncFlags {
 	String exclude_dirs;             // globs, ';'-separated
 	String include_files;            // globs, ';'-separated; blank: every file
 	String include_dirs;             // globs, ';'-separated; blank: every folder
+	String include_paths;            // --include-path: checked files and folders (relative to the
+	                                 // source), one per line; blank: everything
 	int    retries = 3;
 	int    retry_wait = 5;           // seconds
 	int    threads = 4;          // copy threads; remote sides get one SSH connection each
@@ -182,6 +184,23 @@ struct FolderEntry : Moveable<FolderEntry> {
 };
 
 int                   OpenDir(const String& dir);   // O_RDONLY dir fd, any path length; -1 + errno
+
+// The checked files and folders of a tree (the GUI's checkboxes, --include-path), as
+// paths relative to its root, "" = all of it. A checked folder means everything below
+// it, so the set stays minimal: checking replaces what is checked below; unchecking
+// something checked through a folder above replaces that folder by everything else in
+// it, down to the unchecked one (children(folder): the names in a folder).
+class CheckedPaths {
+	Index<String> paths;
+
+public:
+	enum { NO, YES, PART };                      // PART: something below is checked
+	void   Set(const String& include_paths);     // "" = everything
+	String Get() const;                          // sorted, one per line; "" = everything
+	bool   Nothing() const                       { return paths.IsEmpty(); }
+	int    State(const String& rel) const;
+	void   Toggle(const String& rel, Function<Vector<String>(const String&)> children);
+};
 std::filesystem::path ToFs(const String& p);
 String                FromFs(const std::filesystem::path& p);
 bool                  ListFolder(const String& dir, Vector<FolderEntry>& out, String& error);
@@ -198,7 +217,27 @@ struct CopyProgress {
 	int    id = 0;         // which copy (its step in the run), to tell parallel copies apart
 	bool   verifying = false;   // done counts bytes read back and checked, not written
 	bool   more = false;   // count still growing: the pre-scan is still finding files
+	bool   check = false;  // Scan only: the file is being hashed on both sides, nothing copied
+	String state;          // check, when done: same, DIFFERS, missing, failed
 };
+
+// SHA-256 through OpenSSL (libcrypto, already linked for SSH), which uses the CPU's
+// SHA instructions: about 5 times U++'s own on a CPU that has them. Lowercase hex,
+// the same as sha256sum and as the hashes already stored.
+class Sha256 {
+	void *ctx;   // EVP_MD_CTX
+
+public:
+	void   Put(const void *data, int64 len);
+	void   Put(const String& s)          { Put(~s, s.GetCount()); }
+	String FinishString();               // once
+
+	Sha256();
+	Sha256(const Sha256&) = delete;
+	~Sha256();
+};
+
+String Sha256Hex(const String& data);   // of a short string (symlink targets, listings)
 
 // bar: a text thermometer after the percentage, for a file still in progress.
 String ProgressLine(const CopyProgress& p, int width = 100, bool bar = false);
@@ -218,6 +257,9 @@ String LogStamp(int64 start, int64 stop);
 // the lines stay aligned: " 14:02:58.000412 : 14:02:58.006931 : 000:000:00:00:00.006519 : ".
 // Times are in microseconds since the epoch (NowMicros).
 String LogStampFine(int64 start_us, int64 stop_us);
+// The top of a run's log: what it is, when, where and who, then column titles lined
+// up with LogStampFine.
+String LogHeader(int64 unix_time);
 int64  NowMicros();
 
 // The run's start, stop and duration as a table in the layout of the j5c build
