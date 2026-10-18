@@ -373,29 +373,47 @@ struct Runner {
 		bool one = count == 1;
 		String whole;   // one chunk: the file's hash, worked out as the chunk's
 		if(next > 0) {
-			// The last recorded chunk may have been torn by the stop: check it again.
-			int64 off = (next - 1) * chunk, len = min(chunk, size - off);
-			String h, ignore = error;
-			if(!hash_range(*out, off, len, count_back, h) || h != done.Top())
-				next--;
-			error = ignore;
-			{
+			// Every recorded chunk is checked again before going on: the copy may have
+			// been damaged since (an unclean stop, a disk unplugged mid-write, another
+			// program), not only the last chunk torn by the stop. The first one that
+			// does not read back as recorded, and all after it, are copied again. The
+			// source is read once alongside, for the whole file's hash.
+			Line(Format("resuming %s: checking the %d chunk%s already copied", rel, next, next == 1 ? "" : "s"));
+			int good = 0;
+			for(; good < next; good++) {
+				if(report.Stopping()) {
+					error = "stopped";
+					return false;
+				}
+				int64 off = good * chunk, len = min(chunk, size - off);
+				String h, ignore = error;
+				bool ok = hash_range(*out, off, len, count_back, h, true) && h == done[good];
+				error = ignore;
+				if(!ok) {
+					Line(Format("chunk %d of %s does not read back as recorded: copying it again from there",
+					            good + 1, rel));
+					break;
+				}
+				for(int64 k = 0; k < len; k += SLICE) {
+					int64 n = min(SLICE, len - k);
+					if(!in.ReadAt(off + k, buf, n, error))
+						return false;
+					if(count_read)
+						report.Count(n);
+					src_sha.Put(buf, (int)n);
+				}
+				p.done = off + len;
+				p.seconds = Since(t0);
+				if(p.done < p.size)   // the end is shown once, when the copy is in place
+					Progress(p);
+			}
+			if(good < next) {
+				next = good;
 				Lock l(mx);
 				Stmt(db, "DELETE FROM chunks WHERE run = ? AND seq = ? AND idx >= ?")
 					.Int(1, run).Int(2, seq).Int(3, next).Run();
 			}
 			Line(Format("resuming %s at chunk %d of %d", rel, next + 1, count));
-			// The running hashes cover the chunks already there: those bytes were
-			// checked equal when they were recorded, so the source is read once for both.
-			int64 prefix = min(next * chunk, size);
-			for(int64 k = 0; k < prefix; k += SLICE) {
-				int64 n = min(SLICE, prefix - k);
-				if(!in.ReadAt(k, buf, n, error))
-					return false;
-				if(count_read)
-					report.Count(n);
-				src_sha.Put(buf, (int)n);
-			}
 		}
 		// Locally, whatever lies past the checked chunks goes (a torn chunk, an older and
 		// longer attempt), so the slices left unwritten below are holes, not old bytes.

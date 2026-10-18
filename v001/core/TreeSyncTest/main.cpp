@@ -665,6 +665,37 @@ static void TestEngineResume(const String& root)
 	EXPECT(TreeHash(src, check) == TreeHash(dst, check), "resumed copy: target equals source");
 	EXPECT(!FileExists(dst + "/a big.bin.treesync-part"), "no .treesync-part left");
 
+	// Every recorded chunk is checked again on resume, not only the last: damage to an
+	// early chunk of the .treesync-part (a crash, an unplugged disk) is copied again.
+	{
+		String src2 = root + "/rsrc2", dst2 = root + "/rdst2", db2 = root + "/resume2.db";
+		Put(src2 + "/b big.bin", Big(5 * 1024 * 1024 + 100, 9));
+		SyncSetup s2 = Setup(src2, dst2, db2);
+		std::atomic<bool> stop2 = false;
+		SyncResult q1;
+		Sync(s2, q1, nullptr, &stop2, [&](const CopyProgress& p) {
+			if(!p.verifying && p.done >= 3 * chunk)   // three chunks recorded
+				stop2 = true;
+		});
+		String part = dst2 + "/b big.bin.treesync-part";
+		EXPECT(q1.stopped && FileExists(part), "stopped after three chunks");
+		int fd = open(part, O_WRONLY | O_CLOEXEC);   // damage chunk 1
+		EXPECT(fd >= 0 && pwrite(fd, "XXXX", 4, 1000) == 4, "damaged chunk 1 of the .treesync-part");
+		if(fd >= 0)
+			close(fd);
+		stop2 = false;
+		SyncResult q2;
+		Vector<String> said;
+		Sync(s2, q2, &said, &stop2);
+		bool noticed = false, restarted = false;
+		for(const String& l : said) {
+			noticed = noticed || l.StartsWith("chunk 1 of b big.bin does not read back as recorded");
+			restarted = restarted || l.StartsWith("resuming b big.bin at chunk 1 of");
+		}
+		EXPECT(q2.resumed && noticed && restarted, "resume found the damaged first chunk and copied from there");
+		EXPECT(q2.failed == 0 && TreeHash(src2, check) == TreeHash(dst2, check), "after it the copy equals the source");
+	}
+
 	// --fresh ignores an unfinished run.
 	SyncResult r3;
 	Put(src + "/new.txt", "new\n");
