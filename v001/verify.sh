@@ -38,6 +38,13 @@ step() {
   local rc=$? result
   result=$(grep -E '^(passed|FAILED): [0-9]+/[0-9]+ checks' "$log" | tail -1)
   local took=$(( $(date +%s) - t0 ))
+  # The tests say which type they are (a debug build skips the 4.5 GiB copy): a step
+  # that tested the wrong type has not checked what it claims.
+  if grep -q "skipped in a debug build" "$log"; then
+    [ "$type" = release ] && { rc=1; result="the release step ran a debug build"; }
+  else
+    [ "$type" = debug ] && { rc=1; result="the debug step ran a release build"; }
+  fi
   if [ $rc -eq 0 ] && [ "${result#passed}" != "$result" ]; then
     printf 'ok   %3d s  %s\n' "$took" "$result"
     SUMMARY="$SUMMARY $(printf '%-6s %-8s ok      %s' "$cc" "$type" "$result")\n"

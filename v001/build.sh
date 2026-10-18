@@ -61,6 +61,20 @@ local_bm() {   # local_bm SOURCE.bm -> out/bm/SOURCE.bm with COMPILER = the one 
 }
 BM=$(local_bm "$SRC_BM")
 
+# umk links a program again only when one of its objects is newer. Debug and release
+# keep their objects apart but write the same program, so after a release build a
+# debug build would find the newer release program "up to date" and keep it (and the
+# other way round). The type of what is in an output folder is recorded there; a
+# build of the other type removes the programs first, so they are linked again.
+same_type() {   # same_type OUT
+  local want mark="$1/.build-type"
+  case "$MODE" in -br*) want=release ;; *) want=debug ;; esac
+  if [ "$(cat "$mark" 2>/dev/null)" != "$want" ]; then
+    rm -f "$1/treesync" "$1/treesync-cli" "$1/treesync-test"
+  fi
+  echo "$want" > "$mark"
+}
+
 read -r UMK UPPSRC <<< "$(find_upp)"
 [ -n "${UMK:-}" ] && [ -n "${UPPSRC:-}" ] || { echo "U++ (umk + uppsrc) not found; run ./bootstrap.sh" >&2; exit 1; }
 
@@ -78,6 +92,7 @@ sanitizer_bm() {   # sanitizer_bm NAME FLAGS -> out/bm/NAME.bm: this compiler's 
 if [ -n "$CHECK" ]; then
   OUT="$HERE/out/$COMPILER-$CHECK"
   mkdir -p "$OUT"
+  same_type "$OUT"
   ASSEMBLY="$HERE/core,$HERE/gui,$UPPSRC"
   case "$CHECK" in
   tsan)
@@ -124,6 +139,7 @@ fi
 
 OUT="$HERE/out/$COMPILER"
 mkdir -p "$OUT"
+same_type "$OUT"
 ASSEMBLY="$HERE/core,$HERE/gui,$UPPSRC"
 
 # The programs are always built, so --test never leaves them older than the tests.
