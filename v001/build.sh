@@ -7,6 +7,10 @@
 #   ./build.sh --compiler gcc --release    # optimized build
 #   ./build.sh --compiler gcc --test       # also build and run the core tests
 #   ./build.sh --compiler clang --tsan     # build and run the tests under ThreadSanitizer
+#   ./build.sh --compiler gcc --asan       # ... under AddressSanitizer + UBSan (gcc or clang),
+#                                          # then treesync-cli --bench under them too
+#   ./build.sh --compiler gcc --valgrind   # ... under valgrind memcheck (slow)
+#   ./build.sh --compiler gcc --helgrind   # ... under valgrind helgrind (data races, lock order; very slow)
 #   ./build.sh --compiler gcc --clean      # compile everything, not only what changed
 #                                          # (fair build times when comparing compilers)
 #
@@ -20,7 +24,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 COMPILER=clang
 MODE=-bsH
 TEST=0
-TSAN=0
+CHECK=""   # tsan, asan, valgrind or helgrind: one checked test run instead of the build
 CLEAN=0
 
 while [ $# -gt 0 ]; do
@@ -28,9 +32,11 @@ while [ $# -gt 0 ]; do
     --compiler) COMPILER="${2:-}"; shift 2 ;;
     --release)  MODE=-brsH; shift ;;
     --test)     TEST=1; shift ;;
-    --tsan)     TSAN=1; shift ;;
+    --tsan|--asan|--valgrind|--helgrind)
+      [ -z "$CHECK" ] || { echo "only one of --tsan, --asan, --valgrind, --helgrind" >&2; exit 2; }
+      CHECK="${1#--}"; shift ;;
     --clean)    CLEAN=1; shift ;;
-    -h|--help)  sed -n '3,17p' "$0"; exit 0 ;;
+    -h|--help)  sed -n '3,21p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -58,15 +64,61 @@ BM=$(local_bm "$SRC_BM")
 read -r UMK UPPSRC <<< "$(find_upp)"
 [ -n "${UMK:-}" ] && [ -n "${UPPSRC:-}" ] || { echo "U++ (umk + uppsrc) not found; run ./bootstrap.sh" >&2; exit 1; }
 
-# ThreadSanitizer: clang only; U++'s own allocator replaces operator new, which
-# TSan also intercepts, so USEMALLOC switches U++ to the system allocator.
-if [ "$TSAN" = 1 ]; then
-  [ "$COMPILER" = clang ] || { echo "--tsan needs --compiler clang" >&2; exit 2; }
-  OUT="$HERE/out/clang-tsan"
+# The checked test runs, each in out/<compiler>-<check>/. U++'s own allocator replaces
+# operator new, which the sanitizers also intercept and which hides heap errors from
+# valgrind, so USEMALLOC switches U++ to the system allocator
+# (docs/findings/upp_allocator_vs_sanitizers.md).
+sanitizer_bm() {   # sanitizer_bm NAME FLAGS -> out/bm/NAME.bm: this compiler's bm + FLAGS
+  local out="$HERE/out/bm/$1.bm"
+  sed -e "s|^COMPILER = .*|COMPILER = \"$CXX\";|" \
+      -e "s|^COMMON_OPTIONS = \"\(.*\)\";|COMMON_OPTIONS = \"\1 $2 -fno-omit-frame-pointer\";|" \
+      -e "s|^COMMON_LINK = \"\(.*\)\";|COMMON_LINK = \"\1 $2\";|" "$SRC_BM" > "$out"
+  echo "$out"
+}
+if [ -n "$CHECK" ]; then
+  OUT="$HERE/out/$COMPILER-$CHECK"
   mkdir -p "$OUT"
-  echo "Building TreeSyncTest with $CXX + ThreadSanitizer"
-  "$UMK" "$HERE/core,$HERE/gui,$UPPSRC" TreeSyncTest "$(local_bm "$HERE/bm/CLANG26-TSAN.bm")" $MODE +USEMALLOC "$OUT/treesync-test"
-  TSAN_OPTIONS="halt_on_error=1" "$OUT/treesync-test"
+  ASSEMBLY="$HERE/core,$HERE/gui,$UPPSRC"
+  case "$CHECK" in
+  tsan)
+    # ThreadSanitizer: clang only (data races between threads).
+    [ "$COMPILER" = clang ] || { echo "--tsan needs --compiler clang" >&2; exit 2; }
+    echo "Building TreeSyncTest with $CXX + ThreadSanitizer"
+    "$UMK" "$ASSEMBLY" TreeSyncTest "$(local_bm "$HERE/bm/CLANG26-TSAN.bm")" $MODE +USEMALLOC "$OUT/treesync-test"
+    TSAN_OPTIONS="halt_on_error=1" "$OUT/treesync-test"
+    ;;
+  asan)
+    # AddressSanitizer (out of bounds, use after free, leaks) + UndefinedBehaviorSanitizer
+    # (signed overflow and the like: docs/findings/bench_int_overflow_endless_loop.md).
+    # -fno-sanitize-recover: the first UB report ends the run, so the step fails.
+    SAN_BM=$(sanitizer_bm "$(basename "$SRC_BM" .bm)-ASAN" "-fsanitize=address,undefined -fno-sanitize-recover=undefined")
+    echo "Building TreeSyncTest and TreeSyncCli with $CXX + AddressSanitizer + UBSan"
+    "$UMK" "$ASSEMBLY" TreeSyncTest "$SAN_BM" $MODE +USEMALLOC "$OUT/treesync-test"
+    "$UMK" "$ASSEMBLY" TreeSyncCli "$SAN_BM" $MODE +USEMALLOC "$OUT/treesync-cli"
+    export ASAN_OPTIONS="detect_leaks=1" UBSAN_OPTIONS="print_stacktrace=1"
+    "$OUT/treesync-test"
+    echo "treesync-cli --bench under AddressSanitizer + UBSan"
+    "$OUT/treesync-cli" --bench
+    echo "bench: no sanitizer reports"
+    ;;
+  valgrind|helgrind)
+    # valgrind on the ordinary build (no special compile). memcheck also finds reads of
+    # uninitialised memory, which ASan does not; helgrind finds data races and locks
+    # taken in different orders, for gcc builds too (ThreadSanitizer is clang only here).
+    # 20-100 times slower, one thread at a time: TREESYNC_VALGRIND tells the tests to
+    # skip their checks of races between threads.
+    command -v valgrind > /dev/null || { echo "valgrind not found; run ./bootstrap.sh" >&2; exit 1; }
+    echo "Building TreeSyncTest with $CXX for valgrind $CHECK"
+    "$UMK" "$ASSEMBLY" TreeSyncTest "$BM" $MODE +USEMALLOC "$OUT/treesync-test"
+    if [ "$CHECK" = valgrind ]; then
+      TREESYNC_VALGRIND=1 valgrind --tool=memcheck --error-exitcode=99 --track-origins=yes \
+               --leak-check=full --errors-for-leak-kinds=definite --show-leak-kinds=definite \
+               "$OUT/treesync-test"
+    else
+      TREESYNC_VALGRIND=1 valgrind --tool=helgrind --error-exitcode=99 "$OUT/treesync-test"
+    fi
+    ;;
+  esac
   exit $?
 fi
 

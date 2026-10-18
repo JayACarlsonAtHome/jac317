@@ -71,3 +71,15 @@ upp_fix_heap() {
   sed -i -E 's/^([[:space:]]*)static thread_local byte sHeap__\[sizeof\(Heap\)\]/\1alignas(Heap) static thread_local byte sHeap__[sizeof(Heap)]/' "$f" &&
   upp_heap_fixed "${1:-}"
 }
+
+# The checked test runs (build.sh --asan, --valgrind): true when both compilers have
+# their AddressSanitizer + UBSan runtimes and valgrind is installed.
+checks_present() {
+  local g c f
+  g=$(find_gcc); c=$(find_clang)
+  [ -n "$g" ] && [ -n "$c" ] && command -v valgrind > /dev/null || return 1
+  for f in libasan.so libubsan.so; do
+    [[ "$("$g" -print-file-name=$f)" = /* ]] || return 1   # a bare name: not found
+  done
+  [ -e "$("$c" -print-runtime-dir)/libclang_rt.asan.a" ]
+}

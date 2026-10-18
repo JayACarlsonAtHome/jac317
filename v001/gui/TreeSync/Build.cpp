@@ -94,6 +94,13 @@ struct BuildStep : Moveable<BuildStep> {
 	int64          started = 0, stopped = 0;
 	int            code = -1;     // exit code; -1 not run yet
 	String         checks;        // "passed: 214/214 checks" when the tests ran
+
+	bool Checked() const {        // a test run under TSan, ASan, valgrind or helgrind, not a build
+		for(const char *a : { "--tsan", "--asan", "--valgrind", "--helgrind" })
+			if(FindIndex(args, String(a)) >= 0)
+				return true;
+		return false;
+	}
 };
 
 }
@@ -113,7 +120,7 @@ class BuildWindow : public TopWindow {
 	Label     display_now;
 	Label     compiler_label, type_label;
 	Switch    compiler, type;
-	Option    tests, tsan, clean, compare;
+	Option    tests, tsan, asan, valgrind, helgrind, clean, compare;
 	LineEdit  toolchain;
 	Label     command;
 	Button    start, close1;
@@ -175,7 +182,7 @@ BuildWindow::BuildWindow()
 {
 	Title("TreeSync - Build and test");
 	Sizeable().Zoomable();
-	SetRect(0, 0, Zx(900), Zy(640));
+	SetRect(0, 0, Zx(900), Zy(760));
 	Add(s1.SizePos());
 	Add(s2.SizePos());
 	Add(s3.SizePos());
@@ -185,7 +192,7 @@ BuildWindow::BuildWindow()
 	compiler.Add("gcc", "gcc 15 (gcc-toolset-15)").Add("clang", "clang 21").Add("both", "both, one after the other");
 	s1.Add(compiler.HSizePosZ(20, 20).TopPosZ(28, 22));
 
-	s1.Add(build_box.SetLabel("Build").HSizePosZ(8, 8).TopPosZ(66, 150));
+	s1.Add(build_box.SetLabel("Build").HSizePosZ(8, 8).TopPosZ(66, 222));
 	s1.Add(type_label.SetText("Type:").LeftPosZ(20, 60).TopPosZ(86, 22));
 	type.Add("debug", "Debug").Add("release", "Release (optimized)");
 	s1.Add(type.LeftPosZ(80, 400).TopPosZ(86, 22));
@@ -193,33 +200,42 @@ BuildWindow::BuildWindow()
 	s1.Add(tests.LeftPosZ(20, 600).TopPosZ(112, 22));
 	tsan.SetLabel("Then run the tests under ThreadSanitizer (clang; finds data races between threads)");
 	s1.Add(tsan.LeftPosZ(20, 700).TopPosZ(136, 22));
+	asan.SetLabel("Then run the tests under AddressSanitizer + UBSan (each compiler; memory errors, "
+	              "leaks, undefined behaviour such as int overflow)");
+	s1.Add(asan.LeftPosZ(20, 860).TopPosZ(160, 22));
+	valgrind.SetLabel("Then run the tests under valgrind memcheck (each compiler; reads of "
+	                  "uninitialised memory; slow)");
+	s1.Add(valgrind.LeftPosZ(20, 860).TopPosZ(184, 22));
+	helgrind.SetLabel("Then run the tests under valgrind helgrind (once, gcc when both; data races, "
+	                  "lock order; very slow)");
+	s1.Add(helgrind.LeftPosZ(20, 860).TopPosZ(208, 22));
 	clean.SetLabel("Clean build: compile everything, not only what changed (fair build times)");
-	s1.Add(clean.LeftPosZ(20, 700).TopPosZ(160, 22));
+	s1.Add(clean.LeftPosZ(20, 700).TopPosZ(232, 22));
 	compare.SetLabel("Compare the compilers: versions, C++26 features, import std, speed, size");
-	s1.Add(compare.LeftPosZ(20, 700).TopPosZ(184, 22));
+	s1.Add(compare.LeftPosZ(20, 700).TopPosZ(256, 22));
 
-	s1.Add(display_box.SetLabel("Display").HSizePosZ(8, 8).TopPosZ(222, 52));
+	s1.Add(display_box.SetLabel("Display").HSizePosZ(8, 8).TopPosZ(294, 52));
 	display.Add("wayland", "Wayland (recommended)").Add("x11", "X Windows / X11 (not recommended)");
-	s1.Add(display.LeftPosZ(20, 520).TopPosZ(242, 22));
-	s1.Add(display_now.HSizePosZ(560, 16).TopPosZ(242, 22));
+	s1.Add(display.LeftPosZ(20, 520).TopPosZ(314, 22));
+	s1.Add(display_now.HSizePosZ(560, 16).TopPosZ(314, 22));
 	display.Tip("X11 lets any program read the keyboard and the screen of the others, and is no "
 	            "longer developed. Use it only on a desktop without Wayland.");
-	s1.Add(machine_box.SetLabel("This machine").HSizePosZ(8, 8).TopPosZ(280, 52));
-	s1.Add(req_status.HSizePosZ(20, 360).TopPosZ(300, 22));
-	s1.Add(check_again.SetLabel("Check again").RightPosZ(196, 110).TopPosZ(298, 26));
-	s1.Add(fix.SetLabel("Open terminal to fix...").RightPosZ(20, 170).TopPosZ(298, 26));
+	s1.Add(machine_box.SetLabel("This machine").HSizePosZ(8, 8).TopPosZ(352, 52));
+	s1.Add(req_status.HSizePosZ(20, 360).TopPosZ(372, 22));
+	s1.Add(check_again.SetLabel("Check again").RightPosZ(196, 110).TopPosZ(370, 26));
+	s1.Add(fix.SetLabel("Open terminal to fix...").RightPosZ(20, 170).TopPosZ(370, 26));
 	check_again << [this] { CheckRequirements(); };
 	fix << [this] { OpenFixTerminal(); };
 	fix.Tip("Opens a terminal with ./bootstrap.sh typed at the prompt; press Enter to run it. "
 	        "It asks before it installs anything.");
-	s1.Add(toolchain_box.SetLabel("This program was built with").HSizePosZ(8, 8).VSizePosZ(338, 132));
+	s1.Add(toolchain_box.SetLabel("This program was built with").HSizePosZ(8, 8).VSizePosZ(410, 204));
 	toolchain.SetReadOnly();
 	toolchain.SetFont(Monospace());
 	toolchain <<= ToolchainReport();
-	s1.Add(toolchain.HSizePosZ(16, 16).VSizePosZ(358, 140));
+	s1.Add(toolchain.HSizePosZ(16, 16).VSizePosZ(430, 212));
 
 	command.SetFont(Monospace());
-	s1.Add(command.HSizePosZ(8, 8).BottomPosZ(42, 84));   // up to 5 steps, one line each
+	s1.Add(command.HSizePosZ(8, 8).BottomPosZ(42, 156));   // up to 10 steps, one line each
 	s1.Add(start.SetLabel("Start").RightPosZ(116, 100).BottomPosZ(8, 28));
 	s1.Add(close1.SetLabel("Close").RightPosZ(8, 100).BottomPosZ(8, 28));
 	at_start.SetLabel("Show this page when TreeSync starts");
@@ -268,6 +284,9 @@ BuildWindow::BuildWindow()
 	type << [this] { ShowCommand(); };
 	tests << [this] { ShowCommand(); };
 	tsan << [this] { ShowCommand(); };
+	asan << [this] { ShowCommand(); };
+	valgrind << [this] { ShowCommand(); };
+	helgrind << [this] { ShowCommand(); };
 	clean << [this] { ShowCommand(); };
 	compare << [this] { ShowCommand(); };
 	start << [this] { Start(); };
@@ -296,7 +315,9 @@ BuildWindow::~BuildWindow()
 		kill(-proc->GetPid(), SIGTERM);
 }
 
-// The steps: build.sh once per compiler, then the ThreadSanitizer run.
+// The steps: build.sh once per compiler, then the checked test runs: ThreadSanitizer
+// (clang), AddressSanitizer + UBSan and valgrind (each compiler), helgrind (once: gcc
+// when both, as ThreadSanitizer covers clang).
 void BuildWindow::Plan()
 {
 	steps.Clear();
@@ -335,6 +356,30 @@ void BuildWindow::Plan()
 			s.args << "--release";
 		s.title = "clang tests under ThreadSanitizer";
 	}
+	for(const char *check : { "asan", "valgrind" }) {
+		if(!(check == String("asan") ? asan : valgrind))
+			continue;
+		for(const char *cc : { "gcc", "clang" }) {
+			if(c != "both" && c != cc)
+				continue;
+			BuildStep& s = steps.Add();
+			s.compiler = cc;
+			s.args << "--compiler" << cc << String("--") + check;
+			if(release)
+				s.args << "--release";
+			s.title = String(cc) + (check == String("asan") ? " tests under AddressSanitizer + UBSan"
+			                                                 : " tests under valgrind memcheck");
+		}
+	}
+	if(helgrind) {
+		String cc = c == "clang" ? "clang" : "gcc";
+		BuildStep& s = steps.Add();
+		s.compiler = cc;
+		s.args << "--compiler" << cc << "--helgrind";
+		if(release)
+			s.args << "--release";
+		s.title = cc + " tests under valgrind helgrind";
+	}
 }
 
 void BuildWindow::ShowCommand()
@@ -353,6 +398,9 @@ void BuildWindow::Load()
 	type <<= "debug";
 	tests = true;
 	tsan = false;
+	asan = false;
+	valgrind = false;
+	helgrind = false;
 	clean = false;
 	compare = false;
 	at_start = true;
@@ -370,6 +418,12 @@ void BuildWindow::Load()
 			tests = value == "1";
 		else if(key == "tsan")
 			tsan = value == "1";
+		else if(key == "asan")
+			asan = value == "1";
+		else if(key == "valgrind")
+			valgrind = value == "1";
+		else if(key == "helgrind")
+			helgrind = value == "1";
 		else if(key == "clean")
 			clean = value == "1";
 		else if(key == "compare")
@@ -385,6 +439,8 @@ void BuildWindow::Save()
 	RealizePath(path);
 	SaveFile(path, "compiler=" + AsString(~compiler) + "\ntype=" + AsString(~type) +
 	               "\ntests=" + AsString((int)tests) + "\ntsan=" + AsString((int)tsan) +
+		               "\nasan=" + AsString((int)asan) + "\nvalgrind=" + AsString((int)valgrind) +
+		               "\nhelgrind=" + AsString((int)helgrind) +
 	               "\nclean=" + AsString((int)clean) + "\ncompare=" + AsString((int)compare) +
 	               "\nat_start=" + AsString((int)at_start) + "\ndisplay=" + AsString(~display) + "\n");
 }
@@ -554,7 +610,7 @@ void BuildWindow::StepDone()
 	steps_list.Set(step, 3, s.checks);
 	if(s.code != 0)
 		steps_list.SetLineColor(step, Color(255, 215, 215));
-	if(compare && !s.compare && FindIndex(s.args, String("--tsan")) < 0) {   // the build itself, for the table
+	if(compare && !s.compare && !s.Checked()) {   // the build itself, for the table
 		VectorMap<String, String>& f = facts.GetAdd(s.compiler);
 		f.GetAdd(String("build") + (clean ? " (clean)" : " (changes only)") + ": time (s)") = AsString(s.stopped - s.started);
 		f.GetAdd("build: result") = s.code == 0 ? String("good") : "FAILED (exit " + AsString(s.code) + ")";
@@ -582,8 +638,7 @@ void BuildWindow::Finish()
 	String here = GetFileName(GetExeFolder());   // gcc or clang: the build this program came from
 	bool rebuilt_me = false;
 	for(const BuildStep& s : steps)
-		rebuilt_me = rebuilt_me || (s.code == 0 && s.args.GetCount() >= 2 && s.args[1] == here &&
-		                            FindIndex(s.args, String("--tsan")) < 0);
+		rebuilt_me = rebuilt_me || (s.code == 0 && s.args.GetCount() >= 2 && s.args[1] == here && !s.Checked());
 	ShowCompare();
 	if(facts.GetCount())
 		text << "\n\n" << CompareText();
@@ -717,7 +772,7 @@ void BuildWindow::Startup()
 {
 	startup = true;
 	Title("TreeSync - compiler and test options");
-	SetRect(0, 0, Zx(1000), Zy(640));
+	SetRect(0, 0, Zx(1000), Zy(760));
 	// Bottom row, right to left: Exit, Continue (Clang), Continue (GCC), Build and test.
 	start.SetLabel("Build and test").RightPosZ(612, 140);
 	exit1.Show();
