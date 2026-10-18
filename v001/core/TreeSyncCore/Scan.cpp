@@ -27,10 +27,20 @@ bool SkipName(const String& name)
 	return name == "." || name == ".." || name.EndsWith(".treesync-part");
 }
 
-bool Excluded(const String& patterns, const String& name)
+bool GlobMatch(const String& patterns, const String& name)
+{
+	for(const String& p : Split(patterns, ';')) {
+		String t = TrimBoth(p);
+		if(t.GetCount() && fnmatch(t, name, 0) == 0)
+			return true;
+	}
+	return false;
+}
+
+bool AnyPattern(const String& patterns)
 {
 	for(const String& p : Split(patterns, ';'))
-		if(fnmatch(p, name, 0) == 0)
+		if(TrimBoth(p).GetCount())
 			return true;
 	return false;
 }
@@ -119,12 +129,13 @@ struct Scanner {
 	Vector<Entry>&    out;
 	ScanStats&        stats;
 	HashCache&        cache;
+	NameFilter        filter;
 	Index<Tuple<int64, int64>> open_dirs;   // (dev, ino) of folders being walked: loop guard
 	std::chrono::steady_clock::time_point last_status = std::chrono::steady_clock::now();
 
 	Scanner(const String& root, const SyncFlags& flags, SyncReport& report,
 	        Vector<Entry>& out, ScanStats& stats, HashCache& cache)
-	:	root(root), flags(flags), report(report), out(out), stats(stats), cache(cache) {}
+	:	root(root), flags(flags), report(report), out(out), stats(stats), cache(cache), filter(flags) {}
 
 	void Status(const String& rel)
 	{
@@ -145,8 +156,9 @@ struct Scanner {
 		report.WhenLine("warning: " + msg);
 	}
 
-	// Scans the open folder fd; returns its folder hash, or Null if stopped.
-	String Dir(int fd, const String& rel)
+	// Scans the open folder fd; returns its folder hash, or Null if stopped. inside:
+	// in an included folder (NameFilter).
+	String Dir(int fd, const String& rel, bool inside)
 	{
 		Vector<String> names;
 		if(DIR *d = fdopendir(dup(fd))) {
@@ -190,7 +202,7 @@ struct Scanner {
 			Status(e.rel);
 
 			if(S_ISDIR(st.st_mode)) {
-				if(Excluded(flags.exclude_dirs, name))
+				if(filter.SkipDir(name))
 					continue;
 				Tuple<int64, int64> id = { e.dev, e.ino };
 				if(open_dirs.Find(id) >= 0) {
@@ -207,16 +219,23 @@ struct Scanner {
 				e.size = 0;
 				int at = out.GetCount();
 				out.Add(e);
-				String h = Dir(child, e.rel);
+				bool in = filter.Inside(inside, name);
+				String h = Dir(child, e.rel, in);
 				open_dirs.Drop();
 				close(child);
 				if(IsNull(h))
 					return Null;
+				if(out.GetCount() == at + 1 && !filter.KeepEmptyDir(in)) {   // nothing included in it
+					out.Drop();
+					continue;
+				}
 				out[at].hash = h;
 				cache.Store(out[at]);
 				ListingLine(listing, 'd', h, name);
 			}
 			else if(S_ISLNK(st.st_mode)) {
+				if(!filter.KeepFile(inside, name))
+					continue;
 				char buf[PATH_MAX + 1];
 				ssize_t n = readlinkat(fd, name, buf, PATH_MAX);
 				e.type = 'l';
@@ -227,7 +246,7 @@ struct Scanner {
 				ListingLine(listing, 'l', e.hash, name);
 			}
 			else if(S_ISREG(st.st_mode)) {
-				if(Excluded(flags.exclude_files, name))
+				if(!filter.KeepFile(inside, name))
 					continue;
 				e.type = 'f';
 				if(cache.Lookup(e, e.hash))
@@ -279,7 +298,7 @@ bool ScanTree(Db& db, const String& root, const SyncFlags& flags, SyncReport& re
 
 	HashCache cache(db, root, flags, UnstableInodes(fd));
 	Scanner s(root, flags, report, out, stats, cache);
-	root_hash = s.Dir(fd, Null);
+	root_hash = s.Dir(fd, Null, s.filter.RootInside());
 	close(fd);
 	if(IsNull(root_hash)) {
 		db.Exec("COMMIT");

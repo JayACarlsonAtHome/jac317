@@ -59,6 +59,8 @@ struct SyncFlags {
 	bool   wipe_target = false;      // empty the target first (to .old with safe delete)
 	String exclude_files;            // globs, ';'-separated
 	String exclude_dirs;             // globs, ';'-separated
+	String include_files;            // globs, ';'-separated; blank: every file
+	String include_dirs;             // globs, ';'-separated; blank: every folder
 	int    retries = 3;
 	int    retry_wait = 5;           // seconds
 	int    threads = 4;          // copy threads; remote sides get one SSH connection each
@@ -104,6 +106,8 @@ struct IntOption {
 extern const char *HELP_MODE[3];          // Copy, Mirror, Merge
 extern const char *HELP_EXCLUDE_FILES;
 extern const char *HELP_EXCLUDE_DIRS;
+extern const char *HELP_INCLUDE_FILES;
+extern const char *HELP_INCLUDE_DIRS;
 extern const char *HELP_OWNERS;           // the Owners choice: off, by name, by number
 
 constexpr int BOOL_OPTION_COUNT = 16;

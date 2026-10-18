@@ -105,7 +105,14 @@ SetupDlg::FlagsPane::FlagsPane()
 	need.cx = m + 2 * col_w + gap + m;
 	y += half * row + Zy(8);
 
+	// Name filters: blank boxes filter nothing.
 	int xw = max(W("Exclude files"), W("Exclude folders")) + Zx(12);
+	Add(lbl_if.SetLabel("Include files").LeftPos(m, xw).TopPos(y, h));
+	Add(inf.HSizePos(m + xw, m).TopPos(y, h).Tip("--include-file=GLOB, ';' between patterns; blank: every file"));
+	y += Zy(26);
+	Add(lbl_id.SetLabel("Include folders").LeftPos(m, xw).TopPos(y, h));
+	Add(ind.HSizePos(m + xw, m).TopPos(y, h).Tip("--include-dir=GLOB, ';' between patterns; blank: every folder"));
+	y += Zy(26);
 	Add(lbl_xf.SetLabel("Exclude files").LeftPos(m, xw).TopPos(y, h));
 	Add(xf.HSizePos(m + xw, m).TopPos(y, h).Tip("--exclude-file=GLOB, ';' between patterns   (robocopy /XF)"));
 	y += Zy(26);
@@ -129,7 +136,7 @@ SetupDlg::FlagsPane::FlagsPane()
 	need.cx = max(need.cx, m + 2 * span);
 	y += ((INT_OPTION_COUNT + 1) / 2) * Zy(26) + Zy(6);
 
-	// Reset to defaults, per mode: every switch, number and exclude list.
+	// Reset to defaults, per mode: every switch, number, include and exclude list.
 	int rw = W("Reset to defaults") + Zx(12), bw = 0;
 	const char *reset_name[3] = { "Copy", "Mirror", "Merge (both ways)" };
 	for(const char *n : reset_name)
@@ -138,10 +145,10 @@ SetupDlg::FlagsPane::FlagsPane()
 	for(int i = 0; i < 3; i++) {
 		SyncMode md = i == 0 ? SyncMode::Copy : i == 1 ? SyncMode::Mirror : SyncMode::Merge;
 		Add(reset[i].SetLabel(reset_name[i]).LeftPos(m + rw + i * (bw + Zx(8)), bw).TopPos(y, Zy(24)));
-		reset[i].Tip("Every switch, number and exclude list back to its default, mode " + String(reset_name[i]));
+		reset[i].Tip("Every switch, number, include and exclude list back to its default, mode " + String(reset_name[i]));
 		reset[i] << [this, md, i] {
 			Set(DefaultsFor(md));
-			ShowHelp("Reset to defaults", HELP_MODE[i] + String("\nAll switches, numbers and exclude lists are "
+			ShowHelp("Reset to defaults", HELP_MODE[i] + String("\nAll switches, numbers, include and exclude lists are "
 			         "back to the defaults for this mode") +
 			         (md == SyncMode::Copy ? " (Copy also skips files whose source is older, so a newer file on "
 			                                 "the target is never overwritten)" : "") +
@@ -177,6 +184,8 @@ SetupDlg::FlagsPane::FlagsPane()
 		ShowHelp("Owners", HELP_OWNERS);
 		Sync();
 	};
+	inf << [this] { ShowHelp("Include files", HELP_INCLUDE_FILES); Sync(); };
+	ind << [this] { ShowHelp("Include folders", HELP_INCLUDE_DIRS); Sync(); };
 	xf << [this] { ShowHelp("Exclude files", HELP_EXCLUDE_FILES); Sync(); };
 	xd << [this] { ShowHelp("Exclude folders", HELP_EXCLUDE_DIRS); Sync(); };
 	ShowHelp("Help", "Click an option to see what it does. Hover over it to see its command-line name.");
@@ -217,6 +226,8 @@ void SetupDlg::FlagsPane::Set(const SyncFlags& f)
 		opt[i] <<= f.*BOOL_OPTIONS[i].field;
 	for(int i = 0; i < INT_OPTION_COUNT; i++)
 		num[i] <<= f.*INT_OPTIONS[i].field;
+	inf <<= f.include_files;
+	ind <<= f.include_dirs;
 	xf <<= f.exclude_files;
 	xd <<= f.exclude_dirs;
 	Sync();
@@ -230,6 +241,8 @@ SyncFlags SetupDlg::FlagsPane::Get() const
 		f.*BOOL_OPTIONS[i].field = opt[i];
 	for(int i = 0; i < INT_OPTION_COUNT; i++)
 		f.*INT_OPTIONS[i].field = Nvl((int)~num[i], f.*INT_OPTIONS[i].field);
+	f.include_files = ~inf;
+	f.include_dirs = ~ind;
 	f.exclude_files = ~xf;
 	f.exclude_dirs = ~xd;
 	return f;

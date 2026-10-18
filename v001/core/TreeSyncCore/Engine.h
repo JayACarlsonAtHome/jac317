@@ -151,7 +151,30 @@ inline void ListingLine(String& listing, char type, const String& hash, const St
 
 bool SkipName(const String& name);   // ".", "..", our own .treesync-part files
 bool UnstableInodes(int fd);         // FAT, FUSE, network filesystems
-bool Excluded(const String& patterns, const String& name);
+bool GlobMatch(const String& patterns, const String& name);   // name matches one of the ';' globs
+bool AnyPattern(const String& patterns);                      // not blank: something to match
+
+// The name filters (--exclude-file/-dir, --include-file/-dir). A blank list filters
+// nothing, and exclude wins. With includes, a file (or symlink) is synced only inside
+// an included folder (anywhere when --include-dir is blank) and, with --include-file,
+// only if its name matches; folders are made only where something included goes,
+// except an included folder itself. The same rule decides what Mirror may delete.
+struct NameFilter {
+	const SyncFlags& f;
+	bool             include;   // an include list is given
+
+	NameFilter(const SyncFlags& f) : f(f), include(AnyPattern(f.include_files) || AnyPattern(f.include_dirs)) {}
+
+	bool RootInside() const                             { return !AnyPattern(f.include_dirs); }
+	bool SkipDir(const String& name) const              { return GlobMatch(f.exclude_dirs, name); }
+	bool Inside(bool parent, const String& name) const  { return parent || GlobMatch(f.include_dirs, name); }
+	bool KeepEmptyDir(bool inside) const                { return !include || (inside && AnyPattern(f.include_dirs)); }
+	bool KeepFile(bool inside, const String& name) const
+	{
+		return inside && !GlobMatch(f.exclude_files, name) &&
+		       (!AnyPattern(f.include_files) || GlobMatch(f.include_files, name));
+	}
+};
 
 // Plan.cpp -------------------------------------------------------------------
 

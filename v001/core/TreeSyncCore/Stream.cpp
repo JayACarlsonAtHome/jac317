@@ -33,6 +33,10 @@ struct Folder {
 	bool          posted = false;  // handed to the post-scan
 	bool          unread = false;  // the source folder could not be listed: remove nothing from the target's
 	Index<String> names;           // source names in it
+	bool          inside = true;   // in an included folder (NameFilter)
+	bool          made = false;    // with includes: made on the target, when something included goes in
+	bool          bad = false;     // with includes: could not be made; what is in it is left out
+	FolderEntry   src;             // the source folder, to make it from
 };
 
 struct Streamer {
@@ -40,6 +44,7 @@ struct Streamer {
 	const SyncFlags&  flags;
 	bool              dry;
 	bool              assume_empty = false;   // dry run with --wipe-target: as if wiped
+	NameFilter        filter;
 
 	// pre-scan -> copy workers
 	std::mutex              qm;
@@ -60,7 +65,7 @@ struct Streamer {
 	std::chrono::steady_clock::time_point last_stage = std::chrono::steady_clock::now();
 	VectorMap<Tuple<int64, int64>, String> first_name;   // hard links: (dev, ino) -> first rel (pre-scan only)
 
-	Streamer(Runner& r) : r(r), flags(r.flags), dry(r.flags.dry_run) {}
+	Streamer(Runner& r) : r(r), flags(r.flags), dry(r.flags.dry_run), filter(r.flags) {}
 
 	// Deletes a target entry and, for a folder, everything in it (--wipe-target
 	// without safe delete).
@@ -231,6 +236,27 @@ struct Streamer {
 		return r.result.failed == failed;
 	}
 
+	// With includes: makes rel on the target, and the folders above it, the first time
+	// something included goes in it. False: it could not be made.
+	bool EnsureFolder(Ctx& c, const String& rel)
+	{
+		if(rel.IsEmpty())
+			return true;
+		FolderEntry src;
+		{
+			Lock l(r.mx);
+			Folder& fd = folders.GetAdd(rel);
+			if(fd.made || fd.bad)
+				return fd.made;
+			src = fd.src;
+		}
+		bool ok = EnsureFolder(c, GetFileFolder(rel)) && TargetFolder(c, src, rel);
+		Lock l(r.mx);
+		Folder& fd = folders.GetAdd(rel);
+		(ok ? fd.made : fd.bad) = true;
+		return ok;
+	}
+
 	void Queue(Item&& it)
 	{
 		{
@@ -242,9 +268,10 @@ struct Streamer {
 
 	void ScanFolder(Ctx& c, const String& rel, Vector<String>& stack, Index<Tuple<int64, int64>>& walked)
 	{
+		bool inside;
 		{
 			Lock l(r.mx);
-			folders.GetAdd(rel);
+			inside = folders.GetAdd(rel).inside;
 		}
 		Vector<FolderEntry> list;
 		String error;
@@ -296,7 +323,7 @@ struct Streamer {
 				}
 			}
 			if(f.type == 'd') {
-				if(Excluded(flags.exclude_dirs, f.name))
+				if(filter.SkipDir(f.name))
 					continue;
 				if(c.fs[0]->IsLocal() && f.dev) {   // symlink loops (--follow-links)
 					Tuple<int64, int64> id = { f.dev, f.ino };
@@ -315,7 +342,9 @@ struct Streamer {
 				r.Line("warning: skipped special file (device, pipe or socket): " + crel);
 				continue;
 			}
-			if(f.type == 'f' && Excluded(flags.exclude_files, f.name))
+			if((f.type == 'f' || f.type == 'l') && !filter.KeepFile(inside, f.name))
+				continue;
+			if(filter.include && !EnsureFolder(c, rel))
 				continue;
 
 			Item it;
@@ -374,13 +403,28 @@ struct Streamer {
 			folders.GetAdd(rel).walked = true;
 			TrySettle(rel);
 		}
-		// Subfolders: their target folder first, then walk them in name order.
+		// Subfolders: their target folder first, then walk them in name order. With
+		// includes a folder is made only when something included goes in it (or it is
+		// an included folder itself).
 		Vector<String> next;
 		for(int i : subdirs) {
 			String crel = rel.IsEmpty() ? list[i].name : rel + "/" + list[i].name;
 			if(r.report.Stopping())
 				break;
-			if(TargetFolder(c, list[i], crel)) {
+			bool ok;
+			if(filter.include) {
+				bool in = filter.Inside(inside, list[i].name);
+				{
+					Lock l(r.mx);
+					Folder& fd = folders.GetAdd(crel);
+					fd.inside = in;
+					fd.src = list[i];
+				}
+				ok = !filter.KeepEmptyDir(in) || EnsureFolder(c, crel);
+			}
+			else
+				ok = TargetFolder(c, list[i], crel);
+			if(ok) {
 				found++;
 				next.Add(crel);
 			}
@@ -395,6 +439,12 @@ struct Streamer {
 		Index<Tuple<int64, int64>> walked;
 		stack.Add(String());
 		found = 1;
+		{
+			Lock l(r.mx);
+			Folder& root = folders.GetAdd(String());
+			root.inside = filter.RootInside();
+			root.made = true;
+		}
 		while(stack.GetCount() && !r.report.Stopping())
 			ScanFolder(c, stack.Pop(), stack, walked);
 		Stage(0, entries, estimate, String(), true);
@@ -587,22 +637,34 @@ struct Streamer {
 
 	// Post-scan ------------------------------------------------------------------
 
-	// Removes an extra entry from the target (Mirror), folders contents first.
-	void RemoveExtra(Ctx& c, const String& rel, char type)
+	// Removes an extra entry from the target (Mirror), folders contents first. What the
+	// name filters leave out is left alone, and so is the folder holding it. inside: rel
+	// is in an included folder. True: it is gone (or would be, in a dry run).
+	bool RemoveExtra(Ctx& c, const String& rel, char type, bool inside)
 	{
 		if(r.report.Stopping())
-			return;
+			return false;
 		if(type == 'd') {
+			bool in = filter.Inside(inside, GetFileName(rel)), all = true;
 			Vector<FolderEntry> list;
 			String error;
 			if(r.Net(c, [&] { list.Clear(); return c.fs[1]->List(rel, list, error); }))
-				for(const FolderEntry& f : list)
-					if(!SkipName(f.name))
-						RemoveExtra(c, rel + "/" + f.name, f.type);
+				for(const FolderEntry& f : list) {
+					if(SkipName(f.name))
+						continue;
+					if(f.type == 'd' ? filter.SkipDir(f.name) : !filter.KeepFile(in, f.name))
+						all = false;
+					else
+						all = RemoveExtra(c, rel + "/" + f.name, f.type, in) && all;
+				}
+			if(!all) {
+				r.Line("kept folder " + rel + ": it holds what the name filters leave out");
+				return false;
+			}
 		}
 		if(dry) {
 			Plan(Format("%-8s %s", "delete", rel));
-			return;
+			return true;
 		}
 		Action a;
 		a.kind = ActionKind::Delete;
@@ -612,6 +674,7 @@ struct Streamer {
 		s.a = pick(a);
 		s.seq = r.Record(s.a);
 		r.RunStep(c, s);
+		return true;
 	}
 
 	void CheckFolder(Ctx& c, const String& rel)
@@ -619,17 +682,22 @@ struct Streamer {
 		if(assume_empty)   // a dry run of --wipe-target: nothing would be left to check
 			return;
 		Index<String> names;
+		bool inside, made;
 		{
 			Lock l(r.mx);
 			const Folder& fd = folders.GetAdd(rel);
 			if(fd.unread)   // what the source has there is not known: delete nothing
 				return;
 			names = clone(fd.names);
+			inside = fd.inside;
+			made = fd.made;
 		}
 		Vector<FolderEntry> list;
 		String error;
 		if(!r.Net(c, [&] { list.Clear(); return c.fs[1]->List(rel, list, error); })) {
 			if(r.report.Stopping())
+				return;
+			if(filter.include && !made && Missing(error))   // nothing included went there
 				return;
 			if(!(dry && Missing(error)))   // a dry run did not create it
 				r.Line("warning: cannot read target folder " + Nvl(rel, String("/")) + ": " + error);
@@ -639,11 +707,11 @@ struct Streamer {
 		for(const FolderEntry& f : list) {
 			if(SkipName(f.name) || names.Find(f.name) >= 0)
 				continue;
-			// Excluded names are left alone on the target too.
-			if(f.type == 'd' ? Excluded(flags.exclude_dirs, f.name) : Excluded(flags.exclude_files, f.name))
+			// What the name filters leave out is left alone on the target too.
+			if(f.type == 'd' ? filter.SkipDir(f.name) : !filter.KeepFile(inside, f.name))
 				continue;
 			if(purge)
-				RemoveExtra(c, rel.IsEmpty() ? f.name : rel + "/" + f.name, f.type);
+				RemoveExtra(c, rel.IsEmpty() ? f.name : rel + "/" + f.name, f.type, inside);
 		}
 	}
 

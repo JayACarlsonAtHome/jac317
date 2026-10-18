@@ -675,6 +675,96 @@ static void TestEngineMerge(const String& root)
 	       "merge: replaced versions on both sides kept in their .old folders");
 }
 
+// Include and exclude: blank boxes filter nothing, every filled box narrows, exclude
+// wins, folders are made only where something included goes, and Mirror deletes only
+// what the filters would include.
+static void TestFilters(const String& root)
+{
+	String src = root + "/fsrc", db = root + "/sync.db";
+	Put(src + "/vms/a.qcow2", "vm a\n");
+	Put(src + "/vms/b.qcow2", "vm b\n");
+	Put(src + "/vms/notes.txt", "notes\n");
+	Put(src + "/other/c.txt", "c\n");
+	Put(src + "/photos/2024/p.jpg", "p\n");
+	Put(src + "/photos/x.txt", "x\n");
+	Put(src + "/deep/home/Documents/d.txt", "d\n");
+	Put(src + "/deep/home/z.txt", "z\n");
+	RealizeDirectory(src + "/empty");
+	symlink("a.qcow2", src + "/vms/link.qcow2");
+	auto run = [&](const String& dst, auto set) {
+		SyncSetup s = Setup(src, dst, db);
+		set(s.flags);
+		SyncResult r;
+		Sync(s, r);
+	};
+	auto has = [](const String& p) { return FileExists(p) || DirectoryExists(p); };
+
+	String d1 = root + "/f1";   // one VM out of a folder of them
+	run(d1, [](SyncFlags& f) { f.include_files = " b.qcow2 "; });
+	EXPECT(LoadFile(d1 + "/vms/b.qcow2") == "vm b\n" && !has(d1 + "/vms/a.qcow2") && !has(d1 + "/vms/notes.txt") &&
+	       !has(d1 + "/vms/link.qcow2"), "--include-file: only that file");
+	EXPECT(!has(d1 + "/other") && !has(d1 + "/photos") && !has(d1 + "/empty") && !has(d1 + "/deep"),
+	       "--include-file: no folders that hold nothing included");
+
+	String d2 = root + "/f2";   // folder names at any depth, with everything in them
+	run(d2, [](SyncFlags& f) { f.include_dirs = "photos;Documents"; });
+	EXPECT(has(d2 + "/photos/2024/p.jpg") && has(d2 + "/photos/x.txt") && has(d2 + "/deep/home/Documents/d.txt"),
+	       "--include-dir: what is inside the folders, at any depth");
+	EXPECT(!has(d2 + "/deep/home/z.txt") && !has(d2 + "/vms") && !has(d2 + "/empty"),
+	       "--include-dir: nothing outside them");
+
+	String d3 = root + "/f3";   // both: each narrows
+	run(d3, [](SyncFlags& f) { f.include_dirs = "photos"; f.include_files = "*.jpg"; });
+	EXPECT(has(d3 + "/photos/2024/p.jpg") && !has(d3 + "/photos/x.txt") && !has(d3 + "/deep"),
+	       "--include-dir with --include-file: both narrow");
+
+	String d4 = root + "/f4";   // exclude wins
+	run(d4, [](SyncFlags& f) { f.include_files = "*.qcow2"; f.exclude_files = "a.qcow2;link.qcow2"; });
+	EXPECT(has(d4 + "/vms/b.qcow2") && !has(d4 + "/vms/a.qcow2") && !has(d4 + "/vms/link.qcow2"),
+	       "exclude wins over include");
+
+	String d5 = root + "/f5";   // blank boxes: everything, empty folder too
+	run(d5, [](SyncFlags& f) { f.include_files = " ; "; f.include_dirs = ""; });
+	EXPECT(has(d5 + "/vms/a.qcow2") && has(d5 + "/deep/home/z.txt") && DirectoryExists(d5 + "/empty"),
+	       "blank include boxes filter nothing");
+
+	// Mirror deletes only what the filters include, also inside extra folders.
+	String d6 = root + "/f6";
+	Put(d6 + "/keep.txt", "keep\n");
+	Put(d6 + "/vms/a.qcow2", "old vm a\n");
+	Put(d6 + "/gone/b.qcow2", "old\n");
+	Put(d6 + "/mixed/b.qcow2", "old\n");
+	Put(d6 + "/mixed/keep.me", "keep\n");
+	run(d6, [](SyncFlags& f) { f.mode = SyncMode::Mirror; f.include_files = "b.qcow2"; });
+	EXPECT(LoadFile(d6 + "/keep.txt") == "keep\n" && LoadFile(d6 + "/vms/a.qcow2") == "old vm a\n" &&
+	       LoadFile(d6 + "/mixed/keep.me") == "keep\n", "Mirror leaves what is not included alone");
+	EXPECT(!has(d6 + "/gone") && !has(d6 + "/mixed/b.qcow2") && has(d6 + "/vms/b.qcow2"),
+	       "Mirror deletes included extras, and a folder left empty by them");
+
+	// Merge: the same filters on both sides.
+	String a = root + "/fma", b = root + "/fmb";
+	Put(a + "/vms/b.qcow2", "vm b\n");
+	Put(a + "/vms/a.qcow2", "vm a\n");
+	Put(b + "/other/y.txt", "y\n");
+	SyncSetup s = Setup(a, b, db);
+	s.flags.mode = SyncMode::Merge;
+	s.flags.include_files = "b.qcow2";
+	SyncResult r;
+	Sync(s, r);
+	EXPECT(has(b + "/vms/b.qcow2") && !has(b + "/vms/a.qcow2") && !has(a + "/other"),
+	       "Merge: only included files go either way");
+
+	// On the command line and back.
+	SyncSetup c;
+	String err;
+	EXPECT(ParseCommandLine(Vector<String>{ "--include-file=b.qcow2", "--include-file", "*.iso", "--include-dir=vms" },
+	                        c, err) == PARSE_OK && c.flags.include_files == "b.qcow2;*.iso" && c.flags.include_dirs == "vms",
+	       "--include-file / --include-dir parse: " + err);
+	Vector<String> args = FlagArgs(c.flags);
+	EXPECT(FindIndex(args, String("--include-file=*.iso")) >= 0 && FindIndex(args, String("--include-dir=vms")) >= 0,
+	       "include lists written back as arguments");
+}
+
 static void TestThreads(const String& root)
 {
 	String src = root + "/th-src", dst = root + "/th-dst", db = root + "/sync.db", check = root + "/check.db";
@@ -949,6 +1039,7 @@ CONSOLE_APP_MAIN
 	TestEngineMirror(eroot);
 	TestEngineResume(eroot);
 	TestEngineMerge(eroot);
+	TestFilters(eroot);
 	TestEngineRefusals(eroot);
 	TestThreads(eroot);
 	TestCliLikeGui(eroot);

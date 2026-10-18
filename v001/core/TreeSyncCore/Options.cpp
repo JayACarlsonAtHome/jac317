@@ -136,6 +136,13 @@ const char *HELP_EXCLUDE_FILES =
 const char *HELP_EXCLUDE_DIRS =
 	"Folder names to leave out, with everything inside them; * and ? are wildcards, ';' separates. "
 	"Example: .git;node_modules;cache*";
+const char *HELP_INCLUDE_FILES =
+	"Only these file names, with * and ? as wildcards, separated by ';'. Blank: every file. "
+	"Example: win11.qcow2 copies just that one file, with the folders on its way. Exclude still "
+	"wins, and Mirror leaves files that are not included alone on the target.";
+const char *HELP_INCLUDE_DIRS =
+	"Only what is inside these folder names, at any depth, with everything in them; * and ? are "
+	"wildcards, ';' separates. Blank: every folder. Example: Documents;photos*";
 
 static const struct { const char *name; SyncMode mode; const char *robocopy; const char *text; } MODES[] = {
 	{ "copy",   SyncMode::Copy,   "/E",   "Copy new and changed files, never delete" },
@@ -230,6 +237,10 @@ Vector<String> FlagArgs(const SyncFlags& f)
 		args.Add("--exclude-file=" + p);
 	for(const String& p : Split(f.exclude_dirs, ';'))
 		args.Add("--exclude-dir=" + p);
+	for(const String& p : Split(f.include_files, ';'))
+		args.Add("--include-file=" + p);
+	for(const String& p : Split(f.include_dirs, ';'))
+		args.Add("--include-dir=" + p);
 	return args;
 }
 
@@ -354,10 +365,11 @@ int ParseCommandLine(const Vector<String>& args, SyncSetup& s, String& error)
 			(name == "db" ? s.db : name == "known-hosts" ? s.known_hosts : s.safe_delete_dir) = CleanPath(value);
 			continue;
 		}
-		if(name == "exclude-file" || name == "exclude-dir") {
+		if(name == "exclude-file" || name == "exclude-dir" || name == "include-file" || name == "include-dir") {
 			if(!need())
 				return PARSE_ERROR;
-			String& list = name == "exclude-file" ? s.flags.exclude_files : s.flags.exclude_dirs;
+			String& list = name == "exclude-file" ? s.flags.exclude_files : name == "exclude-dir" ? s.flags.exclude_dirs
+			             : name == "include-file" ? s.flags.include_files : s.flags.include_dirs;
 			list << (list.GetCount() ? ";" : "") << value;
 			done = true;
 		}
@@ -429,7 +441,10 @@ String Usage()
 		u << Format("  --%-21s%s, %d-%d, default %d", String(o.name) + "=N", o.text, o.min, o.max, def.*o.field)
 		  << (*o.robocopy ? String(" (robocopy ") + o.robocopy + ")" : String()) << "\n";
 	u << "  --exclude-file=GLOB    Skip matching files, repeatable (robocopy /XF)\n"
-	  << "  --exclude-dir=GLOB     Skip matching folders, repeatable (robocopy /XD)\n\n"
+	  << "  --exclude-dir=GLOB     Skip matching folders, repeatable (robocopy /XD)\n"
+	  << "  --include-file=GLOB    Only matching files, repeatable (robocopy file list)\n"
+	  << "  --include-dir=GLOB     Only what is inside matching folders, repeatable\n"
+	  << "                         (a blank list filters nothing; exclude wins over include)\n\n"
 	  << "Run:\n"
 	  << "  --fresh                Start over instead of resuming an unfinished run\n"
 	  << "  --db=PATH              Database file (default " << DefaultDbPath() << ")\n"

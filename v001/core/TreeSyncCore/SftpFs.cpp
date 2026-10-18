@@ -414,6 +414,7 @@ struct RemoteScanner {
 	HashCache&        cache;
 	Index<String>     open_dirs;   // real paths of folders being walked: loop guard
 	std::chrono::steady_clock::time_point last_status = std::chrono::steady_clock::now();
+	NameFilter        filter = NameFilter(flags);
 
 	void Warn(const String& msg)
 	{
@@ -431,7 +432,7 @@ struct RemoteScanner {
 		                         FormatBytes(stats.hashed_bytes), rel));
 	}
 
-	String Dir(const String& path, const String& rel)
+	String Dir(const String& path, const String& rel, bool inside)   // inside: in an included folder
 	{
 		VectorMap<String, LIBSSH2_SFTP_ATTRIBUTES> items;
 		LIBSSH2_SFTP_HANDLE *h = libssh2_sftp_open_ex(m.sftp, path, path.GetCount(), 0, 0,
@@ -481,7 +482,7 @@ struct RemoteScanner {
 			Status(e.rel);
 
 			if(LIBSSH2_SFTP_S_ISDIR(a.permissions)) {
-				if(Excluded(flags.exclude_dirs, name))
+				if(filter.SkipDir(name))
 					continue;
 				String real = follow ? m.RealPath(p) : p;
 				if(open_dirs.Find(real) >= 0) {
@@ -493,15 +494,22 @@ struct RemoteScanner {
 				e.size = 0;
 				int at = out.GetCount();
 				out.Add(e);
-				String hsh = Dir(p, e.rel);
+				bool in = filter.Inside(inside, name);
+				String hsh = Dir(p, e.rel, in);
 				open_dirs.Drop();
 				if(IsNull(hsh))
 					return Null;
+				if(out.GetCount() == at + 1 && !filter.KeepEmptyDir(in)) {   // nothing included in it
+					out.Drop();
+					continue;
+				}
 				out[at].hash = hsh;
 				cache.Store(out[at]);
 				ListingLine(listing, 'd', hsh, name);
 			}
 			else if(LIBSSH2_SFTP_S_ISLNK(a.permissions)) {
+				if(!filter.KeepFile(inside, name))
+					continue;
 				e.type = 'l';
 				e.link = m.ReadLink(p);
 				e.hash = SHA256String("symlink\n" + e.link);
@@ -510,7 +518,7 @@ struct RemoteScanner {
 				ListingLine(listing, 'l', e.hash, name);
 			}
 			else if(LIBSSH2_SFTP_S_ISREG(a.permissions)) {
-				if(Excluded(flags.exclude_files, name))
+				if(!filter.KeepFile(inside, name))
 					continue;
 				e.type = 'f';
 				if(cache.Lookup(e, e.hash))
@@ -547,7 +555,7 @@ bool SftpFs::Scan(Db& db, const SyncFlags& flags, SyncReport& report, Vector<Ent
 	stats = ScanStats();
 	HashCache cache(db, Id(), flags, true);
 	RemoteScanner s{ *impl, Id(), flags, report, out, stats, cache };
-	root_hash = s.Dir(impl->root, Null);
+	root_hash = s.Dir(impl->root, Null, s.filter.RootInside());
 	if(IsNull(root_hash)) {
 		db.Exec("COMMIT");
 		error = impl->lost ? "lost the connection to " + impl->e.host + " while scanning it; nothing was "

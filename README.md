@@ -154,6 +154,8 @@ The switches are modelled on robocopy. TreeSync adds `--merge`, which copies cha
 | `--skip-source-only` | Skip files that exist only in source | `/XL` |
 | `--exclude-file=GLOB` | Skip matching files (repeatable) | `/XF` |
 | `--exclude-dir=GLOB` | Skip matching folders (repeatable) | `/XD` |
+| `--include-file=GLOB` | Only matching files (repeatable); e.g. `--include-file=win11.qcow2` syncs just that file, with the folders on its way | file list |
+| `--include-dir=GLOB` | Only what is inside matching folders, at any depth (repeatable) | |
 | `--retries=N` | Retries on a failed copy (default 3) | `/R:n` |
 | `--retry-wait=N` | Seconds between retries (default 5) | `/W:n` |
 | `--time-tolerance=N` | Times of the two sides N seconds apart or less count as equal (default 3; 0 = exact). Clocks and file times differ between machines, network shares and FAT disks | `/FFT` (for all systems) |
@@ -173,6 +175,8 @@ The switches are modelled on robocopy. TreeSync adds `--merge`, which copies cha
 | `--db=PATH` | Database file (default `~/.local/share/treesync/treesync.db`) | |
 | `--SIDE=PATH` | Tree root; SIDE is `source` or `target` | |
 | `--SIDE-host`, `-user`, `-port`, `-key` | Remote login for that side | |
+
+**Include and exclude** (the four boxes on the Flags tab): a blank list filters nothing, and every list that is filled in narrows what is synced. Patterns are file or folder names with `*` and `?`, separated by `;`. Exclude wins over include. With an include list, folders are made on the target only where something included goes (an included folder itself is always made), and Mirror deletes only what the lists would include: everything else on the target, also inside extra folders, is left alone.
 
 There is no password login: remote sides use SSH keys only, so passwordless SSH must be set up beforehand (`ssh-copy-id user@host`, then check that `ssh user@host` does not ask for a password).
 
