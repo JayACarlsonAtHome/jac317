@@ -60,6 +60,8 @@ TreeSync is a GUI on top of working code:
 
 ### Building and testing
 
+Before a push, `v001/verify.sh` runs everything: for gcc and clang, a debug build with all tests, then a release build with all tests (the release tests add a 4.5 GiB sparse copy). It stops at the first failure, keeps each step's output in `out/verify/`, and ends with release builds in `out/`. A git pre-push hook kept in the repository runs it (`v001/setup/hooks/pre-push`; `bootstrap.sh` sets `git config core.hooksPath v001/setup/hooks`); `git push --no-verify` skips it once.
+
 Like jac313, TreeSync builds with one selected compiler at a time:
 
 ```bash

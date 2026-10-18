@@ -204,6 +204,11 @@ if [ "$DRY" = 1 ]; then
   echo; for c in $COMPILERS; do echo "would run: ./build.sh --compiler $c --test"; done
   summary "dry run"; exit 0
 fi
+# The pre-push hook (runs verify.sh) is kept in the repository: point git at it.
+if git -C "$HERE/.." rev-parse --git-dir > /dev/null 2>&1; then
+  git -C "$HERE/.." config core.hooksPath v001/setup/hooks &&
+    echo "pre-push hook: v001/setup/hooks/pre-push runs ./verify.sh (git push --no-verify skips it)"
+fi
 if [ "$BUILD" = 0 ]; then summary "ready to build (--no-build)"; exit 0; fi
 all=Good
 mkdir -p "$HERE/out"   # for each build's output (a fresh checkout has no out/ yet)

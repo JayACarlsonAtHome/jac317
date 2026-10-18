@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Before a push: v001/verify.sh (debug and release builds, every test, gcc and clang).
+# Installed by: git config core.hooksPath v001/setup/hooks (bootstrap.sh does it).
+# Skip it once: git push --no-verify
+exec "$(git rev-parse --show-toplevel)/v001/verify.sh" < /dev/null
