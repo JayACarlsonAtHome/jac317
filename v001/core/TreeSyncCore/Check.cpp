@@ -24,11 +24,15 @@ int64 FolderIds::Get(const String& rel)
 	return id;
 }
 
-void WriteCheck(Db& db, FolderIds& folders, int64 run, const CheckRow& r)
+CheckWriter::CheckWriter(Db& db)
+:	folders(db),
+	insert(db, "INSERT OR REPLACE INTO file_checks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+{}
+
+void CheckWriter::Write(int64 run, const CheckRow& r)
 {
 	int slash = r.rel.ReverseFind('/');
-	Stmt w(db, "INSERT OR REPLACE INTO file_checks VALUES "
-	           "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+	Stmt& w = insert;
 	w.Int(1, run).Int(2, r.seq).Int(3, folders.Get(slash < 0 ? String() : r.rel.Left(slash)))
 	 .Text(4, r.rel.Mid(slash + 1)).Text(5, r.kind).Text(6, String(r.type, 1));
 	// Columns 7..20 in pairs, source then target; a side that is not there stays NULL.
@@ -89,7 +93,7 @@ struct Checker {
 	CheckResult&     result;
 	CheckMode        mode;
 	Db&              db;
-	FolderIds        folders;
+	CheckWriter      checks;
 	TreeFs          *fs[2] = {};
 	bool             local = false;          // both sides local: threads, xattrs, exact times
 	bool             owners = false;         // compare owners (--preserve-owner)
@@ -101,7 +105,7 @@ struct Checker {
 	int              file_total = 0;
 
 	Checker(const SyncSetup& setup, CheckMode mode, SyncReport& report, CheckResult& result, Db& db)
-	:	setup(setup), flags(setup.flags), report(report), result(result), mode(mode), db(db), folders(db) {}
+	:	setup(setup), flags(setup.flags), report(report), result(result), mode(mode), db(db), checks(db) {}
 
 	// Source and target entries of every folder, filtered like a sync.
 	void Walk(Vector<Item>& files, Vector<Item>& dirs)
@@ -210,7 +214,7 @@ struct Checker {
 	void Write(CheckRow& r)   // under m
 	{
 		r.seq = seq++;
-		WriteCheck(db, folders, result.run, r);
+		checks.Write(result.run, r);
 		if(++pending >= 500) {
 			db.Exec("COMMIT; BEGIN");
 			pending = 0;

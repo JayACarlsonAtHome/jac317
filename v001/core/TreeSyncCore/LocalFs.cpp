@@ -193,52 +193,67 @@ struct LocalFile : TreeFile {
 
 }
 
-String XattrDigest(TreeFile& f)
+// A file's extended attributes, names sorted, values as read.
+static Vector<Tuple<String, String>> ReadXattrs(int fd)
 {
-	int fd = f.Fd();
+	Vector<Tuple<String, String>> out;
 	ssize_t n = fd < 0 ? -1 : flistxattr(fd, nullptr, 0);
 	if(n <= 0)
-		return String();
+		return out;
 	Buffer<char> names((size_t)n);
 	n = flistxattr(fd, names, (size_t)n);
-	Vector<String> sorted;
-	for(const char *name = names; n > 0 && name < names + n; name += strlen(name) + 1)
-		if(strcmp(name, "security.selinux"))
-			sorted.Add(name);
-	Sort(sorted);
-	if(sorted.IsEmpty())
-		return String();
-	String all;
-	for(const String& name : sorted) {
-		ssize_t v = fgetxattr(fd, name, nullptr, 0);
-		Buffer<char> value((size_t)max<ssize_t>(v, 1));
-		v = v < 0 ? -1 : fgetxattr(fd, name, value, (size_t)v);
-		all << name << '\0' << (int64)v << '\0';
-		if(v > 0)
-			all.Cat(value, (int)v);
-	}
-	return SHA256String(all);
-}
-
-void CopyXattrs(TreeFile& from, TreeFile& to)
-{
-	int s = from.Fd(), d = to.Fd();
-	if(s < 0 || d < 0)
-		return;
-	ssize_t n = flistxattr(s, nullptr, 0);
-	if(n <= 0)
-		return;
-	Buffer<char> names((size_t)n);
-	n = flistxattr(s, names, (size_t)n);
 	for(const char *name = names; n > 0 && name < names + n; name += strlen(name) + 1) {
-		ssize_t v = fgetxattr(s, name, nullptr, 0);
+		ssize_t v = fgetxattr(fd, name, nullptr, 0);
 		if(v < 0)
 			continue;
 		Buffer<char> value((size_t)max<ssize_t>(v, 1));
-		v = fgetxattr(s, name, value, (size_t)v);
+		v = fgetxattr(fd, name, value, (size_t)v);
 		if(v >= 0)
-			fsetxattr(d, name, value, (size_t)v, 0);
+			out.Add(MakeTuple(String(name), String(value, (int)v)));
 	}
+	Sort(out, [](const auto& a, const auto& b) { return a.a < b.a; });
+	return out;
+}
+
+static String Digest(const Vector<Tuple<String, String>>& xattrs)
+{
+	String all;
+	for(const auto& x : xattrs)
+		if(x.a != "security.selinux")
+			all << x.a << '\0' << (int64)x.b.GetCount() << '\0' << x.b;
+	return all.IsEmpty() ? String() : SHA256String(all);
+}
+
+String XattrDigest(TreeFile& f)
+{
+	return Digest(ReadXattrs(f.Fd()));
+}
+
+String CopyXattrs(TreeFile& from, TreeFile& to)
+{
+	Vector<Tuple<String, String>> xattrs = ReadXattrs(from.Fd());
+	if(to.Fd() >= 0)
+		for(const auto& x : xattrs)
+			fsetxattr(to.Fd(), x.a, ~x.b, (size_t)x.b.GetCount(), 0);
+	return Digest(xattrs);
+}
+
+bool FdEntry(int fd, Entry& e)
+{
+	struct stat st;
+	if(fd < 0 || fstat(fd, &st) != 0)
+		return false;
+	e.type = S_ISDIR(st.st_mode) ? 'd' : S_ISLNK(st.st_mode) ? 'l' : 'f';
+	e.dev = st.st_dev;
+	e.ino = st.st_ino;
+	e.nlink = st.st_nlink;
+	e.size = st.st_size;
+	e.mtime_ns = LocalNs(st.st_mtim);
+	e.ctime_ns = LocalNs(st.st_ctim);
+	e.mode = st.st_mode & 07777;
+	e.uid = st.st_uid;
+	e.gid = st.st_gid;
+	return true;
 }
 
 One<TreeFile> LocalFs::Open(const String& rel, bool write, String& error)

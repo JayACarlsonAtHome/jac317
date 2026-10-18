@@ -105,6 +105,17 @@ struct Runner {
 	HashCache        *caches[2] = {};
 	int               next_seq = -1;
 
+	// The statements used for every file, prepared once per run (preparing one costs
+	// about as much as running it). Keyed by the SQL literal's address; under mx. A
+	// statement that is stepped must be Reset before its next use.
+	ArrayMap<uintptr_t, Stmt> prepared;
+
+	Stmt& Sql(const char *sql)
+	{
+		int i = prepared.Find((uintptr_t)sql);
+		return i >= 0 ? prepared[i] : prepared.Add((uintptr_t)sql, new Stmt(db, sql));
+	}
+
 	// Records an action before it runs (streaming: as it is decided). A resumed run
 	// finds its own unfinished row for the same path, so chunk records still match.
 	int Record(const Action& a)
@@ -114,8 +125,8 @@ struct Runner {
 		// INDEXED BY: left to itself SQLite walks the primary key (run, seq) backwards to
 		// save a sort, reading every action of the run for each file: a big run slowed
 		// down as it went (48,000 files: about a billion rows read).
-		Stmt find(db, "SELECT seq, state FROM actions INDEXED BY actions_rel WHERE run = ? AND rel = ? AND kind = ? "
-		              "ORDER BY seq DESC LIMIT 1");
+		Stmt& find = Sql("SELECT seq, state FROM actions INDEXED BY actions_rel WHERE run = ? AND rel = ? AND kind = ? "
+		                 "ORDER BY seq DESC LIMIT 1");
 		find.Int(1, run).Text(2, e.rel).Text(3, KindName(a.kind));
 		int seq = -1;
 		if(find.Step() && find.Text(1) != "done")
@@ -129,9 +140,9 @@ struct Runner {
 			}
 			seq = next_seq++;
 		}
-		Stmt(db, "INSERT OR REPLACE INTO actions (run, seq, kind, dir, rel, type, link, link_to, size, sha256, "
-		         "dev, ino, mtime_ns, ctime_ns, mode, note, state, bytes, error, replaces) "
-		         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'planned', 0, NULL, ?)")
+		Sql("INSERT OR REPLACE INTO actions (run, seq, kind, dir, rel, type, link, link_to, size, sha256, "
+		    "dev, ino, mtime_ns, ctime_ns, mode, note, state, bytes, error, replaces) "
+		    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'planned', 0, NULL, ?)")
 			.Int(1, run).Int(2, seq).Text(3, KindName(a.kind)).Int(4, a.dir).Text(5, e.rel)
 			.Text(6, String(e.type, 1)).Text(7, e.link).Text(8, a.link_to).Int(9, e.size)
 			.Text(10, e.hash).Int(11, e.dev).Int(12, e.ino).Int(13, e.mtime_ns)
@@ -151,9 +162,9 @@ struct Runner {
 	void Progress(const CopyProgress& cp)
 	{
 		CopyProgress p = cp;
+		Lock l(mx);   // copy_count and unchecked change together under it
 		p.count = max(p.index, copy_count + unchecked);
 		p.more = counting;
-		Lock l(mx);
 		report.WhenProgress(p);
 		if(p.done >= p.size && !p.verifying) {
 			in_flight.RemoveKey(p.id);
@@ -173,17 +184,17 @@ struct Runner {
 	void SetState(int seq, const char *state, int64 bytes = 0, const String& error = Null)
 	{
 		Lock l(mx);
-		Stmt(db, "UPDATE actions SET state = ?, bytes = ?, error = ? WHERE run = ? AND seq = ?")
+		Sql("UPDATE actions SET state = ?, bytes = ?, error = ? WHERE run = ? AND seq = ?")
 			.Text(1, state).Int(2, bytes).Text(3, error).Int(4, run).Int(5, seq).Run();
 	}
 
 	// What each copy was checked with goes into file_checks (History > SHA-256 checks).
-	FolderIds folders{ db };
+	CheckWriter checks{ db };
 
 	void Check(const CheckRow& row)
 	{
 		Lock l(mx);
-		WriteCheck(db, folders, run, row);
+		checks.Write(run, row);
 	}
 
 	// A verified copy goes straight into the target's hash cache, so the next scan
@@ -204,7 +215,7 @@ struct Runner {
 			caches[side]->Store(e);
 			return;
 		}
-		Stmt(db, "INSERT OR REPLACE INTO files VALUES (?, ?, 'f', ?, ?, ?, ?, ?, ?, ?, '', ?, 0)")
+		Sql("INSERT OR REPLACE INTO files VALUES (?, ?, 'f', ?, ?, ?, ?, ?, ?, ?, '', ?, 0)")
 			.Text(1, ids[side]).Text(2, rel).Int(3, e.dev).Int(4, e.ino).Int(5, e.nlink)
 			.Int(6, e.size).Int(7, e.mtime_ns).Int(8, e.ctime_ns).Int(9, e.mode).Text(10, hash).Run();
 	}
@@ -288,31 +299,32 @@ struct Runner {
 	void Synced(const String& rel, const String& hash)
 	{
 		Lock l(mx);
-		Stmt(db, "INSERT OR REPLACE INTO synced VALUES (?, ?, ?, ?)")
+		Sql("INSERT OR REPLACE INTO synced VALUES (?, ?, ?, ?)")
 			.Text(1, ids[0]).Text(2, ids[1]).Text(3, rel).Text(4, hash).Run();
 	}
 
 	// Chunked copy, a pipeline per chunk: read and hash it, write it, read it back and
-	// check it. Every checked chunk is recorded, so a restart continues from the next
-	// one. Works in 1 MiB slices (little memory per thread). src_hash and dst_hash are
-	// the whole-file SHA-256 of what was read and of what was read back, built up
-	// along the way: no separate full read is needed to verify the copy.
-	// Returns false with error "stopped" on Stop.
-	bool ChunkCopy(int seq, TreeFs& from, TreeFs& to, const String& rel, const String& part,
+	// check it. Every checked chunk of a file of more than one is recorded, so a restart
+	// continues from the next one. Works in 1 MiB slices (little memory per thread).
+	// src_hash and dst_hash are the whole-file SHA-256 of what was read and of what was
+	// read back, built up along the way: no separate full read is needed to verify the
+	// copy. in: the source, open. A local target is kept sparse: all-zero slices are
+	// not written, they stay holes (they read back as zeros, so the check still covers
+	// them). Returns false with error "stopped" on Stop.
+	bool ChunkCopy(int seq, TreeFile& in, TreeFs& to, bool remote_source, const String& rel, const String& part,
 	               int64 size, CopyProgress& p, Clock::time_point t0, One<TreeFile>& out,
 	               String& src_hash, String& dst_hash, String& error)
 	{
 		int64 chunk = (int64)flags.chunk_mib << 20;
-		One<TreeFile> in = from.Open(rel, false, error);
-		if(!in)
-			return false;
 		out = to.Open(part, true, error);
 		if(!out)
 			return false;
 		const int64 SLICE = 1 << 20;
 		Buffer<byte> buf((size_t)SLICE);
-		bool count_read = !from.IsLocal();
-		bool count_write = !to.IsLocal() || from.IsLocal();   // --bwlimit: network, or local writes
+		bool count_read = remote_source;
+		bool sparse = to.IsLocal();
+		int64 written_end = 0;   // sparse: where the last write ended
+		bool count_write = !to.IsLocal() || !remote_source;   // --bwlimit: network, or local writes
 		bool count_back = !to.IsLocal();
 
 		Clock::time_point last_shown = Clock::now();
@@ -347,10 +359,11 @@ struct Runner {
 		Vector<String> done;
 		{
 			Lock l(mx);
-			Stmt q(db, "SELECT idx, sha256 FROM chunks WHERE run = ? AND seq = ? ORDER BY idx");
+			Stmt& q = Sql("SELECT idx, sha256 FROM chunks WHERE run = ? AND seq = ? ORDER BY idx");
 			q.Int(1, run).Int(2, seq);
 			while(q.Step() && q.Int(0) == done.GetCount())
 				done.Add(q.Text(1));
+			q.Reset();
 		}
 		int64 count = (size + chunk - 1) / chunk;
 		int next = done.GetCount();
@@ -373,13 +386,20 @@ struct Runner {
 			int64 prefix = min(next * chunk, size);
 			for(int64 k = 0; k < prefix; k += SLICE) {
 				int64 n = min(SLICE, prefix - k);
-				if(!in->ReadAt(k, buf, n, error))
+				if(!in.ReadAt(k, buf, n, error))
 					return false;
 				if(count_read)
 					report.Count(n);
 				src_sha.Put(buf, (int)n);
 				dst_sha.Put(buf, (int)n);
 			}
+		}
+		// Locally, whatever lies past the checked chunks goes (a torn chunk, an older and
+		// longer attempt), so the slices left unwritten below are holes, not old bytes.
+		if(sparse) {
+			written_end = min(next * chunk, size);
+			if(!out->Truncate(written_end, error))
+				return false;
 		}
 
 		for(int64 idx = next; idx < count; idx++) {
@@ -392,16 +412,19 @@ struct Runner {
 			Sha256Stream chunk_sha;
 			for(int64 k = 0; k < len; k += SLICE) {
 				int64 n = min(SLICE, len - k);
-				if(!in->ReadAt(off + k, buf, n, error))
+				if(!in.ReadAt(off + k, buf, n, error))
 					return false;
 				if(count_read)
 					report.Count(n);
 				chunk_sha.Put(buf, (int)n);
 				src_sha.Put(buf, (int)n);
-				if(!out->WriteAt(off + k, buf, n, error))
-					return false;
-				if(count_write)
-					report.Count(n);
+				if(!sparse || !AllZero(buf, n)) {
+					if(!out->WriteAt(off + k, buf, n, error))
+						return false;
+					written_end = off + k + n;
+					if(count_write)
+						report.Count(n);
+				}
 				// Within a chunk too, about four times a second, so a thermometer
 				// moves smoothly even when one chunk takes many seconds. Only inside
 				// it: done at a chunk's end means that chunk is checked and recorded.
@@ -415,6 +438,13 @@ struct Runner {
 			if(report.Stopping()) {
 				error = "stopped";
 				return false;
+			}
+			// A chunk that ends in skipped zeros: the file reaches its end as a hole, so the
+			// read-back below finds zeros there, not the end of the file.
+			if(sparse && written_end < off + len) {
+				if(!out->Truncate(off + len, error))
+					return false;
+				written_end = off + len;
 			}
 			// A recorded chunk must really be on disk. A one-chunk file needs no flush:
 			// if it is cut short it is copied again, and a later scan catches a copy
@@ -433,7 +463,7 @@ struct Runner {
 				// A one-chunk file is copied again from the start after a stop: no record.
 				Lock l(mx);
 				if(count > 1)
-					Stmt(db, "INSERT OR REPLACE INTO chunks VALUES (?, ?, ?, ?, ?, ?)")
+					Sql("INSERT OR REPLACE INTO chunks VALUES (?, ?, ?, ?, ?, ?)")
 						.Int(1, run).Int(2, seq).Int(3, idx).Int(4, off).Int(5, len).Text(6, sent).Run();
 				result.bytes += len;
 			}
@@ -442,7 +472,7 @@ struct Runner {
 			if(p.done < p.size)
 				Progress(p);
 		}
-		if(!out->Truncate(size, error))
+		if((!sparse || written_end < size) && !out->Truncate(size, error))   // sparse: a hole at the end
 			return false;
 		src_hash = src_sha.FinishString();
 		dst_hash = dst_sha.FinishString();
@@ -485,9 +515,16 @@ struct Runner {
 		}
 
 		// The source may have changed since the run was planned: then hash it again.
+		// Locally the open file tells (one path lookup less); it stays open for the copy.
 		Entry now;
-		if(!from.Stat(e.rel, flags.follow_links, now, error))
+		One<TreeFile> in = from.Open(e.rel, false, error);
+		if(!in)
 			return false;
+		if(!(from.IsLocal() ? FdEntry(in->Fd(), now) : from.Stat(e.rel, flags.follow_links, now, error))) {
+			if(error.IsEmpty())
+				error = "cannot stat " + e.rel;
+			return false;
+		}
 		String expect = e.hash;
 		if(now.size != e.size || now.mtime_ns != e.mtime_ns || (from.IsLocal() && now.ino != e.ino)) {
 			Line("source changed since planning, hashing again: " + e.rel);
@@ -518,7 +555,12 @@ struct Runner {
 				std::this_thread::sleep_for(std::chrono::seconds(flags.retry_wait));
 			}
 			error.Clear();
-			ok = ChunkCopy(s.seq, from, to, e.rel, part, now.size, p, t0, out, src_hash, dst_hash, error);
+			if(attempt) {   // the old handle may be what failed
+				in = from.Open(e.rel, false, error);
+				if(!in)
+					continue;
+			}
+			ok = ChunkCopy(s.seq, *in, to, !from.IsLocal(), e.rel, part, now.size, p, t0, out, src_hash, dst_hash, error);
 			if(ok || error == "stopped" || report.Stopping() || Permanent(error) || from.Lost() || to.Lost())
 				break;   // a lost connection is waited for by RunStep, not retried here
 		}
@@ -564,18 +606,22 @@ struct Runner {
 		// cp --preserve=all. After the owner: a change of owner clears capabilities.
 		bool local = from.IsLocal() && to.IsLocal();
 		if(local) {
-			String ignore;
-			if(One<TreeFile> in = from.Open(e.rel, false, ignore)) {
-				CopyXattrs(*in, *out);
-				row.xattrs[0] = XattrDigest(*in);
-				row.xattrs[1] = XattrDigest(*out);
-				row.xattrs_known[0] = row.xattrs_known[1] = true;
-			}
+			row.xattrs[0] = CopyXattrs(*in, *out);
+			row.xattrs[1] = XattrDigest(*out);
+			row.xattrs_known[0] = row.xattrs_known[1] = true;
 		}
+		in.Clear();
+		// SFTP: close before the rename. Locally the copy stays open, so its attributes
+		// (and, after the rename, the hash cache's entry) come from the handle.
+		if(!to.IsLocal())
+			out.Clear();
+		if(!MakeRoom(c, a, error) || !to.Rename(part, e.rel, error))
+			return false;
 		// The copy's attributes as they now are, so the row shows whether they were kept.
 		Entry placed;
-		String ignore;
-		if(to.IsLocal() && to.Stat(part, false, placed, ignore)) {
+		bool have_placed = to.IsLocal() && FdEntry(out->Fd(), placed);
+		out.Clear();
+		if(have_placed) {
 			row.mode[1] = placed.mode;
 			row.uid[1] = placed.uid;
 			row.gid[1] = placed.gid;
@@ -589,24 +635,23 @@ struct Runner {
 		if(row.attr_diff.GetCount())
 			Line("warning: attributes not all kept for " + e.rel + ": " + row.attr_diff);
 		Check(row);
-		out.Clear();   // close before the rename
-		if(!MakeRoom(c, a, error) || !to.Rename(part, e.rel, error))
-			return false;
 		p.done = p.size;
 		p.seconds = Since(t0);
 		Progress(p);
 		Synced(e.rel, expect);
 		if(hash_new)   // the source's own hash, worked out here: keep it for the next scan
 			Cache(from, a.dir, e.rel, expect, &now);
-		if(to.IsLocal())
+		if(have_placed)   // read after the rename, which changes the ctime the cache checks
+			Cache(to, 1 - a.dir, e.rel, expect, &placed);
+		else if(to.IsLocal())
 			Cache(to, 1 - a.dir, e.rel, expect);
 		else {
 			// Over SFTP everything needed is already known: save a round trip.
-			Entry placed;
-			placed.size = now.size;
-			placed.mtime_ns = now.mtime_ns / 1000000000 * 1000000000;   // SFTP keeps whole seconds
-			placed.mode = now.mode;
-			Cache(to, 1 - a.dir, e.rel, expect, &placed);
+			Entry known;
+			known.size = now.size;
+			known.mtime_ns = now.mtime_ns / 1000000000 * 1000000000;   // SFTP keeps whole seconds
+			known.mode = now.mode;
+			Cache(to, 1 - a.dir, e.rel, expect, &known);
 		}
 		return true;
 	}

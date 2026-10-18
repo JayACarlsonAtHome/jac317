@@ -236,15 +236,24 @@ struct TreeFile {
 	virtual bool Truncate(int64 size, String& error) = 0;
 	virtual void Flush() = 0;
 	virtual bool SetAttrs(const FileAttrs& a, String& error) = 0;
-	bool         Hash(int64 size, String& hash, String& error, const std::atomic<bool> *stop,
-	                  Throttle *throttle = nullptr);
 	virtual int  Fd() const   { return -1; }   // local files: the descriptor
 	virtual ~TreeFile() {}
 };
 
 // Extended attributes (ACLs, SELinux label, capabilities, user.*) from one local file
 // to another, best effort: what cannot be set is left out, as cp --preserve=all does.
-void CopyXattrs(TreeFile& from, TreeFile& to);
+// Returns the source's XattrDigest, worked out from the same read.
+String CopyXattrs(TreeFile& from, TreeFile& to);
+
+// A local open file's Entry (type, dev, ino, size, times, mode, owner) from fstat.
+bool   FdEntry(int fd, Entry& e);
+
+// All bytes zero: a slice the sparse copy leaves as a hole.
+inline bool AllZero(const void *p, int64 n)
+{
+	const byte *b = (const byte *)p;
+	return n <= 0 || (b[0] == 0 && memcmp(b, b + 1, (size_t)n - 1) == 0);
+}
 
 // Paths are relative to the tree root ("" is the root itself).
 class TreeFs {
@@ -393,7 +402,15 @@ struct CheckRow {
 	String result;               // fixed, failed: ..., or empty
 };
 
-void   WriteCheck(Db& db, FolderIds& folders, int64 run, const CheckRow& row);
+// Writes rows of file_checks, its statement prepared once.
+class CheckWriter {
+	FolderIds folders;
+	Stmt      insert;
+
+public:
+	void Write(int64 run, const CheckRow& row);
+	CheckWriter(Db& db);
+};
 // The SHA-256 of a local file's extended attributes (sorted, names and values), "" when
 // it has none. The SELinux label is left out: it is set by policy where the file is.
 String XattrDigest(TreeFile& f);

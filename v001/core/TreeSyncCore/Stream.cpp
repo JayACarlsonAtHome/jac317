@@ -556,10 +556,16 @@ struct Streamer {
 	void Process(Ctx& c, Item& it)
 	{
 		Entry& e = it.e;
-		if(e.type == 'f') {   // decided below: copied (copy_count) or not
-			r.unchecked--;
-			r.unchecked_bytes -= e.size;
-		}
+		// A file leaves the "not checked yet" count in the same locked step that adds it
+		// to the copies, or on the way out when it is not copied: the counter shown,
+		// copies plus unchecked, never dips.
+		struct Unchecked {
+			Runner& r;
+			const Entry& e;
+			bool pending;
+			void Done()   { if(pending) { r.unchecked--; r.unchecked_bytes -= e.size; pending = false; } }
+			~Unchecked()  { Lock l(r.mx); Done(); }
+		} unchecked{ r, e, e.type == 'f' };
 		Entry t;
 		String error = "no such file";
 		bool exists = !assume_empty && r.Net(c, [&] { return c.fs[1]->Stat(e.rel, false, t, error); });
@@ -640,12 +646,14 @@ struct Streamer {
 			Plan(line);
 			Lock l(r.mx);
 			r.overall_total += e.size;
+			unchecked.Done();
 			return;
 		}
 		if(e.type == 'f') {
 			Lock l(r.mx);
 			r.copy_count++;
 			r.overall_total += e.size;
+			unchecked.Done();
 		}
 		a.from = clone(e);
 		Step s;

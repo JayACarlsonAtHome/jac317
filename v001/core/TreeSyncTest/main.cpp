@@ -1008,6 +1008,52 @@ static void TestChecks(const String& root)
 	       "clear .old refuses a tree: " + err);
 }
 
+// A sparse file past 4 GiB: offsets beyond 32 bits, and the copy stays sparse (zero
+// slices are not written). Holes cost no disk, only reading (zeros, hashed twice).
+static void TestSparseBig(const String& root)
+{
+#ifdef _DEBUG
+	Cout() << "(skipped in a debug build: hashes 9 GiB, about 2 minutes; build.sh --release --test runs it)\n";
+	return;
+#endif
+	if(GetEnv("TREESYNC_VALGRIND").GetCount()) {
+		Cout() << "(skipped under valgrind: hashes 9 GiB)\n";
+		return;
+	}
+	String src = root + "/sp-src", dst = root + "/sp-dst", db = root + "/sparse.db";
+	RealizeDirectory(src);
+	const int64 SIZE = 4608LL << 20, past_4g = (4300LL << 20) + 12345;   // 4.5 GiB; data past 4 GiB
+	String a = Big(1 << 20, 7), b = Big(100000, 8), z = Big(4096, 9);
+	int fd = open(src + "/disk.img", O_CREAT | O_WRONLY | O_CLOEXEC, 0644);
+	bool made = fd >= 0 && ftruncate(fd, SIZE) == 0 && pwrite(fd, ~a, a.GetCount(), 0) == a.GetCount() &&
+	            pwrite(fd, ~b, b.GetCount(), past_4g) == b.GetCount() &&
+	            pwrite(fd, ~z, z.GetCount(), SIZE - z.GetCount()) == z.GetCount();
+	if(fd >= 0)
+		close(fd);
+	EXPECT(made, "made a 4.5 GiB sparse file");
+	SyncSetup s = Setup(src, dst, db);
+	s.flags.chunk_mib = 64;
+	SyncResult r;
+	Sync(s, r);
+	EXPECT(r.failed == 0, Format("sparse copy: %d failed", r.failed));
+	struct stat st;
+	bool there = stat(dst + "/disk.img", &st) == 0;
+	EXPECT(there && st.st_size == SIZE, Format("sparse copy has the full size (%lld)", there ? (int64)st.st_size : -1LL));
+	EXPECT(there && st.st_blocks * 512 < (64LL << 20), Format("copy stays sparse: %lld bytes on disk",
+	                                                         there ? (int64)st.st_blocks * 512 : -1LL));
+	char got[16] = {};
+	fd = open(dst + "/disk.img", O_RDONLY | O_CLOEXEC);
+	EXPECT(fd >= 0 && pread(fd, got, 16, past_4g) == 16 && memcmp(got, ~b, 16) == 0, "data past 4 GiB copied");
+	if(fd >= 0)
+		close(fd);
+	Db d;
+	String err;
+	d.Open(db, err);
+	Stmt q(d, "SELECT count(*) FROM file_compare WHERE run = ? AND file_name = 'disk.img' AND match = 'true'");
+	q.Int(1, r.run);
+	EXPECT(q.Step() && q.Int(0) == 1, "sparse copy verified by SHA-256");
+}
+
 // --wipe-target: the target is emptied first, into <target>.old with safe delete.
 static void TestWipe(const String& root)
 {
@@ -1182,6 +1228,7 @@ CONSOLE_APP_MAIN
 	TestCliLikeGui(eroot);
 	TestStreaming(eroot);
 	TestChecks(eroot);
+	TestSparseBig(eroot);
 	TestWipe(eroot);
 	TestBandwidthAndPriority(eroot);   // last: it lowers this process's priority
 	int efd = open(GetFileFolder(eroot), O_RDONLY | O_DIRECTORY | O_CLOEXEC);

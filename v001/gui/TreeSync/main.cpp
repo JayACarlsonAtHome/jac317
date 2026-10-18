@@ -232,7 +232,7 @@ GUI_APP_MAIN
 			return;
 		}
 		else if(args[i].StartsWith("--bench-log=")) {
-			bench = ScanInt(args[i].Mid(12));
+			bench = (int)clamp(ScanInt64(args[i].Mid(12)), (int64)0, (int64)INT_MAX);   // not cut to int
 			args.Remove(i);
 		}
 

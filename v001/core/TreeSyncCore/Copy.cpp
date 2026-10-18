@@ -45,29 +45,6 @@ bool HashAt(int dirfd, const String& name, String& hash, String& error,
 	return true;
 }
 
-// Reads the open file from the start and hashes it: used to verify a copy through
-// the handle it was written with (one less open and close, which counts over SFTP).
-bool TreeFile::Hash(int64 size, String& hash, String& error, const std::atomic<bool> *stop,
-                    Throttle *throttle)
-{
-	Sha256Stream sha;
-	Buffer<byte> buf(1 << 20);
-	for(int64 off = 0; off < size; off += 1 << 20) {
-		if(stop && *stop) {
-			error = "stopped";
-			return false;
-		}
-		int64 len = min<int64>(1 << 20, size - off);
-		if(!ReadAt(off, buf, len, error))
-			return false;
-		if(throttle)
-			throttle->Account(len);
-		sha.Put(buf, (int)len);
-	}
-	hash = sha.FinishString();
-	return true;
-}
-
 Throttle::Throttle(int64 bytes_per_second, const std::atomic<bool> *stop)
 :	rate(bytes_per_second), tokens((double)bytes_per_second), last(std::chrono::steady_clock::now()), stop(stop)
 {}
