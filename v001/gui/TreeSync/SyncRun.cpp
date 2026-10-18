@@ -317,7 +317,40 @@ bool TreeSyncWindow::ConfirmRun(const SyncSetup& s)
 	                   "Use Sync > Dry run first to see the list of changes.");
 }
 
-void TreeSyncWindow::StartSync(bool dry_run)
+// Sync attributes and Clear .old change the target: ask first. Clear .old counts what
+// it would delete (local folders) so the question says how much.
+bool TreeSyncWindow::ConfirmExtra(const SyncSetup& s, const String& extra)
+{
+	if(s.source.path.IsEmpty() || s.target.path.IsEmpty()) {
+		Exclamation("Choose a source and a target first.");
+		return false;
+	}
+	auto where = [](const TreeEndpoint& e) {
+		return e.remote ? Nvl(e.user, GetUserName()) + "@" + e.host + ":" + e.path : e.path;
+	};
+	if(extra == "--sync-attrs")
+		return PromptYesNo("[* Sync attributes?]&&From: [C " + DeQtf(where(s.source)) + "]&To: [C " +
+		                   DeQtf(where(s.target)) + "]&&Files and folders whose mode, time, owner or extended "
+		                   "attributes differ get the source's on the target. No file content is copied; files "
+		                   "whose size differs are left for a sync.");
+	if(extra == "--clear-old") {
+		String counted;
+		if(!s.target.remote && !s.source.remote) {
+			SyncReport rep;
+			rep.WhenLine = [&](const String& l) { if(l.StartsWith("would delete") || l.StartsWith("no ")) counted << DeQtf(l) << "&"; };
+			String error;
+			if(!ClearOld(s, true, rep, error))
+				counted << "[@6 " << DeQtf(error) << "]&";
+		}
+		return PromptYesNo("[*@6 Delete the .old folders for good?]&&" +
+		                   Nvl(counted, "[C " + DeQtf(where(s.target)) + ".old]&") +
+		                   "&They hold the files safe delete moved out of the way. This cannot be undone." +
+		                   String(as_root ? "" : "&(Folders written by a root run need Sync > Run as root.)"));
+	}
+	return true;
+}
+
+void TreeSyncWindow::StartSync(bool dry_run, const String& extra)
 {
 	if(child > 0)
 		return;
@@ -329,13 +362,16 @@ void TreeSyncWindow::StartSync(bool dry_run)
 	// The menu decides, not the Dry run switch: Run is real, Dry run previews.
 	SyncSetup s = setup;
 	s.flags.dry_run = dry_run;
-	if(!dry_run && !ConfirmRun(s))
+	if(extra.GetCount() ? !ConfirmExtra(s, extra) : !dry_run && !ConfirmRun(s))
 		return;
+	run_extra = extra;
 	Vector<String> args;
 	if(as_root)
 		args.Add("/usr/bin/pkexec");
 	args.Add(cli);
 	args.Append(ToArgs(s));
+	if(extra.GetCount())
+		args.Add(extra);
 	args.Add("--stop-on-eof");
 	args.Add("--gui-progress");
 
@@ -368,7 +404,7 @@ void TreeSyncWindow::StartSync(bool dry_run)
 	child_stdin = in[1];
 	sync_started = (int64)time(nullptr);
 	sync_dry = dry_run;
-	Log(String(as_root ? "[as root] " : "") + CommandLineText(ToArgs(s)));
+	Log(String(as_root ? "[as root] " : "") + CommandLineText(ToArgs(s)) + (extra.GetCount() ? " " + extra : String()));
 	status = "Running...";
 	active.Clear();
 	copy_started.Clear();
@@ -436,9 +472,12 @@ void TreeSyncWindow::SyncFinished(int code)
 		close(child_stdin);
 	child_stdin = -1;
 	child = 0;
-	const char *what = code == 0 ? "in sync" : code == 1 ? "finished with failures or conflicts"
-	                 : code == 2 ? "could not run" : code == 3 ? "stopped; Run again to resume"
+	bool scan = run_extra == "--scan-only", attrs = run_extra == "--sync-attrs", clear = run_extra == "--clear-old";
+	const char *what = code == 0 ? (scan ? "the trees are the same" : attrs ? "attributes in sync" : clear ? "done" : "in sync")
+	                 : code == 1 ? (scan ? "found differences (History > SHA-256 checks)" : "finished with failures or conflicts")
+	                 : code == 2 ? "could not run" : code == 3 ? (run_extra.GetCount() ? "stopped" : "stopped; Run again to resume")
 	                 : code == 126 || code == 127 ? "pkexec refused or was cancelled" : "ended abnormally";
+	String name = scan ? "Scan only" : attrs ? "Sync attributes" : clear ? "Clear .old" : sync_dry ? "Dry run" : "Sync";
 	Log(Format("treesync-cli exit code %d: %s", code, what));
 	int64 ended = (int64)time(nullptr), took = ended - sync_started;
 	Log("took " + DurationWords(took) + " (" + DurationClock(took) + ")");   // padded: the log lines up
@@ -457,8 +496,7 @@ void TreeSyncWindow::SyncFinished(int code)
 	LoadTrees();
 	// How long it took, in a popup (not when pkexec was refused or the window is closing).
 	if(!closing && code != 126 && code != 127)
-		PromptOK("[* " + DeQtf(code == 0 ? String(sync_dry ? "Dry run finished" : "Sync finished: in sync")
-		                                 : String(sync_dry ? "Dry run " : "Sync ") + what) + ".]&&"
+		PromptOK("[* " + DeQtf(name + ": " + what) + ".]&&"
 		         "It took [* " + DeQtf(took_text) + "]&"
 		         "([C " + DurationClock(took) + "], from " + ClockTime(sync_started) + " to " + ClockTime(ended) + ")");
 }

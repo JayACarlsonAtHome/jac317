@@ -11,6 +11,7 @@ const char *KindName(ActionKind k)
 	case ActionKind::Link:     return "link";
 	case ActionKind::Delete:   return "delete";
 	case ActionKind::Conflict: return "conflict";
+	case ActionKind::Attrs:    return "attrs";
 	}
 	return "?";
 }

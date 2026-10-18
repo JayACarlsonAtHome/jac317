@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
+#include <sys/xattr.h>
 #include <unistd.h>
 #include <cerrno>
 #include <cstring>
@@ -186,9 +187,58 @@ struct LocalFile : TreeFile {
 		return true;
 	}
 
+	int  Fd() const override   { return fd; }
 	~LocalFile()            { if(fd >= 0) close(fd); }
 };
 
+}
+
+String XattrDigest(TreeFile& f)
+{
+	int fd = f.Fd();
+	ssize_t n = fd < 0 ? -1 : flistxattr(fd, nullptr, 0);
+	if(n <= 0)
+		return String();
+	Buffer<char> names((size_t)n);
+	n = flistxattr(fd, names, (size_t)n);
+	Vector<String> sorted;
+	for(const char *name = names; n > 0 && name < names + n; name += strlen(name) + 1)
+		if(strcmp(name, "security.selinux"))
+			sorted.Add(name);
+	Sort(sorted);
+	if(sorted.IsEmpty())
+		return String();
+	String all;
+	for(const String& name : sorted) {
+		ssize_t v = fgetxattr(fd, name, nullptr, 0);
+		Buffer<char> value((size_t)max<ssize_t>(v, 1));
+		v = v < 0 ? -1 : fgetxattr(fd, name, value, (size_t)v);
+		all << name << '\0' << (int64)v << '\0';
+		if(v > 0)
+			all.Cat(value, (int)v);
+	}
+	return SHA256String(all);
+}
+
+void CopyXattrs(TreeFile& from, TreeFile& to)
+{
+	int s = from.Fd(), d = to.Fd();
+	if(s < 0 || d < 0)
+		return;
+	ssize_t n = flistxattr(s, nullptr, 0);
+	if(n <= 0)
+		return;
+	Buffer<char> names((size_t)n);
+	n = flistxattr(s, names, (size_t)n);
+	for(const char *name = names; n > 0 && name < names + n; name += strlen(name) + 1) {
+		ssize_t v = fgetxattr(s, name, nullptr, 0);
+		if(v < 0)
+			continue;
+		Buffer<char> value((size_t)max<ssize_t>(v, 1));
+		v = fgetxattr(s, name, value, (size_t)v);
+		if(v >= 0)
+			fsetxattr(d, name, value, (size_t)v, 0);
+	}
 }
 
 One<TreeFile> LocalFs::Open(const String& rel, bool write, String& error)

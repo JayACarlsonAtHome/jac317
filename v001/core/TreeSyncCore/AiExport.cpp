@@ -60,25 +60,30 @@ int64 Newest(Db& db)
 
 String Bytes(int64 n)   { return FormatBytes(n); }
 
-// A log line in the stamped form " HH:MM:SS : HH:MM:SS : YYY:DDD:HH:MM:SS : message".
+// A log line in the stamped form " HH:MM:SS.ffffff : HH:MM:SS.ffffff : YYY:DDD:HH:MM:SS.ffffff : message",
+// or, in logs from before microseconds, " HH:MM:SS : HH:MM:SS : YYY:DDD:HH:MM:SS : message".
 struct LogLine {
 	String start, stop, message;
-	int64  seconds = -1;   // duration; -1 when the line has no stamp (older logs)
+	double seconds = -1;   // duration; -1 when the line has no stamp
 };
 
 LogLine ParseLine(const String& line)
 {
 	LogLine l;
 	l.message = line;
-	if(line.GetCount() >= 43 && line[0] == ' ' && line.Mid(9, 3) == " : " && line.Mid(20, 3) == " : " &&
-	   line.Mid(39, 3) == " : ") {
-		l.start = line.Mid(1, 8);
-		l.stop = line.Mid(12, 8);
-		Vector<String> d = Split(line.Mid(23, 16), ':');
-		if(d.GetCount() == 5)
-			l.seconds = (((ScanInt64(d[0]) * 365 + ScanInt64(d[1])) * 24 + ScanInt64(d[2])) * 60 +
-			             ScanInt64(d[3])) * 60 + ScanInt64(d[4]);
-		l.message = line.Mid(42);
+	for(int f = 0; f < 2; f++) {   // f: fraction digits, 7 characters more per time column
+		int w = f ? 7 : 0, a = 9 + w, b = a + 11 + w, c = b + 19 + w;
+		if(line.GetCount() >= c + 4 && line[0] == ' ' && line.Mid(a, 3) == " : " && line.Mid(b, 3) == " : " &&
+		   line.Mid(c, 3) == " : " && (line[9] == '.') == (f == 1)) {
+			l.start = line.Mid(1, 8 + w);
+			l.stop = line.Mid(a + 3, 8 + w);
+			Vector<String> d = Split(line.Mid(b + 3, 16 + w), ':');
+			if(d.GetCount() == 5)
+				l.seconds = (((ScanInt64(d[0]) * 365 + ScanInt64(d[1])) * 24 + ScanInt64(d[2])) * 60 +
+				             ScanInt64(d[3])) * 60 + ScanDouble(d[4]);
+			l.message = line.Mid(c + 3);
+			break;
+		}
 	}
 	return l;
 }
@@ -124,11 +129,11 @@ String Guide()
 	"own log; a run that was stopped and resumed has several.\n\n"
 	"**Log lines** start with three time columns, then the message:\n\n"
 	"```\n"
-	" START    : STOP     : DURATION         : MESSAGE\n"
-	" 14:16:45 : 14:16:52 : 000:000:00:00:07 : [1/4] big.bin        100% |   42.7 MiB/s |  300.0 MiB |  00m07s\n"
+	" START           : STOP            : DURATION                : MESSAGE\n"
+	" 14:16:45.102938 : 14:16:52.131044 : 000:000:00:00:07.028106 : [1/4] big.bin        100% |   42.7 MiB/s |  300.0 MiB |  00m07s\n"
 	"```\n\n"
 	"- A copied file's line runs from when its copy began to when it finished (DURATION is "
-	"years:days:hours:minutes:seconds, whole seconds).\n"
+	"years:days:hours:minutes:seconds.microseconds). Logs from older versions have whole seconds only.\n"
 	"- Lines about the whole run (pre-scan done, post-scan done, Total, finished, took) run from the start of the run.\n"
 	"- Other lines (folders created, deletes, moves to `.old`, warnings, `network:` events, `FAILED`, `CONFLICT`) "
 	"show the moment they happened.\n"
@@ -249,7 +254,7 @@ bool ExportAiLogs(const String& db_path, int64 run, String& out_path, String& er
 		md << "| | | (none) |\n";
 
 	// Copies: the slowest, and how many and how much finished in each minute.
-	struct Copy : Moveable<Copy> { int log; String name, start, stop; int64 seconds, size; };
+	struct Copy : Moveable<Copy> { int log; String name, start, stop; double seconds; int64 size; };
 	Vector<Copy> copies;
 	VectorMap<String, Tuple<int, int64>> per_minute;   // "log HH:MM" -> files, bytes
 	for(int i = 0; i < all.GetCount(); i++)
@@ -273,8 +278,9 @@ bool ExportAiLogs(const String& db_path, int64 run, String& out_path, String& er
 	   << "| Log | Start | Stop | Seconds | Size | Rate | File |\n|---|---|---|---|---|---|---|\n";
 	for(int i = 0; i < min(slow.GetCount(), 200); i++) {
 		const Copy& c = slow[i];
-		md << "| " << c.log << " | " << c.start << " | " << c.stop << " | " << c.seconds << " | " << Bytes(c.size)
-		   << " | " << (c.seconds > 0 ? Bytes(c.size / c.seconds) + "/s" : String("-")) << " | " << Cell(c.name) << " |\n";
+		md << "| " << c.log << " | " << c.start << " | " << c.stop << " | " << Format("%.6f", c.seconds) << " | "
+		   << Bytes(c.size) << " | " << (c.seconds > 0 ? Bytes((int64)(c.size / c.seconds)) + "/s" : String("-"))
+		   << " | " << Cell(c.name) << " |\n";
 	}
 	md << "\n## 6. Copies per minute (throughput)\n\nFiles and bytes whose copy finished in each minute.\n\n"
 	   << "| Log | Minute | Files | Bytes | Average rate |\n|---|---|---|---|---|\n";
@@ -346,7 +352,7 @@ bool ExportAiSql(const String& db_path, int64 run, String& out_path, String& err
 	      "whole-second times.\n"
 	   << "- `synced`: the hash both trees had for each file at the last sync (Merge uses it to tell which side changed).\n"
 	   << "- `run_logs`: every log file of every run (one per start).\n"
-	   << "- Views: `run_summary`, `run_actions`, `failures`.\n"
+	   << "- Views: `run_summary`, `run_actions`, `failures`, `file_hashes` (each copy's source and target SHA-256).\n"
 	   << "- Times: `*_ns` columns are nanoseconds since 1970 (UTC).\n\n"
 	   << "This run: source `" << source << "`, target `" << target << "`.\n\n";
 

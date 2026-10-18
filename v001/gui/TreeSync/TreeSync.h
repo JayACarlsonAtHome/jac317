@@ -224,8 +224,11 @@ class TreeSyncWindow : public TopWindow {
 	void Drain();
 	void ShowProgress(const String& line);   // an @file or @overall line from treesync-cli
 	void ProgressVisible(bool on);
-	void StartSync(bool dry_run);
+	// extra: "" a sync, or --scan-only, --sync-attrs, --clear-old (one of the checks).
+	String      run_extra;
+	void StartSync(bool dry_run, const String& extra = String());
 	bool ConfirmRun(const SyncSetup& s);
+	bool ConfirmExtra(const SyncSetup& s, const String& extra);
 	void StopSync();
 	void SyncFinished(int code);
 

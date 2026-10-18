@@ -109,7 +109,7 @@ The point of the GUI is to see what is going on. So the engine reports each step
 
 **Restarts**: every step is recorded in the SQLite database before the next one starts, so a stopped or crashed run continues where it left off: run the same command again. Big files are copied in chunks, each chunk recorded as it finishes, so a restart continues part-way through the file instead of from the start (for example "resuming big one.bin at chunk 7 of 19"). `--fresh` starts over instead. Inode numbers identify unchanged files, so they are not read again. Details are in [`v001/docs/engine.md`](v001/docs/engine.md).
 
-**Copying**: small files are copied one at a time with `/usr/bin/cp --preserve=all --reflink=auto --sparse=auto`, started with `posix_spawn` (an argument list, never a shell, so spaces are safe) inside the target folder, so deep trees work. Big files use TreeSync's own chunked copy, because `cp` cannot resume part-way through a file. Every copy goes to `NAME.treesync-part`, is read back and checked against the source's SHA-256 (the same value `sha256sum` prints), and only then renamed into place. `rsync` would also work, but it hides the per-file steps the GUI is meant to show.
+**Copying**: every file is copied by TreeSync itself, in `--chunk-mib` pieces (one piece for a small file), on `--threads` threads. Earlier versions started `/usr/bin/cp` for each small file; starting a process per file cost more than the copy itself, so it was dropped. Like `cp --preserve=all`, a local copy keeps permissions, times, owner (as root) and extended attributes (ACLs, SELinux label, file capabilities, `user.*`; best effort). A file of more than one piece has each piece recorded as it finishes, so a stopped copy continues where it left off. Every copy goes to `NAME.treesync-part`, is read back and checked against the source's SHA-256 (the same value `sha256sum` prints), and only then renamed into place. `rsync` would also work, but it hides the per-file steps the GUI is meant to show.
 
 ## Long paths and awkward names
 
@@ -160,7 +160,7 @@ The switches are modelled on robocopy. TreeSync adds `--merge`, which copies cha
 | `--retry-wait=N` | Seconds between retries (default 5) | `/W:n` |
 | `--time-tolerance=N` | Times of the two sides N seconds apart or less count as equal (default 3; 0 = exact). Clocks and file times differ between machines, network shares and FAT disks | `/FFT` (for all systems) |
 | `--threads=N` | Files copied at the same time (default 4); each thread has its own SSH connection to a remote side | `/MT:n` |
-| `--big-file-mib=N` | Files this big or bigger are copied in resumable chunks (default 1024) | |
+| `--big-file-mib=N` | A same-size file this big or bigger, with no saved hash, is compared with the target's copy side by side, stopping at the first difference (default 1024) | |
 | `--chunk-mib=N` | Chunk size for big files (default 64) | |
 | `--safe-delete` | Files a sync would delete or overwrite are moved to `<target>.old` instead, same folder layout; a name already there gets `.1`, `.2`, ... (default on; `--no-safe-delete` really deletes) | |
 | `--safe-delete-dir=PATH` | Where `--safe-delete` moves target-side files (default `<target>.old`; must be on the same disk, outside both trees) | |
@@ -188,19 +188,32 @@ Working for local trees and over SFTP, with `treesync-cli` and the GUI: scan wit
 
 ## History and logs
 
-Every `treesync-cli` run (including those the GUI starts) writes its output to a log file, `logs/YYYY-MM-DD_HHMMSS.log` next to the database, and the run's row in the database records it. In the GUI, **View > History** (Ctrl+H) lists past runs with what each did (failed runs and actions in red, failures first) and opens a run's log; **View > Show log file** (Ctrl+L) opens the newest one.
+Every `treesync-cli` run (including those the GUI starts) writes its output to a log file, `logs/YYYY-MM-DD_HHMMSS.log` next to the database, and the run's row in the database records it. Log lines carry their start, stop and duration to the microsecond (`14:16:45.102938`), every field padded so the lines stay aligned. In the GUI, **View > History** (Ctrl+H) lists past runs with what each did (failed runs and actions in red, failures first) and opens a run's log; its **SHA-256 checks** tab shows, under a line naming each folder, every file's source and target SHA-256 side by side, whether they match, and how the attributes compare; content mismatches come first and in red, attribute differences in orange. **View > Show log file** (Ctrl+L) opens the newest one.
+
+## Checking and attributes
+
+- **Sync > Scan only (SHA-256 check)** (F7, `--scan-only`) changes nothing. It reads and hashes every file on both sides afresh (no cached hashes), compares mode, time, owner and extended attributes, and records one row per file and folder. The log lists every file whose content differs or that is missing on the target, and every attribute difference; the exit code is 1 when the trees are not the same.
+- **Sync > Sync attributes** (F8, `--sync-attrs`) compares the attributes only (no hashing) and sets, on the target, just those that differ, for files of the same size and for folders (mode and owner; a folder keeps its own time). Files whose size differs are left for a sync. With `--dry-run` (the command line's default) it only lists them.
+- A normal Copy or Mirror run does the same for files whose content is already equal: a `chmod` or `touch` on the source is carried over as an `attrs` step, without copying the file.
+- Every copy records both sides' attributes after it is made, so `attrs_match` shows whether they were kept. Extended attributes are compared by a SHA-256 over their names and values; the SELinux label is left out (policy sets it for where the file lives).
+- **Sync > Clear .old folders...** (`--clear-old`) deletes the safe-delete folders for good, after a confirmation that says how many files and bytes. Folders made by a root run need Sync > Run as root.
 
 The database has views for looking at it directly, for example with `sqlite3 ~/.local/share/treesync/treesync.db`:
 
 | View | One row per |
 |---|---|
-| `run_summary` | run: started, finished, state, source, target, folders, copied, linked, deleted, failed, conflicts, bytes, log file |
+| `run_summary` | run: started, finished, state, source, target, folders, copied, linked, deleted, attrs_fixed, failed, conflicts, bytes, log file |
 | `run_actions` | action of a run: kind, path, state, size, error |
 | `failures` | failed action, with its error |
+| `file_compare` | file or folder checked by a copy, a Scan only or a Sync attributes run: kind (copy, scan, attrs), type, folder_id, path (its folder, relative to the tree root), file_name, src_sha256, dst_sha256, match (true/false), attrs_match (true/false), attr_diff (what differs, e.g. `mode 0664 -> 0600`), result, and both sides' size, mode, uid, gid, mtime_ns and extended-attribute digest. Built from the `file_checks` table, which stores each file's folder as an id into `folders` (every folder path stored once) |
+| `hash_mismatches` | file whose content differs, or that is missing on the target (`problem`) |
+| `attr_mismatches` | file or folder whose attributes differ, with `attr_diff` and whether it was set (`result`) |
 
 ```sql
 SELECT run, started, state, copied, failed FROM run_summary ORDER BY run DESC LIMIT 10;
 SELECT * FROM failures WHERE run = 42;
+SELECT path, file_name, problem FROM hash_mismatches WHERE run = 42;
+SELECT path, file_name, attr_diff, result FROM attr_mismatches WHERE run = 42;
 ```
 
 
@@ -217,8 +230,8 @@ Every log of every run is recorded in the `run_logs` table; older logs are found
 
 When a lot of other copying is going on, TreeSync can step back:
 
-- `--bwlimit=N` caps the transfer at N KiB/s. It counts what crosses the network (remote reads and writes, including the read-back that verifies each copy, and the hashing of remote files during the scan); for a local copy it counts the writes. With a limit set, local copies use TreeSync's chunked copy instead of `cp`, which cannot be throttled.
-- `--low-priority` runs TreeSync and the `cp` processes it starts at `nice 19` and the lowest normal disk priority (`ionice -c2 -n7`). It deliberately does not use the idle disk class, which could stall the sync completely while other copies run. It cannot change the remote server's own priority (SFTP has no way to ask); use `--bwlimit` to ease the load there.
+- `--bwlimit=N` caps the transfer at N KiB/s. It counts what crosses the network (remote reads and writes, including the read-back that verifies each copy, and the hashing of remote files during the scan); for a local copy it counts the writes. 
+- `--low-priority` runs TreeSync at `nice 19` and the lowest normal disk priority (`ionice -c2 -n7`). It deliberately does not use the idle disk class, which could stall the sync completely while other copies run. It cannot change the remote server's own priority (SFTP has no way to ask); use `--bwlimit` to ease the load there.
 
 ## Safe delete
 
@@ -228,7 +241,7 @@ With `--safe-delete` (on by default), nothing a sync removes or overwrites is lo
 /backup/data/docs/a.txt   ->   /backup/data.old/docs/a.txt
 ```
 
-If that name is already taken by an earlier move, the file gets a number on the end: `a.txt.1`, `a.txt.2`, and so on. Moving is a rename, so it is instant and needs no extra space, but it only works on the same disk: when the target is the top folder of a mount, point `--safe-delete-dir` at another folder on that disk. In Merge mode, replaced files on the source side go to `<source>.old`. Empty folders are removed, not moved. The `.old` folder is never cleaned up by TreeSync.
+If that name is already taken by an earlier move, the file gets a number on the end: `a.txt.1`, `a.txt.2`, and so on. Moving is a rename, so it is instant and needs no extra space, but it only works on the same disk: when the target is the top folder of a mount, point `--safe-delete-dir` at another folder on that disk. In Merge mode, replaced files on the source side go to `<source>.old`. Empty folders are removed, not moved. TreeSync never cleans up the `.old` folder by itself; **Sync > Clear .old folders...** (`--clear-old`) deletes it when you ask.
 
 ## Owners across machines
 

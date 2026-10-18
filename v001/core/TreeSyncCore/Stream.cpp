@@ -520,6 +520,38 @@ struct Streamer {
 		return true;
 	}
 
+	// Source e and target t have the same content: set the source's attributes on the
+	// target if they differ (mode, time, owner where we may).
+	void AttrsOnly(Ctx& c, Entry& e, const Entry& t)
+	{
+		CheckRow row;
+		row.side[0] = row.side[1] = true;
+		row.mode[0] = e.mode;
+		row.mode[1] = t.mode;
+		row.mtime_ns[0] = e.mtime_ns;
+		row.mtime_ns[1] = t.mtime_ns;
+		row.uid[1] = t.uid;
+		row.gid[1] = t.gid;
+		FileAttrs want;
+		if(e.uid >= 0 && t.uid >= 0 && r.Owners(c, 1, e.uid, e.gid))
+			r.MapOwner(c, 0, e.uid, e.gid, want);
+		String diff = AttrDiff(row, want.uid, want.gid, c.fs[0]->IsLocal() && c.fs[1]->IsLocal());
+		if(diff.IsEmpty())
+			return;
+		if(dry) {
+			Plan(Format("%-8s %s: %s", "attrs", e.rel, diff));
+			return;
+		}
+		Action a;
+		a.kind = ActionKind::Attrs;
+		a.from = clone(e);
+		a.note = diff;
+		Step s;
+		s.a = pick(a);
+		s.seq = r.Record(s.a);
+		r.RunStep(c, s);
+	}
+
 	// One source entry: compare with the target, copy if needed.
 	void Process(Ctx& c, Item& it)
 	{
@@ -588,8 +620,12 @@ struct Streamer {
 					t.hash = th;
 					r.caches[1]->Store(t);   // seen in this run
 				}
-				if(same && !flags.include_same)
+				// Same content: the attributes may still differ (a chmod, a touch). Then
+				// only they are set.
+				if(same && !flags.include_same) {
+					AttrsOnly(c, e, t);
 					return;
+				}
 			}
 			if(exists && !same && t.type == 'f' && TimeSkip(flags, e, t))
 				return;

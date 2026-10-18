@@ -6,6 +6,7 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/xattr.h>
 #include <sys/resource.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -376,6 +377,15 @@ static void TestProgress()
 
 	// Run durations, in the YYY:DDD:HH:MM:SS of Speed_Tests' getDuration().
 	EXPECT(DurationClock(2 * 3600 + 5 * 60 + 9) == "000:000:02:05:09", "duration clock: " + DurationClock(7509));
+	// Log stamps to the microsecond, every field padded: the message always starts at column 63.
+	{
+		int64 t = 1792300000LL * 1000000;
+		String a = LogStampFine(t + 412, t + 6931), b = LogStampFine(t, t + 7509LL * 1000000 + 28106);
+		EXPECT(a.GetCount() == 63 && b.GetCount() == 63 && a.Mid(9, 7) == ".000412" && a.Mid(27, 7) == ".006931",
+		       "log stamp padded to the microsecond: " + Show(a));
+		EXPECT(a.Mid(37, 23) == "000:000:00:00:00.006519" && b.Mid(37, 23) == "000:000:02:05:09.028106",
+		       "log stamp duration: " + Show(b));
+	}
 	EXPECT(DurationWords(2 * 3600 + 5 * 60 + 9) == " 2 hours 05 minutes 09 seconds", "duration words: " + DurationWords(7509));
 	EXPECT(DurationWords(61) == " 0 hours 01 minute  01 second", "duration words, singular: " + DurationWords(61));
 	EXPECT(DurationWords(12 * 3600 + 10 * 60 + 11).GetCount() == DurationWords(3600 + 60).GetCount(),
@@ -503,6 +513,9 @@ static void TestEngineMirror(const String& root)
 			close(fd);
 	}
 
+	// An extended attribute, where the filesystem takes user.* ones (tmpfs before Linux 6.6 does not).
+	bool xattrs = setxattr(src + "/a b.txt", "user.treesync-test", "kept", 4, 0) == 0;
+
 	// Dry run: plans, changes nothing.
 	SyncSetup s = Setup(src, dst, db);
 	s.flags.dry_run = true;
@@ -521,6 +534,13 @@ static void TestEngineMirror(const String& root)
 	       "hard links relinked at target");
 	char buf[64] = {};
 	EXPECT(readlink(dst + "/link to a", buf, 63) > 0 && String(buf) == "a b.txt", "symlink copied as a link");
+	if(xattrs) {
+		char x[16] = {};
+		EXPECT(getxattr(dst + "/a b.txt", "user.treesync-test", x, 15) == 4 && String(x) == "kept",
+		       "extended attribute copied");
+	}
+	else
+		Cout() << "(skipped: " << GetTempDirectory() << " does not take user.* extended attributes)\n";
 	EXPECT(Sha256Sum(src + "/big.bin") == Sha256Sum(dst + "/big.bin"), "big file: sha256sum matches");
 	String h;
 	String err;
@@ -860,6 +880,31 @@ static void TestStreaming(const String& root)
 	       FileExists(dst + ".old/d07/e1/extra in the target.txt"), "post-scan moved the extra file out");
 	EXPECT(TreeHash(src, check) == TreeHash(dst, check), "streamed copy equals the source");
 
+	// Every copy keeps both SHA-256 for the user to see (file_compare), its folder stored once by id,
+	// and its attributes on both sides, which must agree.
+	{
+		Db d;
+		String derr;
+		EXPECT(d.Open(db, derr), "open the run's database: " + derr);
+		Stmt q(d, "SELECT count(*), sum(match = 'true'), sum(length(src_sha256) = 64 AND src_sha256 = dst_sha256) "
+		          "FROM file_compare WHERE run = ? AND kind = 'copy'");
+		q.Int(1, r.run);
+		EXPECT(q.Step() && q.Int(0) == 2000 && q.Int(1) == 2000 && q.Int(2) == 2000,
+		       Format("file_compare: all 2000 copies with matching hashes (%lld, %lld match)", q.Int(0), q.Int(1)));
+		Stmt n(d, "SELECT path, file_name FROM file_compare WHERE run = ? AND file_name = 'f7.txt'");
+		n.Int(1, r.run);
+		EXPECT(n.Step() && n.Text(0) == "d07/e1" && n.Text(1) == "f7.txt",
+		       "file_compare splits d07/e1/f7.txt into path and file name");
+		Stmt f(d, "SELECT count(DISTINCT folder_id), count(DISTINCT path) FROM file_compare WHERE run = ?");
+		f.Int(1, r.run);
+		int64 ids = f.Step() ? f.Int(0) : -1, paths = f.Int(1);
+		EXPECT(ids == 20 && paths == 20,
+		       Format("file_compare: 20 folders, each stored once (%lld ids, %lld paths)", ids, paths));
+		Stmt a(d, "SELECT count(*) FROM file_compare WHERE run = ? AND attrs_match = 'true'");
+		a.Int(1, r.run);
+		EXPECT(a.Step() && a.Int(0) == 2000, "every copy kept its attributes (attrs_match)");
+	}
+
 	// The AI exports of that run: organized (the sections) and complete (every action).
 	String out_logs, out_sql, ai_err;
 	EXPECT(ExportAiLogs(db, r.run, out_logs, ai_err) && ExportAiSql(db, r.run, out_sql, ai_err), "AI export: " + ai_err);
@@ -869,6 +914,98 @@ static void TestStreaming(const String& root)
 	for(int at = q.Find("## 8. This run: every action"); (at = q.Find("| copy |", at + 1)) >= 0;)
 		rows++;
 	EXPECT(q.Find("CREATE TABLE") >= 0 && rows == 2000, Format("AI SQL export: schema and all 2000 copies (%d)", rows));
+}
+
+// Scan only, Sync attributes, attribute-only fixes in a sync, and --clear-old.
+static int64 Count(Db& d, const String& sql, int64 run)
+{
+	Stmt q(d, sql);
+	q.Int(1, run);
+	return q.Step() ? q.Int(0) : -1;
+}
+
+static void TestChecks(const String& root)
+{
+	String src = root + "/ck-src", dst = root + "/ck-dst", db = root + "/checks.db";
+	for(int i = 0; i < 30; i++)
+		Put(Format("%s/d%d/f%d.txt", src, i % 3, i), Big(1000 + i, i));
+	SyncSetup s = Setup(src, dst, db);
+	SyncResult r;
+	Sync(s, r);
+	EXPECT(r.failed == 0 && r.done > 0, "checks: first copy");
+
+	// Changes: a source file's mode and another's time (same content), a target file's
+	// content, a target file gone, a source folder's mode, an extended attribute.
+	chmod(src + "/d0/f0.txt", 0600);
+	struct timespec old_times[2] = { { 1600000000, 0 }, { 1600000000, 0 } };
+	utimensat(AT_FDCWD, src + "/d1/f1.txt", old_times, 0);
+	Put(dst + "/d2/f2.txt", "changed on the target\n");
+	unlink(dst + "/d0/f3.txt");
+	chmod(src + "/d1", 0700);
+	bool xattrs = setxattr(src + "/d2/f5.txt", "user.treesync-test", "x", 1, 0) == 0;
+
+	SyncReport report;
+	String err;
+	CheckResult c;
+	EXPECT(RunCheck(s, CheckMode::Scan, report, c, err), "scan only: " + err);
+	// (Each message is built after its call: Format's arguments may be evaluated first.)
+	bool ok = c.files == 30 && c.same == 28 && c.differ == 1 && c.missing == 1 && c.failed == 0;
+	EXPECT(ok, Format("scan only: 30 files, 28 same, 1 differs, 1 missing (%d, %d, %d, %d)", c.files, c.same, c.differ, c.missing));
+	EXPECT(c.attr_diffs == 4 + xattrs, Format("scan only: %d attribute differences (%d)", 4 + xattrs, c.attr_diffs));
+	struct stat st;
+	EXPECT(stat(dst + "/d0/f0.txt", &st) == 0 && (st.st_mode & 07777) == 0644, "scan only changed nothing");
+	{
+		Db d;
+		d.Open(db, err);
+		EXPECT(Count(d, "SELECT count(*) FROM hash_mismatches WHERE run = ?", c.run) == 2, "hash_mismatches: 2 rows");
+		EXPECT(Count(d, "SELECT count(*) FROM hash_mismatches WHERE run = ? AND problem = 'missing on the target' "
+		                "AND file_name = 'f3.txt'", c.run) == 1, "hash_mismatches: f3.txt missing on the target");
+		EXPECT(Count(d, "SELECT count(*) FROM attr_mismatches WHERE run = ? AND file_name = 'f0.txt' "
+		                "AND attr_diff = 'mode 0644 -> 0600'", c.run) == 1, "attr_mismatches: f0.txt mode");
+		EXPECT(Count(d, "SELECT count(*) FROM attr_mismatches WHERE run = ? AND type = 'd' AND file_name = 'd1'", c.run) == 1,
+		       "attr_mismatches: folder d1 mode");
+	}
+
+	// Sync attributes: the dry run sets nothing; the real one sets the same-size ones.
+	s.flags.dry_run = true;
+	ok = RunCheck(s, CheckMode::Attrs, report, c, err);
+	EXPECT(ok && c.fixed == 3 + xattrs, Format("sync attributes, dry run: %d would be set (%d)", 3 + xattrs, c.fixed));
+	EXPECT(stat(dst + "/d0/f0.txt", &st) == 0 && (st.st_mode & 07777) == 0644, "attributes dry run changed nothing");
+	s.flags.dry_run = false;
+	ok = RunCheck(s, CheckMode::Attrs, report, c, err);
+	EXPECT(ok && c.fixed == 3 + xattrs && c.failed == 0,
+	       Format("sync attributes: %d set (%d), %d failed", 3 + xattrs, c.fixed, c.failed));
+	EXPECT(stat(dst + "/d0/f0.txt", &st) == 0 && (st.st_mode & 07777) == 0600, "sync attributes: mode set");
+	EXPECT(stat(dst + "/d1/f1.txt", &st) == 0 && st.st_mtim.tv_sec == 1600000000, "sync attributes: time set");
+	EXPECT(stat(dst + "/d1", &st) == 0 && (st.st_mode & 07777) == 0700, "sync attributes: folder mode set");
+	EXPECT(stat(dst + "/d2/f2.txt", &st) == 0 && st.st_size == 22, "sync attributes: changed content left for a sync");
+	if(xattrs) {
+		char x[4] = {};
+		EXPECT(getxattr(dst + "/d2/f5.txt", "user.treesync-test", x, 3) == 1, "sync attributes: extended attribute set");
+	}
+
+	// A sync copies what differs and sets attribute-only changes as "attrs" steps.
+	chmod(src + "/d2/f8.txt", 0640);
+	Sync(s, r);
+	EXPECT(stat(dst + "/d2/f8.txt", &st) == 0 && (st.st_mode & 07777) == 0640, "sync: attribute-only change set");
+	{
+		Db d;
+		d.Open(db, err);
+		EXPECT(Count(d, "SELECT count(*) FROM actions WHERE run = ? AND kind = 'attrs' AND state = 'done'", r.run) == 1,
+		       "sync: one attrs step");
+	}
+	ok = RunCheck(s, CheckMode::Scan, report, c, err);
+	EXPECT(ok && c.same == 30 && c.attr_diffs == 0,
+	       Format("scan after the sync: all 30 the same, no attribute differences (%d, %d)", c.same, c.attr_diffs));
+
+	// --clear-old: the replaced f2.txt went to <target>.old.
+	EXPECT(DirectoryExists(dst + ".old"), "safe delete made " + dst + ".old");
+	EXPECT(ClearOld(s, true, report, err) && DirectoryExists(dst + ".old"), "clear .old, counting only: " + err);
+	EXPECT(ClearOld(s, false, report, err) && !DirectoryExists(dst + ".old"), "clear .old deletes it: " + err);
+	SyncSetup bad = s;
+	bad.safe_delete_dir = src;
+	EXPECT(!ClearOld(bad, false, report, err) && err.Find("refuses") >= 0 && DirectoryExists(src),
+	       "clear .old refuses a tree: " + err);
 }
 
 // --wipe-target: the target is emptied first, into <target>.old with safe delete.
@@ -1044,6 +1181,7 @@ CONSOLE_APP_MAIN
 	TestThreads(eroot);
 	TestCliLikeGui(eroot);
 	TestStreaming(eroot);
+	TestChecks(eroot);
 	TestWipe(eroot);
 	TestBandwidthAndPriority(eroot);   // last: it lowers this process's priority
 	int efd = open(GetFileFolder(eroot), O_RDONLY | O_DIRECTORY | O_CLOEXEC);

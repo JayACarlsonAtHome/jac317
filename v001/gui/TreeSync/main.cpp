@@ -125,6 +125,15 @@ void TreeSyncWindow::SyncMenu(Bar& bar)
 	bar.Add(!idle, "Stop", [this] { StopSync(); }).Key(K_ESCAPE)
 	   .Help("Stop after the current file or chunk; Run again resumes");
 	bar.Separator();
+	bar.Add(idle, "Scan only (SHA-256 check)", [this] { StartSync(true, "--scan-only"); }).Key(K_F7)
+	   .Help("Change nothing: read and hash every file on both sides, compare attributes; "
+	         "results in View > History > SHA-256 checks");
+	bar.Add(idle, "Sync attributes", [this] { StartSync(false, "--sync-attrs"); }).Key(K_F8)
+	   .Help("Set only the attributes that differ (mode, time, owner, extended attributes) on the "
+	         "target; no file content is copied");
+	bar.Add(idle, "Clear .old folders...", [this] { StartSync(false, "--clear-old"); })
+	   .Help("Delete the safe-delete folders (<target>.old) for good, after a confirmation");
+	bar.Separator();
 	bar.Add(idle, "Run as root (pkexec)", [this] { as_root = !as_root; }).Check(as_root)
 	   .Help("Start treesync-cli through pkexec; the GUI itself stays an ordinary user");
 	bar.Add("Clear log", [this] { log.Clear(); });

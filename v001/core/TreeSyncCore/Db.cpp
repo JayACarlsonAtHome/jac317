@@ -7,7 +7,7 @@ static const char *SCHEMA = R"(
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
-INSERT OR IGNORE INTO meta VALUES ('schema', '3');
+INSERT OR IGNORE INTO meta VALUES ('schema', '4');
 CREATE TABLE IF NOT EXISTS files (
 	root TEXT, rel TEXT, type TEXT,
 	dev INTEGER, ino INTEGER, nlink INTEGER, size INTEGER,
@@ -30,6 +30,15 @@ CREATE TABLE IF NOT EXISTS chunks (
 CREATE TABLE IF NOT EXISTS run_logs (
 	run INTEGER, log TEXT,
 	PRIMARY KEY (run, log));
+CREATE TABLE IF NOT EXISTS folders (
+	id INTEGER PRIMARY KEY, rel TEXT UNIQUE);
+CREATE TABLE IF NOT EXISTS file_checks (
+	run INTEGER, seq INTEGER, folder INTEGER, name TEXT, kind TEXT, type TEXT,
+	src_sha256 TEXT, dst_sha256 TEXT, src_size INTEGER, dst_size INTEGER,
+	src_mode INTEGER, dst_mode INTEGER, src_uid INTEGER, dst_uid INTEGER, src_gid INTEGER, dst_gid INTEGER,
+	src_mtime_ns INTEGER, dst_mtime_ns INTEGER, src_xattrs TEXT, dst_xattrs TEXT,
+	attr_diff TEXT, result TEXT,
+	PRIMARY KEY (run, seq));
 CREATE TABLE IF NOT EXISTS synced (
 	source TEXT, target TEXT, rel TEXT, sha256 TEXT,
 	PRIMARY KEY (source, target, rel));
@@ -46,6 +55,7 @@ SELECT r.id AS run,
        count(CASE WHEN a.kind = 'copy' AND a.state = 'done' THEN 1 END) AS copied,
        count(CASE WHEN a.kind = 'link' AND a.state = 'done' THEN 1 END) AS linked,
        count(CASE WHEN a.kind = 'delete' AND a.state = 'done' THEN 1 END) AS deleted,
+       count(CASE WHEN a.kind = 'attrs' AND a.state = 'done' THEN 1 END) AS attrs_fixed,
        count(CASE WHEN a.state = 'failed' THEN 1 END) AS failed,
        count(CASE WHEN a.kind = 'conflict' THEN 1 END) AS conflicts,
        coalesce(sum(CASE WHEN a.kind = 'copy' AND a.state = 'done' THEN a.size END), 0) AS bytes,
@@ -58,6 +68,29 @@ SELECT run, seq, kind, rel, error FROM actions WHERE state = 'failed';
 DROP VIEW IF EXISTS run_actions;
 CREATE VIEW run_actions AS
 SELECT run, seq, kind, rel, state, size, replaces, error FROM actions;
+DROP VIEW IF EXISTS file_hashes;
+DROP VIEW IF EXISTS file_compare;
+CREATE VIEW file_compare AS
+SELECT c.run, c.seq, c.kind, c.type, c.folder AS folder_id, f.rel AS path, c.name AS file_name,
+       c.src_sha256, c.dst_sha256,
+       CASE WHEN c.type <> 'f' OR c.src_sha256 IS NULL THEN NULL
+            WHEN c.src_sha256 = c.dst_sha256 THEN 'true' ELSE 'false' END AS match,
+       CASE WHEN c.dst_mode IS NULL THEN NULL WHEN c.attr_diff = '' THEN 'true' ELSE 'false' END AS attrs_match,
+       c.attr_diff, c.result, c.src_size, c.dst_size,
+       printf('%04o', c.src_mode) AS src_mode,
+       CASE WHEN c.dst_mode IS NULL THEN NULL ELSE printf('%04o', c.dst_mode) END AS dst_mode,
+       c.src_uid, c.dst_uid, c.src_gid, c.dst_gid, c.src_mtime_ns, c.dst_mtime_ns, c.src_xattrs, c.dst_xattrs
+FROM file_checks c JOIN folders f ON f.id = c.folder;
+DROP VIEW IF EXISTS hash_mismatches;
+CREATE VIEW hash_mismatches AS
+SELECT run, seq, kind, path, file_name, src_sha256, dst_sha256, src_size, dst_size,
+       CASE WHEN dst_size IS NULL THEN 'missing on the target' ELSE 'content differs' END AS problem
+FROM file_compare WHERE type = 'f' AND src_sha256 IS NOT NULL AND match = 'false';
+DROP VIEW IF EXISTS attr_mismatches;
+CREATE VIEW attr_mismatches AS
+SELECT run, seq, kind, type, path, file_name, attr_diff, result, src_mode, dst_mode,
+       src_uid, dst_uid, src_gid, dst_gid, src_mtime_ns, dst_mtime_ns, src_xattrs, dst_xattrs
+FROM file_compare WHERE attrs_match = 'false';
 )";
 
 bool Db::Open(const String& path, String& error)
@@ -75,7 +108,8 @@ bool Db::Open(const String& path, String& error)
 		Close();
 		return false;
 	}
-	// Schema 2: actions.replaces; schema 3: runs.log. Older databases get the columns.
+	// Schema 2: actions.replaces; schema 3: runs.log; schema 4: folders and file_checks
+	// (new tables, made above). Older databases get the columns.
 	String version;
 	{
 		Stmt v(*this, "SELECT value FROM meta WHERE key = 'schema'");
@@ -86,7 +120,7 @@ bool Db::Open(const String& path, String& error)
 		Exec("ALTER TABLE actions ADD COLUMN replaces INTEGER DEFAULT 0");
 	if(version == "1" || version == "2")
 		Exec("ALTER TABLE runs ADD COLUMN log TEXT");
-	Exec("UPDATE meta SET value = '3' WHERE key = 'schema'");
+	Exec("UPDATE meta SET value = '4' WHERE key = 'schema'");
 	// Views for looking at the history (the GUI's History window, or sqlite3 directly).
 	// Recreated each time so they always match this version of TreeSync.
 	if(!Exec(VIEWS)) {

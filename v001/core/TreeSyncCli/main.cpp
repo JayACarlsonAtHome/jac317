@@ -32,12 +32,13 @@ static void OnSignal(int)
 static bool tty = isatty(1);
 static bool status_shown;
 static FileAppend run_log;   // every printed line, in the run's log file
-static int64 run_started = -1;   // time(): lines about the whole run span from here
+static int64 run_started = -1;   // NowMicros(): lines about the whole run span from here
 
 // A line for the terminal and the run's log. In the log every line starts with
 // start : stop : duration (the j5c Results.txt columns): for a copied file, from
 // when its copy began to when it finished; for anything else, the moment it happened.
-// stamp false: as it is (the results table at the end).
+// To the microsecond (start in NowMicros() units). stamp false: as it is (the results
+// table at the end).
 static void Print(const String& line, int64 start = -1, bool stamp = true)
 {
 	if(status_shown)
@@ -46,9 +47,9 @@ static void Print(const String& line, int64 start = -1, bool stamp = true)
 	Cout() << line << "\n";
 	Cout().Flush();
 	if(run_log.IsOpen()) {
-		int64 now = (int64)time(nullptr);
+		int64 now = NowMicros();
 		if(stamp)
-			run_log << LogStamp(start < 0 ? now : min(start, now), now);
+			run_log << LogStampFine(start < 0 ? now : min(start, now), now);
 		run_log << line << "\n";
 		run_log.Flush();
 	}
@@ -113,13 +114,17 @@ CONSOLE_APP_MAIN
 			return;
 		}
 	}
-	bool stop_on_eof = false, compare_ids = false;
+	bool stop_on_eof = false, compare_ids = false, scan_only = false, sync_attrs = false, clear_old = false;
 	static bool gui_progress = false;
-	for(int i = args.GetCount() - 1; i >= 0; i--)
-		if(args[i] == "--stop-on-eof" || args[i] == "--compare-ids" || args[i] == "--gui-progress") {
-			(args[i] == "--compare-ids" ? compare_ids : args[i] == "--stop-on-eof" ? stop_on_eof : gui_progress) = true;
+	for(int i = args.GetCount() - 1; i >= 0; i--) {
+		bool *flag = args[i] == "--compare-ids" ? &compare_ids : args[i] == "--stop-on-eof" ? &stop_on_eof
+		           : args[i] == "--gui-progress" ? &gui_progress : args[i] == "--scan-only" ? &scan_only
+		           : args[i] == "--sync-attrs" ? &sync_attrs : args[i] == "--clear-old" ? &clear_old : nullptr;
+		if(flag) {
+			*flag = true;
 			args.Remove(i);
 		}
+	}
 
 	SyncSetup setup;
 	String error;
@@ -158,7 +163,7 @@ CONSOLE_APP_MAIN
 			                      p.index, std::to_string(p.count) + (p.more ? "+" : "")) << name << (p.verifying ? "\tverify" : "") << "\n";
 		}
 		if(p.done >= p.size && !p.verifying)
-			Print(ProgressLine(p), (int64)time(nullptr) - (int64)(p.seconds + 0.5));
+			Print(ProgressLine(p), NowMicros() - (int64)(p.seconds * 1e6));
 		else
 			Status(ProgressLine(p, 100, true));
 	};
@@ -208,13 +213,26 @@ CONSOLE_APP_MAIN
 			log_path = log_path.Left(log_path.GetCount() - 4) + "." + AsString(n) + ".log";
 		run_log.Open(log_path);
 	}
-	Print(CommandLineText(ToArgs(setup)));
+	Vector<String> shown = ToArgs(setup);
+	if(scan_only) shown.Add("--scan-only");
+	if(sync_attrs) shown.Add("--sync-attrs");
+	if(clear_old) shown.Add("--clear-old");
+	Print(CommandLineText(shown));
 	Print("log: " + log_path);
 	SyncResult result;
-	int64 started = run_started = (int64)time(nullptr);
+	run_started = NowMicros();
+	int64 started = run_started / 1000000;
 	// The start goes at the top too; stop and duration come in the table at the end.
 	Print("started: " + DateTimeText(started));
-	bool ok = RunSync(setup, report, result, error);
+	CheckResult check;
+	bool ok = scan_only || sync_attrs ? RunCheck(setup, scan_only ? CheckMode::Scan : CheckMode::Attrs, report, check, error)
+	        : clear_old ? ClearOld(setup, setup.flags.dry_run, report, error)
+	        : RunSync(setup, report, result, error);
+	if(scan_only || sync_attrs) {
+		result.run = check.run;
+		result.stopped = check.stopped;
+		result.failed = check.failed;
+	}
 	SetRunLog(setup.db, result.run, log_path);
 	int64 ended = (int64)time(nullptr);
 	int code = 0;
@@ -224,6 +242,25 @@ CONSOLE_APP_MAIN
 		code = 2;
 		status = "Error";
 		summary = error;
+	}
+	else if(result.stopped && (scan_only || sync_attrs)) {
+		Print("stopped: the rows so far are in the database; run it again to check everything");
+		code = 3;
+		status = "Stopped";
+		summary = Format("%d files checked", check.files);
+	}
+	else if(scan_only || sync_attrs) {
+		// Scan only: 1 when the trees are not the same (content, missing files) or reads failed.
+		code = check.failed || (scan_only && (check.differ || check.missing)) ? 1 : 0;
+		status = code ? (scan_only ? "Differences" : "Failures") : "Good";
+		summary = scan_only ? Format("%d files: %d same, %d differ, %d missing, %d failed; %d attribute differences",
+		                             check.files, check.same, check.differ, check.missing, check.failed, check.attr_diffs)
+		                    : Format("%d of %d attribute differences %s, %d failed", check.fixed, check.attr_diffs,
+		                             setup.flags.dry_run ? "would be set" : "set", check.failed);
+	}
+	else if(clear_old) {
+		status = "Good";
+		summary = setup.flags.dry_run ? "counted" : "cleared";
 	}
 	else if(result.stopped) {
 		if(result.run)
@@ -243,10 +280,10 @@ CONSOLE_APP_MAIN
 		if(!setup.flags.dry_run)
 			Print(Format("finished run %d: %d of %d actions done, %d failed, %d conflicts, %s copied",
 			             result.run, result.done, result.planned, result.failed, result.conflicts,
-			             FormatBytes(result.bytes)), started);
+			             FormatBytes(result.bytes)), run_started);
 	}
 	Print("took " + DurationWords(ended - started) + " (" + DurationClock(ended - started) + "), from " +
-	      ClockTime(started) + " to " + ClockTime(ended), started);
+	      ClockTime(started) + " to " + ClockTime(ended), run_started);
 
 	// Start, stop and duration in the layout of the j5c build Results.txt: at the end
 	// of this run's log, and one line per run in logs/Results.txt.
@@ -255,7 +292,10 @@ CONSOLE_APP_MAIN
 	};
 	const char *mode = setup.flags.mode == SyncMode::Mirror ? "Mirror" : setup.flags.mode == SyncMode::Merge
 	                   ? "Merge" : "Copy";
-	String what = setup.flags.dry_run ? String(mode) + " dry run"
+	String what = scan_only ? "Scan only run " + AsString(result.run)
+	            : sync_attrs ? String(setup.flags.dry_run ? "Attrs dry run " : "Sync attrs run ") + AsString(result.run)
+	            : clear_old ? String(setup.flags.dry_run ? "Clear .old (count)" : "Clear .old")
+	            : setup.flags.dry_run ? String(mode) + " dry run"
 	            : result.run ? String(mode) + " run " + AsString(result.run) : String(mode);
 	String line = ResultsLine(started, ended, what, code, status,
 	                          where(setup.source) + " -> " + where(setup.target) + "  (" + summary + ")");

@@ -1,5 +1,6 @@
 // History: the runs in the database (the run_summary view) and, for the selected
-// run, what it did (run_actions), failures first. Plus a viewer for log files.
+// run, what it did (run_actions), failures first, and the SHA-256 each copy was
+// checked with (file_hashes), mismatches first. Plus a viewer for log files.
 // Read-only; it works while a sync is running (SQLite in WAL mode).
 #include "TreeSync.h"
 
@@ -59,13 +60,16 @@ String LatestLog(const String& db_path)
 class HistoryWindow : public TopWindow {
 	String    db_path;
 	Splitter  split;
-	ArrayCtrl runs, actions;
+	ArrayCtrl runs, actions, hashes;
+	TabCtrl   tabs;
 	Button    show_log, refresh, close, ai_logs, ai_sql;
 
 	void LoadRuns();
 	void LoadActions();
+	void LoadHashes(Db& db, int64 run);
 
 public:
+	void ShowHashes()   { tabs.Set(1); }
 	HistoryWindow(const String& db_path);
 };
 
@@ -73,7 +77,7 @@ HistoryWindow::HistoryWindow(const String& path) : db_path(path)
 {
 	Title("TreeSync - History  (" + db_path + ")");
 	Sizeable().Zoomable();
-	SetRect(0, 0, Zx(1100), Zy(650));
+	SetRect(0, 0, Zx(1300), Zy(650));
 
 	runs.AddColumn("Run", 5);
 	runs.AddColumn("Started", 14);
@@ -82,6 +86,7 @@ HistoryWindow::HistoryWindow(const String& path) : db_path(path)
 	runs.AddColumn("Folders", 6).HeaderTab().AlignRight();
 	runs.AddColumn("Copied", 6).HeaderTab().AlignRight();
 	runs.AddColumn("Deleted", 6).HeaderTab().AlignRight();
+	runs.AddColumn("Attrs set", 6).HeaderTab().AlignRight();
 	runs.AddColumn("Failed", 6).HeaderTab().AlignRight();
 	runs.AddColumn("Conflicts", 7).HeaderTab().AlignRight();
 	runs.AddColumn("Bytes", 9).HeaderTab().AlignRight();
@@ -96,7 +101,18 @@ HistoryWindow::HistoryWindow(const String& path) : db_path(path)
 	actions.AddColumn("Size", 9).HeaderTab().AlignRight();
 	actions.AddColumn("Error", 40);
 
-	split.Vert(runs, actions);
+	// Each folder is one line across the whole row; its copied files follow, each with
+	// the source's SHA-256 and the copy's, read back.
+	hashes.AddColumn("File name", 16);
+	hashes.AddColumn("Source SHA-256", 50);
+	hashes.AddColumn("Target SHA-256", 50);
+	hashes.AddColumn("Match", 5);
+	hashes.AddColumn("Attributes", 18);
+	hashes.SpanWideCells();
+	tabs.Add(actions.SizePos(), "Actions");
+	tabs.Add(hashes.SizePos(), "SHA-256 checks");
+
+	split.Vert(runs, tabs);
 	split.SetPos(4500);
 	Add(split.HSizePosZ(4, 4).VSizePosZ(4, 36));
 	Add(show_log.SetLabel("Show log").LeftPosZ(4, 100).BottomPosZ(6, 24));
@@ -112,7 +128,7 @@ HistoryWindow::HistoryWindow(const String& path) : db_path(path)
 	ai_sql << [this] { if(runs.IsCursor()) ExportForAi(db_path, (int64)runs.Get(runs.GetCursor(), 0), false, true); };
 	show_log << [this] {
 		if(runs.IsCursor())
-			ShowLogFile(runs.Get(runs.GetCursor(), 10));
+			ShowLogFile(runs.Get(runs.GetCursor(), 11));
 	};
 	refresh << [this] { LoadRuns(); };
 	close << [this] { Close(); };
@@ -123,17 +139,23 @@ void HistoryWindow::LoadRuns()
 {
 	runs.Clear();
 	actions.Clear();
+	hashes.Clear();
 	Db db;
 	String error;
 	if(!db.Open(db_path, error)) {
 		runs.Add(Null, Null, "error", error);
 		return;
 	}
+	// Sync attributes sets rows of file_checks, not actions: count those too.
 	Stmt q(db, "SELECT run, started, state, source, target, folders, copied, deleted, failed, conflicts, "
-	           "bytes, log FROM run_summary ORDER BY run DESC LIMIT 1000");
+	           "bytes, log, args, attrs_fixed + (SELECT count(*) FROM file_checks c WHERE c.run = s.run "
+	           "AND c.kind = 'attrs' AND c.result = 'fixed' AND c.run NOT IN (SELECT run FROM actions "
+	           "WHERE run = s.run AND kind = 'attrs')) FROM run_summary s ORDER BY run DESC LIMIT 1000");
 	while(q.Step()) {
-		runs.Add(q.Int(0), q.Text(1), q.Text(2), q.Text(3) + "  ->  " + q.Text(4),
-		         q.Int(5), q.Int(6), q.Int(7), q.Int(8), q.Int(9), FormatBytes(q.Int(10)), q.Text(11));
+		String args = q.Text(12);
+		String state = (args.EndsWith("--scan-only") ? "scan: " : args.EndsWith("--sync-attrs") ? "attrs: " : "") + q.Text(2);
+		runs.Add(q.Int(0), q.Text(1), state, q.Text(3) + "  ->  " + q.Text(4),
+		         q.Int(5), q.Int(6), q.Int(7), q.Int(13), q.Int(8), q.Int(9), FormatBytes(q.Int(10)), q.Text(11));
 		if(q.Int(8) > 0 || q.Text(2) == "failed")
 			runs.SetLineColor(runs.GetCount() - 1, Color(255, 215, 215));
 	}
@@ -144,6 +166,7 @@ void HistoryWindow::LoadRuns()
 void HistoryWindow::LoadActions()
 {
 	actions.Clear();
+	hashes.Clear();
 	if(!runs.IsCursor())
 		return;
 	Db db;
@@ -159,12 +182,63 @@ void HistoryWindow::LoadActions()
 		if(q.Text(3) == "failed")
 			actions.SetLineColor(actions.GetCount() - 1, Color(255, 215, 215));
 	}
+	LoadHashes(db, (int64)runs.Get(runs.GetCursor(), 0));
+}
+
+void HistoryWindow::LoadHashes(Db& db, int64 run)
+{
+	hashes.Clear();
+	// Grouped by folder: a folder's own row (its attributes) goes on its line, its files
+	// under it. Folders holding a problem first, and in a folder the problems first.
+	Stmt q(db, "SELECT grp, file_name, type, src_sha256, dst_sha256, match, attrs_match, attr_diff, result, "
+	           "dst_size IS NULL FROM (SELECT *, CASE WHEN type = 'd' THEN "
+	           "(CASE WHEN path = '' THEN file_name ELSE path || '/' || file_name END) ELSE path END AS grp, "
+	           "coalesce(match, 'true') = 'true' AND coalesce(attrs_match, 'true') = 'true' AS ok "
+	           "FROM file_compare WHERE run = ?) "
+	           "ORDER BY min(ok) OVER (PARTITION BY grp), grp, type <> 'd', ok, file_name LIMIT 50000");
+	q.Int(1, run);
+	int files = 0, bad = 0;
+	String group = "\x01";
+	auto attrs = [&] {
+		String a = q.Text(6) == "false" ? q.Text(7) : q.Text(6) == "true" ? String("same") : String();
+		if(q.Text(8).GetCount())
+			a << " (" << q.Text(8) << ")";
+		return a;
+	};
+	while(q.Step()) {
+		bool folder = q.Text(2) == "d";
+		if(q.Text(0) != group) {
+			group = q.Text(0);
+			// The folder line; a folder's own attributes, when they differ, go on it.
+			String a = folder && q.Text(6) == "false" ? attrs() : String();
+			hashes.Add(AttrText(Nvl(group, String("(top folder)"))).Bold(), Null, Null, Null, a.GetCount() ? Value(a) : Value());
+			hashes.SetLineColor(hashes.GetCount() - 1, a.GetCount() ? Color(255, 235, 200) : Color(230, 236, 245));
+			if(folder)
+				continue;
+		}
+		if(folder)
+			continue;
+		String dst = q.Int(9) ? String("(missing on the target)") : q.Text(4);
+		hashes.Add("    " + q.Text(1), AttrText(q.Text(3)).SetFont(Monospace()),
+		           AttrText(dst).SetFont(Monospace()), q.Text(5), attrs());
+		files++;
+		if(q.Text(5) == "false") {
+			hashes.SetLineColor(hashes.GetCount() - 1, Color(255, 215, 215));
+			bad++;
+		}
+		else if(q.Text(6) == "false")
+			hashes.SetLineColor(hashes.GetCount() - 1, Color(255, 235, 200));
+	}
+	tabs.GetItem(1).Text(bad ? Format("SHA-256 checks (%d, %d differ)", files, bad)
+	                         : Format("SHA-256 checks (%d)", files));
 }
 
 void HistoryScreenshot(const String& db_path, const String& png)
 {
 	HistoryWindow w(db_path);
 	SaveScreenshot(w, png);
+	w.ShowHashes();
+	SaveScreenshot(w, ForceExt(png, "") + "-hashes.png");
 }
 
 void ShowHistory(const String& db_path)

@@ -4,9 +4,8 @@
 // Every copy goes to a .treesync-part file, is read back and checked against the
 // source's SHA-256, and only then renamed into place.
 //
-// Each side is a TreeFs (local or SFTP). Local to local, small files go through
-// /usr/bin/cp; everything else uses the chunked copy, each chunk recorded, so
-// remote copies resume part-way through a file just like big local ones.
+// Each side is a TreeFs (local or SFTP). Every file is copied in-process in chunks;
+// a file of more than one chunk has each chunk recorded, so it resumes part-way through.
 #include "Runner.h"
 
 #include <sys/resource.h>
@@ -79,8 +78,8 @@ bool RunSync(const SyncSetup& setup, SyncReport& report, SyncResult& result, Str
 			return false;
 		}
 	}
-	// --low-priority: CPU nice 19 and I/O best-effort level 7 for this process and
-	// the cp processes it starts. Not the idle I/O class: with other copying going on
+	// --low-priority: CPU nice 19 and I/O best-effort level 7 for this process.
+	// Not the idle I/O class: with other copying going on
 	// that could starve the sync completely. The remote server's priority is its own.
 	if(flags.low_priority) {
 		setpriority(PRIO_PROCESS, 0, 19);

@@ -91,10 +91,11 @@ const IntOption INT_OPTIONS[] = {
 	{ "threads", &SyncFlags::threads, "/MT:n", "Copy threads", 1, 128,
 	  "How many files are copied at the same time. More helps with many small files. A remote side "
 	  "gets one SSH connection per thread. 1 copies one file at a time." },
-	{ "big-file-mib", &SyncFlags::big_file_mib, "", "Chunked copy from (MiB)", 1, 1048576,
-	  "Files at least this big, in MiB, are copied in pieces that are recorded as they finish, so a "
-	  "stopped copy continues where it left off. Smaller files are started over if stopped. Remote "
-	  "copies always use pieces." },
+	{ "big-file-mib", &SyncFlags::big_file_mib, "", "Compare directly from (MiB)", 1, 1048576,
+	  "A file at least this big, in MiB, that is on both sides with the same size and no saved hash is "
+	  "compared by reading both copies side by side, stopping at the first difference, instead of "
+	  "hashing each in full. (Every copy is made in --chunk-mib pieces, recorded as they finish, so a "
+	  "stopped copy of a file bigger than one piece continues where it left off.)" },
 	{ "chunk-mib", &SyncFlags::chunk_mib, "", "Chunk size (MiB)", 1, 1024,
 	  "The size of each recorded piece of a big file, in MiB. Smaller pieces lose less when stopped "
 	  "but are recorded more often." },
@@ -452,7 +453,15 @@ String Usage()
 	  << "  --safe-delete-dir=PATH Where --safe-delete moves files on the target side\n"
 	  << "                         (default <target>.old; must be on the same disk)\n"
 	  << "  --compare-ids          (treesync-cli) Compare users and groups on the two machines,\n"
-	  << "                         suggest one numbering for both, and print the commands\n\n"
+	  << "                         suggest one numbering for both, and print the commands\n"
+	  << "  --scan-only            (treesync-cli) Change nothing: read and hash every file on both\n"
+	  << "                         sides afresh, compare attributes; results in the database\n"
+	  << "                         (views file_compare, hash_mismatches, attr_mismatches)\n"
+	  << "  --sync-attrs           (treesync-cli) Set only attributes that differ (mode, time,\n"
+	  << "                         owner, extended attributes) on the target; no content copied\n"
+	  << "                         (with --dry-run, the default: only list them)\n"
+	  << "  --clear-old            (treesync-cli) Delete the --safe-delete folders (<target>.old,\n"
+	  << "                         <source>.old or --safe-delete-dir) for good (--dry-run: count)\n\n"
 	  << "  -h, --help             Show this help\n";
 	return u;
 }

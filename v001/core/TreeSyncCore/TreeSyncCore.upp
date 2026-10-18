@@ -26,4 +26,5 @@ file
 	SftpFs.cpp,
 	Ids.cpp,
 	Sync.cpp,
-	Stream.cpp;
+	Stream.cpp,
+	Check.cpp;

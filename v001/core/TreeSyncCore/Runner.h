@@ -111,7 +111,11 @@ struct Runner {
 	{
 		Lock l(mx);
 		const Entry& e = a.from;
-		Stmt find(db, "SELECT seq, state FROM actions WHERE run = ? AND rel = ? AND kind = ? ORDER BY seq DESC LIMIT 1");
+		// INDEXED BY: left to itself SQLite walks the primary key (run, seq) backwards to
+		// save a sort, reading every action of the run for each file: a big run slowed
+		// down as it went (48,000 files: about a billion rows read).
+		Stmt find(db, "SELECT seq, state FROM actions INDEXED BY actions_rel WHERE run = ? AND rel = ? AND kind = ? "
+		              "ORDER BY seq DESC LIMIT 1");
 		find.Int(1, run).Text(2, e.rel).Text(3, KindName(a.kind));
 		int seq = -1;
 		if(find.Step() && find.Text(1) != "done")
@@ -171,6 +175,15 @@ struct Runner {
 		Lock l(mx);
 		Stmt(db, "UPDATE actions SET state = ?, bytes = ?, error = ? WHERE run = ? AND seq = ?")
 			.Text(1, state).Int(2, bytes).Text(3, error).Int(4, run).Int(5, seq).Run();
+	}
+
+	// What each copy was checked with goes into file_checks (History > SHA-256 checks).
+	FolderIds folders{ db };
+
+	void Check(const CheckRow& row)
+	{
+		Lock l(mx);
+		WriteCheck(db, folders, run, row);
 	}
 
 	// A verified copy goes straight into the target's hash cache, so the next scan
@@ -417,9 +430,11 @@ struct Runner {
 				return false;
 			}
 			{
+				// A one-chunk file is copied again from the start after a stop: no record.
 				Lock l(mx);
-				Stmt(db, "INSERT OR REPLACE INTO chunks VALUES (?, ?, ?, ?, ?, ?)")
-					.Int(1, run).Int(2, seq).Int(3, idx).Int(4, off).Int(5, len).Text(6, sent).Run();
+				if(count > 1)
+					Stmt(db, "INSERT OR REPLACE INTO chunks VALUES (?, ?, ?, ?, ?, ?)")
+						.Int(1, run).Int(2, seq).Int(3, idx).Int(4, off).Int(5, len).Text(6, sent).Run();
 				result.bytes += len;
 			}
 			p.done = off + len;
@@ -480,13 +495,9 @@ struct Runner {
 				return false;
 		}
 
-		// A file not hashed yet (the streaming engine hashes on the way): the cp path
-		// needs it first; the chunked copy works it out while copying.
+		// A file not hashed yet (the streaming engine hashes on the way): the copy works
+		// it out while copying.
 		bool hash_new = expect.IsEmpty();
-		bool big_or_remote = now.size >= ((int64)flags.big_file_mib << 20) || !from.IsLocal() || !to.IsLocal() ||
-		                     flags.bwlimit_kib;
-		if(hash_new && !big_or_remote && !from.Hash(e.rel, flags.follow_links, expect, error, report.stop))
-			return false;
 
 		CopyProgress p;
 		p.id = s.seq;
@@ -497,8 +508,6 @@ struct Runner {
 		p.name = e.rel;
 		p.size = now.size;
 		Clock::time_point t0 = Clock::now();
-		bool big = now.size >= ((int64)flags.big_file_mib << 20);
-		bool fast = from.IsLocal() && to.IsLocal() && !big && !flags.bwlimit_kib;   // cp cannot be throttled
 		bool ok = false;
 		One<TreeFile> out;
 		String src_hash, dst_hash;
@@ -509,59 +518,78 @@ struct Runner {
 				std::this_thread::sleep_for(std::chrono::seconds(flags.retry_wait));
 			}
 			error.Clear();
-			if(fast) {
-				const LocalFs& lf = static_cast<const LocalFs&>(from);
-				const LocalFs& lt = static_cast<const LocalFs&>(to);
-				int sp = lf.ParentFd(e.rel), dp = lt.ParentFd(e.rel);
-				ok = sp >= 0 && dp >= 0 && CopySmall(sp, GetFileName(e.rel), dp, GetFileName(part), error);
-				if(sp < 0 || dp < 0)
-					error = "cannot open the folders of " + e.rel;
-				if(sp >= 0) close(sp);
-				if(dp >= 0) close(dp);
-			}
-			else
-				ok = ChunkCopy(s.seq, from, to, e.rel, part, now.size, p, t0, out, src_hash, dst_hash, error);
+			ok = ChunkCopy(s.seq, from, to, e.rel, part, now.size, p, t0, out, src_hash, dst_hash, error);
 			if(ok || error == "stopped" || report.Stopping() || Permanent(error) || from.Lost() || to.Lost())
 				break;   // a lost connection is waited for by RunStep, not retried here
 		}
 		if(!ok)
 			return false;
-		if(fast) {
-			Lock l(mx);
-			result.bytes += now.size;
-		}
 
-		// The copy must have the source's SHA-256. After cp, read it back; the chunked
-		// copy already read every chunk back and built both hashes on the way.
-		String got;
-		if(fast) {
-			if(!to.Hash(part, false, got, error, report.stop))
-				return false;
-		}
-		else {
-			got = dst_hash;
-			if(expect.IsEmpty())
-				expect = src_hash;
-			else if(src_hash != expect) {
-				error = "the source changed while it was being copied: " + e.rel;
-				return false;
-			}
-		}
-		if(got != expect) {
-			error = "verify failed: copy of " + e.rel + " has a different SHA-256; kept as " + part;
+		// The copy must have the source's SHA-256. The copy read every chunk back and
+		// built both hashes on the way.
+		String got = dst_hash;
+		if(expect.IsEmpty())
+			expect = src_hash;
+		else if(src_hash != expect) {
+			error = "the source changed while it was being copied: " + e.rel;
 			return false;
 		}
-		if(!fast) {   // cp --preserve already did this
-			FileAttrs fa;
-			fa.mode = now.mode;
-			fa.mtime_ns = now.mtime_ns;
-			if(now.uid >= 0 && Owners(c, 1 - a.dir, now.uid, now.gid))
-				MapOwner(c, a.dir, now.uid, now.gid, fa);
-			String warn;
-			if(!out->SetAttrs(fa, warn))
-				Line("warning: " + warn);
-			out.Clear();   // close before the rename
+		CheckRow row;
+		row.seq = s.seq;
+		row.rel = e.rel;
+		row.kind = "copy";
+		row.sha[0] = expect;
+		row.sha[1] = got;
+		row.side[0] = row.side[1] = true;
+		row.size[0] = row.size[1] = now.size;
+		row.mode[0] = now.mode;
+		row.uid[0] = now.uid;
+		row.gid[0] = now.gid;
+		row.mtime_ns[0] = now.mtime_ns;
+		if(got != expect) {
+			error = "verify failed: copy of " + e.rel + " has a different SHA-256; kept as " + part;
+			row.result = "failed: verify";
+			Check(row);
+			return false;
 		}
+		FileAttrs fa;
+		fa.mode = now.mode;
+		fa.mtime_ns = now.mtime_ns;
+		if(now.uid >= 0 && Owners(c, 1 - a.dir, now.uid, now.gid))
+			MapOwner(c, a.dir, now.uid, now.gid, fa);
+		String warn;
+		if(!out->SetAttrs(fa, warn))
+			Line("warning: " + warn);
+		// ACLs, SELinux label, file capabilities, user attributes: best effort, as with
+		// cp --preserve=all. After the owner: a change of owner clears capabilities.
+		bool local = from.IsLocal() && to.IsLocal();
+		if(local) {
+			String ignore;
+			if(One<TreeFile> in = from.Open(e.rel, false, ignore)) {
+				CopyXattrs(*in, *out);
+				row.xattrs[0] = XattrDigest(*in);
+				row.xattrs[1] = XattrDigest(*out);
+				row.xattrs_known[0] = row.xattrs_known[1] = true;
+			}
+		}
+		// The copy's attributes as they now are, so the row shows whether they were kept.
+		Entry placed;
+		String ignore;
+		if(to.IsLocal() && to.Stat(part, false, placed, ignore)) {
+			row.mode[1] = placed.mode;
+			row.uid[1] = placed.uid;
+			row.gid[1] = placed.gid;
+			row.mtime_ns[1] = placed.mtime_ns;
+		}
+		else {   // over SFTP: what was set (SFTP keeps whole seconds)
+			row.mode[1] = fa.mode;
+			row.mtime_ns[1] = fa.mtime_ns;
+		}
+		row.attr_diff = AttrDiff(row, fa.uid, fa.gid, local);
+		if(row.attr_diff.GetCount())
+			Line("warning: attributes not all kept for " + e.rel + ": " + row.attr_diff);
+		Check(row);
+		out.Clear();   // close before the rename
 		if(!MakeRoom(c, a, error) || !to.Rename(part, e.rel, error))
 			return false;
 		p.done = p.size;
@@ -581,6 +609,47 @@ struct Runner {
 			Cache(to, 1 - a.dir, e.rel, expect, &placed);
 		}
 		return true;
+	}
+
+	// Same content, different attributes: set the source's on the target (a.note: what differs).
+	bool Attrs(Ctx& c, const Step& s, String& error)
+	{
+		const Entry& e = s.a.from;
+		TreeFs& to = *c.fs[1 - s.a.dir];
+		CheckRow row;
+		row.seq = s.seq;
+		row.rel = e.rel;
+		row.kind = "attrs";
+		row.side[0] = true;
+		row.size[0] = e.size;
+		row.mode[0] = e.mode;
+		row.uid[0] = e.uid;
+		row.gid[0] = e.gid;
+		row.mtime_ns[0] = e.mtime_ns;
+		row.sha[0] = e.hash;
+		Entry t;
+		String ignore;
+		if(to.Stat(e.rel, false, t, ignore)) {
+			row.side[1] = true;
+			row.size[1] = t.size;
+			row.mode[1] = t.mode;
+			row.uid[1] = t.uid;
+			row.gid[1] = t.gid;
+			row.mtime_ns[1] = t.mtime_ns;
+			row.sha[1] = e.hash;   // found equal before this step was decided
+		}
+		row.attr_diff = s.a.note;
+		FileAttrs fa;
+		fa.mode = e.mode;
+		fa.mtime_ns = e.mtime_ns;
+		if(e.uid >= 0 && Owners(c, 1 - s.a.dir, e.uid, e.gid))
+			MapOwner(c, s.a.dir, e.uid, e.gid, fa);
+		bool ok = to.SetAttrs(e.rel, fa, error);
+		row.result = ok ? String("fixed") : "failed: " + error;
+		Check(row);
+		if(ok)
+			Line("set attrs " + e.rel + ": " + s.a.note);
+		return ok;
 	}
 
 	bool Mkdir(Ctx& c, const Action& a, String& error)
@@ -623,6 +692,7 @@ struct Runner {
 			case ActionKind::Copy:
 			case ActionKind::Link:   return Copy(c, s, error, index);
 			case ActionKind::Delete: return Delete(c, s.a, error);
+			case ActionKind::Attrs:  return Attrs(c, s, error);
 			case ActionKind::Conflict: {
 				Lock l(mx);
 				result.conflicts++;

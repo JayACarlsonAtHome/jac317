@@ -7,6 +7,7 @@
 #include "TreeSyncCore.h"
 
 #include <format>
+#include <time.h>
 
 static String Rate(int64 done, double seconds)
 {
@@ -149,6 +150,21 @@ String DateTimeText(int64 unix_time)
 String LogStamp(int64 start, int64 stop)
 {
 	return " " + ClockTime(start) + " : " + ClockTime(stop) + " : " + DurationClock(stop - start) + " : ";
+}
+
+int64 NowMicros()
+{
+	timespec ts;
+	clock_gettime(CLOCK_REALTIME, &ts);
+	return (int64)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
+}
+
+String LogStampFine(int64 start_us, int64 stop_us)
+{
+	auto at = [](int64 us) { return ClockTime(us / 1000000) + String(std::format(".{:06}", us % 1000000)); };
+	int64 d = stop_us >= start_us ? stop_us - start_us : start_us - stop_us;
+	return " " + at(start_us) + " : " + at(stop_us) + " : " + DurationClock(d / 1000000) +
+	       String(std::format(".{:06}", d % 1000000)) + " : ";
 }
 
 String ResultsHeader(int64 unix_time)

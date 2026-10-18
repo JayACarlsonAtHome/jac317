@@ -178,7 +178,7 @@ struct NameFilter {
 
 // Plan.cpp -------------------------------------------------------------------
 
-enum class ActionKind { Mkdir, Copy, Link, Delete, Conflict };
+enum class ActionKind { Mkdir, Copy, Link, Delete, Conflict, Attrs };   // Attrs: same content, set attributes only
 
 struct Action : Moveable<Action> {
 	ActionKind kind = ActionKind::Copy;
@@ -204,7 +204,6 @@ Vector<Action> PlanSync(const Vector<Entry>& src, const Vector<Entry>& dst, cons
 
 bool   HashAt(int dirfd, const String& name, String& hash, String& error,
               const std::atomic<bool> *stop = nullptr, int64 *bytes = nullptr, bool follow = false);
-bool   CopySmall(int src_dir, const String& name, int dst_dir, const String& part, String& error);
 
 // Ids.cpp: users and groups, matched by name ------------------------------------
 
@@ -239,8 +238,13 @@ struct TreeFile {
 	virtual bool SetAttrs(const FileAttrs& a, String& error) = 0;
 	bool         Hash(int64 size, String& hash, String& error, const std::atomic<bool> *stop,
 	                  Throttle *throttle = nullptr);
+	virtual int  Fd() const   { return -1; }   // local files: the descriptor
 	virtual ~TreeFile() {}
 };
+
+// Extended attributes (ACLs, SELinux label, capabilities, user.*) from one local file
+// to another, best effort: what cannot be set is left out, as cp --preserve=all does.
+void CopyXattrs(TreeFile& from, TreeFile& to);
 
 // Paths are relative to the tree root ("" is the root itself).
 class TreeFs {
@@ -287,7 +291,7 @@ class LocalFs : public TreeFs {
 	int    stable = -1;   // StableIds, worked out once
 
 public:
-	int    ParentFd(const String& rel) const;   // for the cp fast path
+	int    ParentFd(const String& rel) const;   // the folder holding rel, opened
 	String Id() const override           { return root; }
 	bool   IsLocal() const override      { return true; }
 	bool   StableIds() override;
@@ -360,6 +364,63 @@ public:
 	SftpFs(const TreeEndpoint& e, const String& known_hosts, bool compress);
 	~SftpFs();
 };
+
+// Check.cpp: one row of file_checks, per file and run -------------------------
+// Copies record what they checked; Scan only and Sync attributes record every file.
+// The folder is stored once, in folders, and referred to by its id.
+
+class FolderIds {
+	Db&                      db;
+	VectorMap<String, int64> ids;   // rel -> folders.id
+
+public:
+	int64 Get(const String& rel);
+	FolderIds(Db& db) : db(db) {}
+};
+
+struct CheckRow {
+	int    seq = 0;
+	String rel;
+	String kind;                 // copy, scan, attrs
+	char   type = 'f';           // 'f' file, 'd' folder
+	bool   side[2] = {};         // [0] source, [1] target: present
+	String sha[2];               // empty: not hashed
+	int64  size[2] = {}, uid[2] = { -1, -1 }, gid[2] = { -1, -1 }, mtime_ns[2] = {};
+	int    mode[2] = {};
+	String xattrs[2];            // XattrDigest ("" = none), when xattrs_known
+	bool   xattrs_known[2] = {}; // false: not read (remote, or a sync's attribute check)
+	String attr_diff;            // "" when the attributes agree
+	String result;               // fixed, failed: ..., or empty
+};
+
+void   WriteCheck(Db& db, FolderIds& folders, int64 run, const CheckRow& row);
+// The SHA-256 of a local file's extended attributes (sorted, names and values), "" when
+// it has none. The SELinux label is left out: it is set by policy where the file is.
+String XattrDigest(TreeFile& f);
+// What differs between the two sides' attributes, "" when nothing: mode, the time
+// (files; exact when both sides are local, else whole seconds), owner and group
+// when want_uid >= 0 (the source's, as the target's numbers), extended attributes
+// when both are known.
+String AttrDiff(const CheckRow& row, int64 want_uid, int64 want_gid, bool exact_time);
+
+// Scan only (--scan-only): every file read and hashed afresh on both sides, the
+// attributes compared; nothing is changed. Sync attributes (--sync-attrs): the
+// attributes only (no hashing), then only those that differ are set on the target,
+// for files of the same size and for folders (mode and owner).
+enum class CheckMode { Scan, Attrs };
+
+struct CheckResult {
+	int64 run = 0;
+	bool  stopped = false;
+	int   files = 0, folders = 0, same = 0, differ = 0, missing = 0, attr_diffs = 0, fixed = 0, failed = 0;
+	int64 bytes = 0;            // read and hashed
+};
+
+bool RunCheck(const SyncSetup& setup, CheckMode mode, SyncReport& report, CheckResult& result, String& error);
+
+// --clear-old: deletes the --safe-delete folders (<source>.old, <target>.old or
+// --safe-delete-dir) for good. dry: only counts.
+bool ClearOld(const SyncSetup& setup, bool dry, SyncReport& report, String& error);
 
 // Sync.cpp -------------------------------------------------------------------
 
