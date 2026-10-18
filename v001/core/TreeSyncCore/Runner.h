@@ -390,8 +390,9 @@ struct Runner {
 				if(count_write)
 					report.Count(n);
 				// Within a chunk too, about four times a second, so a thermometer
-				// moves smoothly even when one chunk takes many seconds.
-				if(Since(last_shown) >= 0.25 && off + k + n < size) {
+				// moves smoothly even when one chunk takes many seconds. Only inside
+				// it: done at a chunk's end means that chunk is checked and recorded.
+				if(Since(last_shown) >= 0.25 && k + n < len) {
 					p.done = off + k + n;
 					p.seconds = Since(t0);
 					Progress(p);

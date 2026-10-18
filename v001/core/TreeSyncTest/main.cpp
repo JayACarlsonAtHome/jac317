@@ -602,12 +602,19 @@ static void TestEngineResume(const String& root)
 	Put(src + "/z small 1.txt", "one\n");
 	Put(src + "/z small 2.txt", "two\n");
 
-	// Stop as soon as the first chunk of the big file is written. (With several copy
-	// threads the small files may finish first, so watch the big file itself.)
+	// Stop as soon as the first chunk of the big file is recorded. (With several copy
+	// threads the small files may finish first, so watch the big file itself.) Not on
+	// the first progress: on a slow run (valgrind) that comes mid-chunk, or while the
+	// chunk is read back (verifying), before it is recorded; the second run would then
+	// rightly start the file over.
 	SyncSetup s = Setup(src, dst, db);
+	int64 chunk = (int64)s.flags.chunk_mib << 20;
 	std::atomic<bool> stop = false;
 	SyncResult r1;
-	Sync(s, r1, nullptr, &stop, [&](const CopyProgress& p) { if(p.name == "a big.bin" && p.done > 0) stop = true; });
+	Sync(s, r1, nullptr, &stop, [&](const CopyProgress& p) {
+		if(p.name == "a big.bin" && !p.verifying && p.done >= chunk)
+			stop = true;
+	});
 	EXPECT(r1.stopped, "first run stopped");
 	EXPECT(!FileExists(dst + "/a big.bin") && FileExists(dst + "/a big.bin.treesync-part"),
 	       "stopped mid-file: only the .treesync-part exists");
@@ -620,9 +627,13 @@ static void TestEngineResume(const String& root)
 	EXPECT(r2.resumed && r2.run == r1.run, Format("resumed run %d (first was %d)", r2.run, r1.run));
 	EXPECT(r2.bytes < size, Format("resume copied %s, less than the %s file", FormatBytes(r2.bytes), FormatBytes(size)));
 	bool said = false;
-	for(const String& l : lines)
+	String about;   // what the run said about the big file, shown when the check fails
+	for(const String& l : lines) {
 		said = said || l.StartsWith("resuming a big.bin at chunk 2");
-	EXPECT(said, "reports resuming at chunk 2");
+		if(l.Find("a big.bin") >= 0)
+			about << (about.GetCount() ? " | " : "") << l;
+	}
+	EXPECT(said, "reports resuming at chunk 2" + (said ? String() : " (said: " + about + ")"));
 	EXPECT(TreeHash(src, check) == TreeHash(dst, check), "resumed copy: target equals source");
 	EXPECT(!FileExists(dst + "/a big.bin.treesync-part"), "no .treesync-part left");
 
@@ -746,8 +757,12 @@ static void TestStreaming(const String& root)
 		}
 	};
 	EXPECT(RunSync(s, report, r, err), "streaming run: " + err);
-	EXPECT(first_copy >= 0 && scan_end >= 0 && first_copy < scan_end,
-	       Format("first copy finished (%.3f s) before the pre-scan did (%.3f s)", (double)first_copy, (double)scan_end));
+	// A race between threads; valgrind runs one thread at a time (build.sh --valgrind).
+	if(GetEnv("TREESYNC_VALGRIND").GetCount())
+		Cout() << "(skipped under valgrind: first copy finished before the pre-scan did)\n";
+	else
+		EXPECT(first_copy >= 0 && scan_end >= 0 && first_copy < scan_end,
+		       Format("first copy finished (%.3f s) before the pre-scan did (%.3f s)", (double)first_copy, (double)scan_end));
 	EXPECT(ahead > 0 && bad_count == 0, Format("file counter runs ahead of the copies (%d of 2000 files)", ahead));
 	EXPECT(last_count == 2000, Format("last file shows 2000/2000 (count %d)", last_count));
 	EXPECT(found == 41 && checked == found, Format("post-scan checked all %d folders (%d)", found, checked));
