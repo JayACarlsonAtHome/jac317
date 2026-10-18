@@ -113,6 +113,10 @@ double TreeSyncWindow::BenchLog(int n)
 void TreeSyncWindow::DemoProgress()
 {
 	ProgressVisible(true);
+	eta_t0 = std::chrono::steady_clock::now() - std::chrono::seconds(754);
+	eta_samples.Clear();
+	eta_samples.Add(MakeTuple(694.0, (int64)600000000));
+	eta_samples.Add(MakeTuple(754.0, (int64)734003200));
 	for(const char *l : {
 		"@stage\t0\t31540\t51381\t0\tzig-x86_64-linux/lib/std/os",
 		"@overall\t734003200\t1288490188",
@@ -121,6 +125,7 @@ void TreeSyncWindow::DemoProgress()
 		"@file\t16\t3145728\t3355443\t0.4\t16\t140\tzig-x86_64-linux.tar.xz",
 		"@stage\t2\t96\t412\t0\tzig-x86_64-linux/lib/std/crypto" })
 		ShowProgress(l);
+	ShowEta();
 }
 
 // One stage box: a bar (done of total; empty while the total is unknown) and a line.
@@ -155,7 +160,52 @@ void TreeSyncWindow::Tick()
 		                       active.GetCount(), active.GetCount() == 1 ? "" : "s", (int)quiet);
 	else
 		stage_text[1] = copy_text;
+	ShowEta();
 	SetTimeCallback(1000, [this] { Tick(); }, 77);
+}
+
+static String HourMinSec(double s)
+{
+	int64 n = (int64)s;
+	return Format("%d:%02d:%02d", (int)(n / 3600), (int)(n / 60 % 60), (int)(n % 60));
+}
+
+void TreeSyncWindow::EtaSample(int64 done, int64 total)
+{
+	eta_done = done;
+	eta_total = total;
+	double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - eta_t0).count();
+	if(eta_samples.GetCount() && t - eta_samples.Top().a < 1)
+		return;
+	eta_samples.Add(MakeTuple(t, done));
+	while(eta_samples.GetCount() > 2 && eta_samples[1].a < t - 60)   // keep the last minute
+		eta_samples.Remove(0);
+}
+
+void TreeSyncWindow::ShowEta()
+{
+	double now = std::chrono::duration<double>(std::chrono::steady_clock::now() - eta_t0).count();
+	String s = "Elapsed " + HourMinSec(now);
+	double rate = 0;   // bytes per second over the last minute
+	if(eta_samples.GetCount() >= 2) {
+		const Tuple<double, int64>& a = eta_samples[0];
+		const Tuple<double, int64>& b = eta_samples.Top();
+		if(b.a - a.a >= 5)
+			rate = (b.b - a.b) / (b.a - a.a);
+	}
+	if(eta_total > eta_done && rate > 0) {
+		double left = (eta_total - eta_done) / rate;
+		Time end = GetSysTime() + (int64)left;
+		String when = Format("%02d:%02d", end.hour, end.minute);
+		if(Date(end) != GetSysDate())
+			when << Format(" on %d-%02d-%02d", end.year, end.month, end.day);
+		// While the pre-scan still finds files the total grows: at least this long.
+		s << "    Total " << (prescan_done ? "~" : "at least ~") << HourMinSec(now + left)
+		  << "    Done about " << when;
+	}
+	else if(eta_total > eta_done)
+		s << "    Total: estimating...";
+	eta = s + "  ";
 }
 
 void TreeSyncWindow::StageShow(int stage, int64 done, int64 total, const String& text)
@@ -187,6 +237,7 @@ void TreeSyncWindow::ShowProgress(const String& line)
 		int64 done = ScanInt64(f[1]), total = ScanInt64(f[2]);
 		// While the pre-scan runs the total is what it has found so far; files that turn
 		// out the same as the target's drop out of it again.
+		EtaSample(done, total);
 		StageShow(1, done, total, FormatBytes(done) + " of " + FormatBytes(total) +
 		          (prescan_done ? String() : String("  (so far: the pre-scan is still finding files)")));
 		return;
@@ -323,6 +374,10 @@ void TreeSyncWindow::StartSync(bool dry_run)
 	copy_started.Clear();
 	net_down = false;
 	prescan_done = false;
+	eta_samples.Clear();
+	eta_done = eta_total = 0;
+	eta_t0 = std::chrono::steady_clock::now();
+	ShowEta();
 	for(int i = 0; i < 3; i++)
 		StageShow(i, 0, 0, String());
 	ProgressVisible(true);
@@ -392,6 +447,7 @@ void TreeSyncWindow::SyncFinished(int code)
 	while(took_text.Find("  ") >= 0)
 		took_text.Replace("  ", " ");
 	KillTimeCallback(77);
+	eta = String();
 	net_down = false;
 	stage_text[1].SetInk(SColorText());
 	active.Clear();

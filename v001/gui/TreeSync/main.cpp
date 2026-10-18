@@ -17,6 +17,8 @@ TreeSyncWindow::TreeSyncWindow()
 	AddFrame(menu);
 	AddFrame(status);
 	menu.Set([this](Bar& bar) { MainMenu(bar); });
+	menu.Ctrl::Add(eta.RightPosZ(8, 640).VSizePosZ(0, 0));   // a child of the bar, not a menu item: rebuilds keep it
+	eta.SetAlign(ALIGN_RIGHT);
 	split.Horz(source_panel, target_panel);
 
 	const char *stage_name[3] = { "Pre-scan: source", "Copy", "Post-scan: target" };

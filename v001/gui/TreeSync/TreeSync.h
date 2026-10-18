@@ -179,6 +179,16 @@ class TreeSyncWindow : public TopWindow {
 
 	void StageShow(int stage, int64 done, int64 total, const String& text);
 
+	// Upper right, in the menu bar, while a sync runs: how long it has run, how long
+	// the whole run will probably take, and when it should be done. The rate is that
+	// of the last minute, so a resume or a slow start does not skew it.
+	Label                         eta;
+	Vector<Tuple<double, int64>>  eta_samples;   // (seconds since the start, bytes done), about 1 a second
+	int64                         eta_done = 0, eta_total = 0;
+	std::chrono::steady_clock::time_point eta_t0;
+	void EtaSample(int64 done, int64 total);
+	void ShowEta();
+
 	// "Still working": a 1-second ticker while a sync runs. It keeps each file's Time
 	// counting and, when no progress has come for a few seconds, says so in the
 	// Copy box, so a big file on a slow link never looks stuck.
