@@ -67,6 +67,16 @@ compile_commands.json
 *.db-wal
 *.db-shm
 
+# --- TreeSync test and run data ---
+# Test scratch trees (the tests make them under $TMPDIR and ~/.cache, never in here)
+treesync-test-*/
+# What a run leaves if it ever writes in here: unfinished copies, logs, AI exports,
+# safe-delete folders of a tree named *.old
+*.treesync-part
+*.log
+*.AI.md
+logs/
+
 # --- Editors / OS ---
 .vscode/
 .idea/
