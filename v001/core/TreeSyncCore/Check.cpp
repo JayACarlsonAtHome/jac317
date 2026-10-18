@@ -79,7 +79,7 @@ String AttrDiff(const CheckRow& r, int64 want_uid, int64 want_gid, bool exact_ti
 
 namespace {
 
-struct Item : Moveable<Item> {
+struct CheckItem : Moveable<CheckItem> {
 	String      rel;
 	FolderEntry s, t;
 	bool        on_target = false;
@@ -108,7 +108,7 @@ struct Checker {
 	:	setup(setup), flags(setup.flags), report(report), result(result), mode(mode), db(db), checks(db) {}
 
 	// Source and target entries of every folder, filtered like a sync.
-	void Walk(Vector<Item>& files, Vector<Item>& dirs)
+	void Walk(Vector<CheckItem>& files, Vector<CheckItem>& dirs)
 	{
 		NameFilter filter(flags);
 		struct Dir : Moveable<Dir> { String rel; bool inside = false; };
@@ -143,7 +143,7 @@ struct Checker {
 				}
 				else if(s.type != 'f' || !filter.KeepFile(d.inside, rel))
 					continue;   // symlinks and special files are not checked
-				Item it;
+				CheckItem it;
 				it.rel = rel;
 				it.s = s;
 				int k = tix.Find(s.name);
@@ -181,9 +181,9 @@ struct Checker {
 
 	static String FolderOf(const String& rel)   { return rel.Left(max(rel.ReverseFind('/'), 0)); }
 
-	void FoldersStart(const Vector<Item>& files, const Vector<Item>& dirs)
+	void FoldersStart(const Vector<CheckItem>& files, const Vector<CheckItem>& dirs)
 	{
-		for(const Item& f : files)
+		for(const CheckItem& f : files)
 			waiting.GetAdd(FolderOf(f.rel), 0)++;
 		folders_total = dirs.GetCount() + 1;   // and the top
 		folders_done = folders_total - waiting.GetCount();
@@ -219,7 +219,7 @@ struct Checker {
 		gid = MapId(ids[0], ids[1], true, r.gid[0], flags.numeric_ids, nullptr);
 	}
 
-	CheckRow Row(const Item& it, char type)
+	CheckRow Row(const CheckItem& it, char type)
 	{
 		CheckRow r;
 		r.rel = it.rel;
@@ -261,7 +261,7 @@ struct Checker {
 
 	// One file: hash both sides (Scan), compare, record. ctx: this thread's sides.
 	// n: the file's place in the list, its id in the progress shown.
-	void File(TreeFs *side[2], const Item& it, int n)
+	void File(TreeFs *side[2], const CheckItem& it, int n)
 	{
 		CheckRow r = Row(it, 'f');
 		String error;
@@ -470,9 +470,9 @@ bool RunCheck(const SyncSetup& setup, CheckMode mode, SyncReport& report, CheckR
 	                                               : "sync attributes", side[0]->Id(), side[1]->Id()));
 
 	db.Exec("BEGIN");
-	Vector<Item> files, dirs;
+	Vector<CheckItem> files, dirs;
 	k.Walk(files, dirs);
-	for(const Item& d : dirs) {
+	for(const CheckItem& d : dirs) {
 		CheckRow r = k.Row(d, 'd');
 		k.Write(r);
 		result.folders++;
