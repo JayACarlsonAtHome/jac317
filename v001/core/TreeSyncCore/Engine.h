@@ -111,6 +111,9 @@ struct SyncReport {
 	Event<int64, int64>        WhenOverall;   // bytes of the run's copies done, of total
 	Event<const StageProgress&> WhenStage;    // pre-scan and post-scan of a streamed run
 	Event<bool, const String&> WhenNetwork;   // true: lost the connection to host, waiting; false: back
+	// Free space of a side's disk (0 source, 1 target): free, total bytes; exact when
+	// just asked, else worked out from what the copies wrote since. At most once a second.
+	Event<int, int64, int64, bool> WhenFree;
 	const std::atomic<bool>   *stop = nullptr;
 	std::atomic<bool>          halted = false;   // the engine stopped the run itself (network gone too long)
 	Throttle                  *throttle = nullptr;   // set by RunSync for --bwlimit
@@ -321,6 +324,11 @@ public:
 	// file content crosses the network to hash it.
 	virtual bool   HashesOnServer() const    { return false; }
 	virtual int64  EntryEstimate()           { return 0; }       // likely entry count (statvfs), 0 = unknown
+	// The disk the tree is on, asked now: bytes free (for this user; root may use the
+	// reserve) and its size. A root that does not exist yet: the disk of its nearest
+	// existing parent. block: its allocation unit (a file takes whole blocks). False
+	// when it cannot be told (the server does not say).
+	virtual bool   FreeSpace(int64& free, int64& total, int64& block, String& error) = 0;
 	// A remote side whose connection broke (network down, server gone): every call
 	// fails until Reconnect succeeds. Reconnect only with no files open.
 	virtual bool   Lost()                    { return false; }
@@ -339,6 +347,7 @@ public:
 	bool   IsLocal() const override      { return true; }
 	bool   StableIds() override;
 	int64  EntryEstimate() override;
+	bool   FreeSpace(int64& free, int64& total, int64& block, String& error) override;
 	bool   CanHardLink() const override  { return true; }
 	bool   RootExists() override;
 	bool   MakeRoot(String& error) override;
@@ -404,6 +413,7 @@ public:
 	bool   Reconnect(String& error) override;
 	String Host() const override;
 	bool   HashesOnServer() const override;
+	bool   FreeSpace(int64& free, int64& total, int64& block, String& error) override;
 
 	SftpFs(const TreeEndpoint& e, const String& known_hosts, bool compress);
 	~SftpFs();
@@ -479,7 +489,53 @@ struct ClearResult {
 
 bool ClearOld(const SyncSetup& setup, bool dry, SyncReport& report, String& error, ClearResult *result = nullptr);
 
+// --edit: one change to a tree, from the GUI's right-click menu, done the way a run
+// does it (as root for TreeSyncRoot, inside home for TreeSyncHome, over SFTP for a
+// remote tree). side: 0 source, 1 target. rel: relative to the tree's root.
+//   mkdir            a folder called name inside the folder rel ("" = the root)
+//   rename           rel gets the name name, in the same folder; never replaces one
+//   delete           rel moves to the side's safe-delete folder (as a sync's deletes)
+//   delete-for-good  rel is deleted, a folder with everything in it
+// TreeSync's own files (.treesync-old, *.treesync-part) and the root itself are refused.
+struct EditResult {
+	String done;              // what was done, in words
+	int64  files = 0, folders = 0, bytes = 0;
+};
+
+bool TreeEdit(const SyncSetup& setup, int side, const String& op, const String& rel, const String& name,
+              SyncReport& report, EditResult& result, String& error);
+
 // Sync.cpp -------------------------------------------------------------------
+
+// One verified copy, for the report at the end of a run: the numbers that show the copy
+// is the source. Every copy is read back and checked; a copy that does not match fails
+// and is not counted here.
+struct CopyProof : Moveable<CopyProof> {
+	String rel;
+	int64  size[2] = {};          // bytes: [0] the source, [1] the copy in place
+	String sha[2];                // SHA-256: [0] of the source, [1] of the copy as read back
+	int64  mtime_ns[2] = {};
+	int    mode[2] = {};
+	int64  uid[2] = { -1, -1 }, gid[2] = { -1, -1 };
+	int64  disk = -1;             // bytes the copy takes on disk; -1 unknown (remote)
+	int64  resumed = 0;           // bytes a stopped run had copied, checked again and kept
+	String attr_diff;             // "" when mode, time and owner were all kept
+};
+
+// What all of a run's verified copies add up to; the biggest ones in full.
+struct CopyProofs {
+	enum { KEEP = 10 };
+	int    files = 0;
+	int64  size[2] = {};          // bytes on the source, bytes of the copies
+	int    matched = 0;           // SHA-256 of the copy equal to the source's
+	int    attr_diffs = 0;        // copies whose mode, time or owner were not all kept
+	int64  resumed = 0;           // of size[1]: copied by a stopped run, checked again
+	int64  disk = 0;              // what the copies take on disk, of disk_known bytes
+	int64  disk_known = 0;        // bytes of the copies whose disk use is known
+	Vector<CopyProof> biggest;    // the KEEP biggest files, biggest first
+
+	void Add(CopyProof&& p);
+};
 
 struct SyncResult {
 	int64  run = 0;
@@ -489,7 +545,27 @@ struct SyncResult {
 	int64  bytes = 0;
 	ScanStats source, target;
 	Vector<String> plan;      // dry run: one line per action
+	CopyProofs copies;        // what was copied, as checked
+	// --precheck: the most the copies can need, and the target's free space then (-1: not checked)
+	int64  room_need = -1, room_free = -1;
+	bool   no_room = false;   // refused: may not fit (nothing was copied)
+	bool   disk_full = false; // stopped: the target was nearly full
 };
+
+// The reserve a run keeps free on a disk of total bytes: it stops (resumable) before
+// going below it. 1% of the disk, at least 256 MiB (5% of a disk too small for that),
+// at most 4 GiB.
+inline int64 FreeReserve(int64 total)
+{
+	return min<int64>(max<int64>(total / 100, min<int64>(256LL << 20, total / 20)), 4LL << 30);
+}
+
+// The report of a run's copies: totals that show source and copies match, the biggest
+// files in full (bytes, SHA-256, time, mode, owner), and why any number differs on
+// purpose (a resumed run, holes). this_run: bytes copied by this run (SyncResult::bytes).
+Vector<String> CopyReport(const CopyProofs& c, int64 this_run);
+// One line for Results.txt: "1 file checked: 429,562,527,744 bytes on both sides, SHA-256 match".
+String CopyReportShort(const CopyProofs& c);
 
 // Runs (or resumes) a sync.
 bool RunSync(const SyncSetup& setup, SyncReport& report, SyncResult& result, String& error);

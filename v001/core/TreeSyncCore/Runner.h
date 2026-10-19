@@ -7,6 +7,7 @@
 #include "TreeSyncCore.h"
 
 #include <sys/resource.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 #include <chrono>
@@ -99,6 +100,111 @@ struct Runner {
 
 	Runner(Db& db, SyncReport& report, SyncResult& result, const SyncSetup& setup)
 	:	db(db), report(report), result(result), setup(setup), flags(setup.flags) {}
+	~Runner()   // the free space as it really is now, for the end of the run
+	{
+		for(int i = 0; i < 2; i++)
+			if(main.fs[i] && space[i].known)
+				PollFree(i);
+	}
+
+	// Free space of each side's disk. Asked for real at the start and the end (and after
+	// a wipe); in between worked out from the bytes the copies write (holes are not
+	// written, so they count as nothing) and the files deleted for good, instead of
+	// asking the disk again for every file. Another program writing there meanwhile only
+	// shows at the next real poll.
+	struct Space {
+		bool               known = false;
+		int64              polled = 0, total = 0, block = 4096;
+		std::atomic<int64> written = 0, freed = 0;
+		std::atomic<int64> shown_ms = -1000000;   // when it was last reported
+		std::atomic<int64> asked_ms = -1000000;   // when the guard last asked the disk
+	};
+	Space space[2];
+
+	int64 Ms() const   { return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - started).count(); }
+	int64 FreeNow(int side) const
+	{
+		const Space& s = space[side];
+		return max<int64>(0, s.polled - s.written + s.freed);
+	}
+
+	void PollFree(int side)
+	{
+		Space& s = space[side];
+		String ignore;
+		int64 free, total, block = 4096;
+		if(!main.fs[side] || !main.fs[side]->FreeSpace(free, total, block, ignore))
+			return;
+		Lock l(mx);
+		s.known = true;
+		s.polled = free;
+		s.total = total;
+		s.block = block;
+		s.written = 0;
+		s.freed = 0;
+		s.shown_ms = Ms();
+		report.WhenFree(side, free, total, true);
+	}
+
+	// After bytes were written or freed: report the worked-out free space, at most once
+	// a second (a run of thousands of small files a second reports once a second).
+	void ShowFree(int side)
+	{
+		Space& s = space[side];
+		int64 now = Ms(), last = s.shown_ms;
+		if(!s.known || now - last < 1000 || !s.shown_ms.compare_exchange_strong(last, now))
+			return;
+		Lock l(mx);
+		report.WhenFree(side, FreeNow(side), s.total, false);
+	}
+
+	// n bytes written: the disk gives out whole blocks, so a file's last, part-full block
+	// (and a 1-byte file) takes a full one.
+	void Wrote(int side, int64 n)
+	{
+		Space& s = space[side];
+		int64 b = s.block;
+		s.written += (n + b - 1) / b * b;
+		ShowFree(side);
+	}
+
+	// The guard, before n bytes are written: room for them above the reserve? When the
+	// worked-out free space says no, the disk itself is asked at once; within a margin
+	// of it, at most every 2 seconds (another program may be filling the disk too).
+	// No room: the run stops, resumable, before the disk is full in the middle of a file.
+	bool RoomFor(int side, int64 n)
+	{
+		Space& s = space[side];
+		if(!s.known)
+			return true;
+		int64 reserve = FreeReserve(s.total), margin = min<int64>(64LL << 20, s.total / 20);
+		int64 left = FreeNow(side) - n;
+		if(left >= reserve + margin)
+			return true;
+		int64 now = Ms(), last = s.asked_ms;
+		if((left >= reserve && now - last < 2000) || !s.asked_ms.compare_exchange_strong(last, now)) {
+			if(left >= reserve)
+				return true;
+		}
+		else
+			PollFree(side);
+		if(FreeNow(side) - n >= reserve)
+			return true;
+		if(!report.halted.exchange(true)) {
+			Lock l(mx);
+			result.disk_full = true;
+			report.WhenLine("stopping: the " + String(side ? "target" : "source") + " disk is nearly full (" +
+			                FormatBytes(FreeNow(side)) + " free, " + FormatBytes(reserve) + " kept in reserve). "
+			                "Make room, then run again: it continues where it stopped");
+		}
+		return false;
+	}
+
+	void Freed(int side, int64 n)
+	{
+		space[side].freed += n;
+		ShowFree(side);
+	}
 
 	// Streaming engine: the hash caches copies are recorded in (else the files table
 	// directly), and the next action number.
@@ -310,11 +416,13 @@ struct Runner {
 	// read back, built up along the way: no separate full read is needed to verify the
 	// copy. in: the source, open. A local target is kept sparse: all-zero slices are
 	// not written, they stay holes (they read back as zeros, so the check still covers
-	// them). Returns false with error "stopped" on Stop.
-	bool ChunkCopy(int seq, TreeFile& in, TreeFs& to, bool remote_source, const String& rel, const String& part,
+	// them). Returns false with error "stopped" on Stop. resumed: the bytes a stopped
+	// run had copied that read back as recorded and were kept.
+	bool ChunkCopy(int seq, int side, TreeFile& in, TreeFs& to, bool remote_source, const String& rel, const String& part,
 	               int64 size, CopyProgress& p, Clock::time_point t0, One<TreeFile>& out,
-	               String& src_hash, String& dst_hash, String& error)
+	               String& src_hash, String& dst_hash, int64& resumed, String& error)
 	{
+		resumed = 0;
 		int64 chunk = (int64)flags.chunk_mib << 20;
 		out = to.Open(part, true, error);
 		if(!out)
@@ -424,6 +532,7 @@ struct Runner {
 					.Int(1, run).Int(2, seq).Int(3, next).Run();
 			}
 			Line(Format("resuming %s at chunk %d of %d", rel, next + 1, count));
+			resumed = min(next * chunk, size);
 		}
 		// Locally, whatever lies past the checked chunks goes (a torn chunk, an older and
 		// longer attempt), so the slices left unwritten below are holes, not old bytes.
@@ -451,11 +560,22 @@ struct Runner {
 					chunk_sha.Put(buf, (int)n);
 				src_sha.Put(buf, (int)n);
 				if(!sparse || !AllZero(buf, n)) {
+					if(!RoomFor(side, n)) {
+						error = "stopped";
+						return false;
+					}
 					if(!out->WriteAt(off + k, buf, n, error))
 						return false;
+					Wrote(side, n);
 					written_end = off + k + n;
 					if(count_write)
 						report.Count(n);
+				}
+				{
+					// The run's bytes count as they are written (a hole as it is passed),
+					// not when the chunk is read back and recorded.
+					Lock l(mx);
+					result.bytes += n;
 				}
 				// Within a chunk too, about four times a second, so a thermometer
 				// moves smoothly even when one chunk takes many seconds. Only inside
@@ -497,7 +617,6 @@ struct Runner {
 				if(count > 1)
 					Sql("INSERT OR REPLACE INTO chunks VALUES (?, ?, ?, ?, ?, ?)")
 						.Int(1, run).Int(2, seq).Int(3, idx).Int(4, off).Int(5, len).Text(6, sent).Run();
-				result.bytes += len;
 			}
 			p.done = off + len;
 			p.seconds = Since(t0);
@@ -580,6 +699,7 @@ struct Runner {
 		bool ok = false;
 		One<TreeFile> out;
 		String src_hash, dst_hash;
+		int64 resumed = 0;
 		for(int attempt = 0; attempt <= flags.retries; attempt++) {
 			if(attempt) {
 				Line(Format("retry %d of %d in %d s: %s (%s)", attempt, flags.retries,
@@ -592,7 +712,7 @@ struct Runner {
 				if(!in)
 					continue;
 			}
-			ok = ChunkCopy(s.seq, *in, to, !from.IsLocal(), e.rel, part, now.size, p, t0, out, src_hash, dst_hash, error);
+			ok = ChunkCopy(s.seq, 1 - a.dir, *in, to, !from.IsLocal(), e.rel, part, now.size, p, t0, out, src_hash, dst_hash, resumed, error);
 			if(ok || error == "stopped" || report.Stopping() || Permanent(error) || from.Lost() || to.Lost())
 				break;   // a lost connection is waited for by RunStep, not retried here
 		}
@@ -652,6 +772,8 @@ struct Runner {
 		// The copy's attributes as they now are, so the row shows whether they were kept.
 		Entry placed;
 		bool have_placed = to.IsLocal() && FdEntry(out->Fd(), placed);
+		struct stat st;
+		int64 disk = have_placed && fstat(out->Fd(), &st) == 0 ? (int64)st.st_blocks * 512 : -1;
 		out.Clear();
 		if(have_placed) {
 			row.mode[1] = placed.mode;
@@ -667,6 +789,33 @@ struct Runner {
 		if(row.attr_diff.GetCount())
 			Line("warning: attributes not all kept for " + e.rel + ": " + row.attr_diff);
 		Check(row);
+		{
+			// For the report at the end: the copy as it is now, next to the source. Over
+			// SFTP a big file's size is asked for again; a small one's read back whole.
+			CopyProof proof;
+			proof.rel = e.rel;
+			proof.size[0] = now.size;
+			proof.size[1] = now.size;
+			Entry there;
+			String ignore;
+			if(have_placed)
+				proof.size[1] = placed.size;
+			else if(now.size >= (16 << 20) && to.Stat(e.rel, false, there, ignore))
+				proof.size[1] = there.size;
+			proof.sha[0] = expect;
+			proof.sha[1] = got;
+			for(int i = 0; i < 2; i++) {
+				proof.mtime_ns[i] = row.mtime_ns[i];
+				proof.mode[i] = row.mode[i];
+				proof.uid[i] = row.uid[i];
+				proof.gid[i] = row.gid[i];
+			}
+			proof.disk = disk;
+			proof.resumed = resumed;
+			proof.attr_diff = row.attr_diff;
+			Lock l(mx);
+			result.copies.Add(pick(proof));
+		}
 		p.done = p.size;
 		p.seconds = Since(t0);
 		Progress(p);
@@ -747,6 +896,8 @@ struct Runner {
 		int r = c.fs[1 - a.dir]->Remove(a.from.rel, a.from.type == 'd', error);
 		if(r < 0)
 			return false;
+		if(r == 0 && a.from.type == 'f')
+			Freed(1 - a.dir, a.from.size);
 		Line(r ? "kept folder " + a.from.rel + ": it still holds excluded files"
 		       : "deleted " + a.from.rel);
 		return true;

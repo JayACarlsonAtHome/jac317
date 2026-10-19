@@ -999,6 +999,28 @@ bool SftpFs::List(const String& rel, Vector<FolderEntry>& out, String& error)
 	return n >= 0;
 }
 
+// SFTP's statvfs (an OpenSSH extension), so no shell is needed on the server.
+bool SftpFs::FreeSpace(int64& free, int64& total, int64& block, String& error)
+{
+	Impl& m = *impl;
+	String p = m.root;
+	for(;;) {
+		LIBSSH2_SFTP_STATVFS st;
+		if(libssh2_sftp_statvfs(m.sftp, p, p.GetCount(), &st) == 0) {
+			free = (int64)st.f_bavail * st.f_frsize;
+			total = (int64)st.f_blocks * st.f_frsize;
+			block = max<int64>(st.f_frsize, 512);
+			return true;
+		}
+		String up = GetFileFolder(p);
+		if(m.Fx() != LIBSSH2_FX_NO_SUCH_FILE || up.IsEmpty() || up == p) {
+			error = m.Err("cannot tell the free space of " + m.root);
+			return false;
+		}
+		p = up;
+	}
+}
+
 String SftpFs::RootPath() const
 {
 	return impl->root;

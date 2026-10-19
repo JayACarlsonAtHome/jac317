@@ -10,5 +10,6 @@ file
 	PathPicker.cpp,
 	Messages.cpp,
 	SyncRun.cpp,
+	Edit.cpp,
 	History.cpp,
 	main.cpp;

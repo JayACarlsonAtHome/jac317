@@ -197,7 +197,7 @@ The same from a terminal:
 | The manual | `/usr/local/share/doc/treesync/pdf/` (the Help menu finds it there) |
 | What was installed | `/usr/local/share/doc/treesync/INSTALLED-gcc`, `INSTALLED-clang`: build, commit, who, when, the SHA-256 of its `treesync-cli` |
 | App list entries | `/usr/local/share/applications/treesync-root-gcc.desktop`, `treesync-home-gcc.desktop` (and `-clang`): **TreeSyncRoot-GCC**, **TreeSyncHome-GCC**, **TreeSyncRoot-Clang**, **TreeSyncHome-Clang**, in the TreeSyncApp folder |
-| polkit actions | `/usr/share/polkit-1/actions/org.treesync.run-as-root.policy`, one per compiler: TreeSyncRoot's runs ask for the password once, then not again for a few minutes |
+| polkit actions | `/usr/share/polkit-1/actions/org.treesync.run-as-root.policy`, one per compiler: TreeSyncRoot asks for the password once per window, and a new window within a few minutes does not ask again |
 
 Each sync program runs the `treesync-cli` of its own compiler: TreeSyncRoot-Clang
 never runs the GCC engine. Both builds share your settings, database and logs.

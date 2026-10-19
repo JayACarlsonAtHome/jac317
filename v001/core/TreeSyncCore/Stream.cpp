@@ -126,6 +126,8 @@ struct Streamer {
 		}
 		if(dry)
 			assume_empty = true;
+		else if(!flags.safe_delete)
+			r.PollFree(1);   // what deleting it all gave back
 		r.Line(Format("%s the target first: %d %s%s", dry ? "would empty" : "emptied", n, n == 1 ? "entry" : "entries",
 		              flags.safe_delete ? " moved to " + r.old_roots[1] : String(" deleted")));
 		return true;
@@ -786,6 +788,87 @@ struct Streamer {
 
 }
 
+// --precheck: before anything is copied, the most the copies can need on the target.
+// Both trees are listed folder by folder (one request per folder, a remote side too),
+// with the run's filters; nothing is read or hashed. A file counts when the target
+// has none of that name or one of another size or time (one whose time alone differs
+// may turn out the same: so this is the most), in whole disk blocks. Holes are not
+// known before a file is read, so a VM image of mostly zeros needs far less. freed:
+// the target files the copies replace or the wipe empties; only counted without safe
+// delete (with it they move to .old on the same disk).
+static bool CheckRoom(Runner& r, TreeFs& src, TreeFs& dst, int64 block, int64& need, int64& files, String& error)
+{
+	const SyncFlags& flags = r.flags;
+	NameFilter filter(flags);
+	need = files = 0;
+	int64 freed = 0;
+	Index<Tuple<int64, int64>> linked;   // hard-linked files: counted once
+	Vector<Tuple<String, bool>> todo;   // folders still to list: path, inside an included folder
+	todo.Add(MakeTuple(String(), filter.RootInside()));
+	auto last = std::chrono::steady_clock::now();
+	while(todo.GetCount()) {
+		if(r.report.Stopping()) {
+			error = "stopped";
+			return false;
+		}
+		Tuple<String, bool> d = todo.Pop();
+		const String& rel = d.a;
+		bool inside = d.b;
+		Vector<FolderEntry> sl, tl;
+		if(!src.List(rel, sl, error))
+			return false;
+		String ignore;
+		VectorMap<String, int> there;
+		if(dst.List(rel, tl, ignore))
+			for(int i = 0; i < tl.GetCount(); i++)
+				there.Add(tl[i].name, i);
+		for(const FolderEntry& f : sl) {
+			if(f.name == "." || f.name == ".." || SkipName(f.name))
+				continue;
+			String crel = rel.IsEmpty() ? f.name : rel + "/" + f.name;
+			bool dir = f.type == 'd' || (f.is_link && f.is_dir && flags.follow_links);
+			if(dir) {
+				if(!filter.SkipDir(crel) && (f.type == 'd' || flags.follow_links))
+					todo.Add(MakeTuple(crel, filter.Inside(inside, crel)));
+				continue;
+			}
+			if(f.type != 'f' || !filter.KeepFile(inside, crel))
+				continue;
+			if(flags.hard_links && f.nlink > 1 && f.dev) {
+				Tuple<int64, int64> id = { f.dev, f.ino };
+				if(linked.Find(id) >= 0)
+					continue;
+				linked.Add(id);
+			}
+			int q = there.Find(f.name);
+			const FolderEntry *t = q >= 0 ? &tl[there[q]] : nullptr;
+			if(!flags.wipe_target && !flags.include_same) {
+				if(!t && flags.skip_source_only)
+					continue;
+				if(t && t->type == 'f') {
+					Entry se, te;
+					se.mtime_ns = f.mtime_ns;
+					te.mtime_ns = t->mtime_ns;
+					bool same_time = abs(f.mtime_ns - t->mtime_ns) <= max<int64>(ToleranceNs(flags), 999999999);
+					if((f.size == t->size && same_time) || TimeSkip(flags, se, te))
+						continue;
+				}
+			}
+			need += (f.size + block - 1) / block * block;
+			files++;
+			if(t && t->type == 'f' && !flags.safe_delete)
+				freed += t->size;
+			if(std::chrono::steady_clock::now() - last > std::chrono::milliseconds(250)) {
+				last = std::chrono::steady_clock::now();
+				Runner::Lock l(r.mx);
+				r.report.WhenStatus(Format("Checking there is room: %s to copy so far  %s", FormatBytes(need), crel));
+			}
+		}
+	}
+	need = max<int64>(0, need - freed);
+	return true;
+}
+
 bool RunStreaming(Runner& r, TreeFs *side[2], const String& key, bool fresh, String& error)
 {
 	Db& db = r.db;
@@ -826,6 +909,37 @@ bool RunStreaming(Runner& r, TreeFs *side[2], const String& key, bool fresh, Str
 	}
 	if(!side[1]->RootExists() && !flags.dry_run && !side[1]->MakeRoot(error))
 		return false;
+
+	// Room for the copies? A dry run only says; a real run does not start when they may
+	// not fit (the GUI offers to start anyway: --no-precheck).
+	if(flags.precheck && r.space[1].known && !result.resumed) {
+		int64 need, files;
+		String err;
+		if(CheckRoom(r, *side[0], *side[1], r.space[1].block, need, files, err)) {
+			int64 free = r.FreeNow(1), reserve = FreeReserve(r.space[1].total);
+			result.room_need = need;
+			result.room_free = free;
+			bool fits = need + reserve <= free;
+			report.WhenLine(Format("room check: the copies need at most %s (%d file%s); the target disk has %s free%s",
+			                       FormatBytes(need), (int)files, files == 1 ? "" : "s", FormatBytes(free),
+			                       fits ? String(": room to copy")
+			                            : ", " + FormatBytes(reserve) + " of it kept in reserve: MAY NOT FIT"));
+			if(!fits && !flags.dry_run) {
+				result.no_room = true;
+				Stmt(db, "UPDATE runs SET state = 'stopped' WHERE id = ?").Int(1, r.run).Run();
+				error = "the copies may not fit: they need up to " + FormatBytes(need) + " and the target disk has " +
+				        FormatBytes(free) + " free (" + FormatBytes(reserve) + " kept in reserve). Files with runs of "
+				        "zeros (VM images) need less than their size; --no-precheck starts anyway";
+				return false;
+			}
+		}
+		else if(err == "stopped") {
+			result.stopped = true;
+			return true;
+		}
+		else
+			report.WhenLine("room check skipped: " + err);
+	}
 
 	HashCache cache0(db, src, flags, !side[0]->StableIds());
 	HashCache cache1(db, dst, flags, !side[1]->StableIds());

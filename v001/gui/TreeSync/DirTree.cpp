@@ -70,6 +70,16 @@ String DirTree::Rel(int id) const
 	return key.Mid(root_key.GetCount() + (root_key.EndsWith("/") ? 0 : 1));
 }
 
+bool DirTree::Selected(String& rel, bool& folder) const
+{
+	int id = GetCursor();
+	if(id < 0 || root_key.IsEmpty())
+		return false;
+	rel = Rel(id);
+	folder = id == 0 || GetNode(id).canopen;
+	return true;
+}
+
 // The folders on the way to the node are listed (it is on screen): their names come
 // from the tree.
 void DirTree::Toggle(int id)
@@ -147,6 +157,7 @@ void DirTree::Load(const char *caption, const TreeEndpoint& e, bool follow, cons
 	StopRemote();
 	Clear();
 	boxes.Clear();
+	root_key.Clear();   // no tree until one is set
 	follow_links = follow;
 	is_remote = e.remote;
 	if(e.path.IsEmpty()) {

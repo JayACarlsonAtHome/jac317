@@ -12,8 +12,13 @@
 //   @overall <TAB> done <TAB> total
 //   @stage <TAB> stage <TAB> done <TAB> total <TAB> finished <TAB> detail   (0 pre-scan, 2 post-scan)
 //   @net <TAB> down <TAB> host <TAB> wait   (1: lost the connection, waiting up to wait s; 0: back)
+//   @free <TAB> side <TAB> free <TAB> total <TAB> exact   (0 source, 1 target; exact: just asked,
+//         else worked out from what was written since; at most once a second)
+//   @proof <TAB> line   (the end-of-run check of the copies, again, for the GUI's popup)
 // which the GUI turns into thermometers instead of log lines.
-// Exit codes: 0 in sync, 1 failures or conflicts, 2 usage or setup error, 3 stopped.
+// Exit codes: 0 in sync, 1 failures or conflicts, 2 usage or setup error, 3 stopped
+// (also by itself, when the target disk was nearly full), 4 may not fit (--precheck:
+// nothing was copied; --no-precheck starts anyway).
 #include <TreeSyncCore/TreeSyncCore.h>
 
 #include <csignal>
@@ -263,6 +268,19 @@ CONSOLE_APP_MAIN
 		}
 	}
 
+	// --edit=OP --edit-side=source|target --edit-path=REL [--edit-name=NAME]: one change
+	// to a tree (the GUI's right-click menu); see TreeEdit.
+	String edit, edit_side, edit_path, edit_name;
+	for(int i = args.GetCount() - 1; i >= 0; i--) {
+		String *v = args[i].StartsWith("--edit=") ? &edit : args[i].StartsWith("--edit-side=") ? &edit_side
+		          : args[i].StartsWith("--edit-path=") ? &edit_path : args[i].StartsWith("--edit-name=") ? &edit_name
+		          : nullptr;
+		if(v) {
+			*v = args[i].Mid(args[i].Find('=') + 1);
+			args.Remove(i);
+		}
+	}
+
 	SyncSetup setup;
 	String error;
 	switch(ParseCommandLine(args, setup, error)) {
@@ -327,6 +345,14 @@ CONSOLE_APP_MAIN
 		if(gui_progress)
 			Cout() << std::format("@overall\t{}\t{}\n", done, total);
 	};
+	// The disk's real free space (at the start and the end) goes in the log; the worked-out
+	// one in between only to the GUI.
+	report.WhenFree = [](int side, int64 free, int64 total, bool exact) {
+		if(gui_progress)
+			Cout() << std::format("@free\t{}\t{}\t{}\t{}\n", side, free, total, exact ? 1 : 0);
+		if(exact)
+			Print(String(side ? "target" : "source") + " disk: " + FormatBytes(free) + " free of " + FormatBytes(total));
+	};
 
 	if(compare_ids) {
 		String out;
@@ -357,6 +383,13 @@ CONSOLE_APP_MAIN
 	if(scan_only) shown.Add("--scan-only");
 	if(sync_attrs) shown.Add("--sync-attrs");
 	if(clear_old) shown.Add("--clear-old");
+	if(edit.GetCount()) {
+		shown.Add("--edit=" + edit);
+		shown.Add("--edit-side=" + edit_side);
+		shown.Add("--edit-path=" + edit_path);
+		if(edit_name.GetCount())
+			shown.Add("--edit-name=" + edit_name);
+	}
 	Print(CommandLineText(shown));
 	Print("log: " + log_path);
 	SyncResult result;
@@ -366,7 +399,14 @@ CONSOLE_APP_MAIN
 	Print("started: " + DateTimeText(started));
 	CheckResult check;
 	ClearResult cleared;
-	bool ok = scan_only || sync_attrs ? RunCheck(setup, scan_only ? CheckMode::Scan : CheckMode::Attrs, report, check, error)
+	EditResult edited;
+	if(edit.GetCount() && edit_side != "source" && edit_side != "target") {
+		Print("treesync-cli: --edit-side must be source or target");
+		SetExitCode(2);
+		return;
+	}
+	bool ok = edit.GetCount() ? TreeEdit(setup, edit_side == "target", edit, edit_path, edit_name, report, edited, error)
+	        : scan_only || sync_attrs ? RunCheck(setup, scan_only ? CheckMode::Scan : CheckMode::Attrs, report, check, error)
 	        : clear_old ? ClearOld(setup, setup.flags.dry_run, report, error, &cleared)
 	        : RunSync(setup, report, result, error);
 	if(scan_only || sync_attrs) {
@@ -375,10 +415,27 @@ CONSOLE_APP_MAIN
 		result.failed = check.failed;
 	}
 	SetRunLog(setup.db, result.run, log_path);
+	// The copies, as checked: bytes and SHA-256 of both sides. With --gui-progress each
+	// line also goes out tagged @proof, for the GUI's end-of-run popup.
+	auto copy_report = [&] {
+		for(const String& l : CopyReport(result.copies, result.bytes)) {
+			Print(l);
+			if(gui_progress) {
+				Cout() << "@proof\t" << l << "\n";
+				Cout().Flush();
+			}
+		}
+	};
 	int64 ended = (int64)time(nullptr);
 	int code = 0;
 	String status, summary;
-	if(!ok) {
+	if(!ok && result.no_room) {   // nothing copied; --no-precheck starts anyway
+		Print("treesync-cli: " + error);
+		code = 4;
+		status = "May not fit";
+		summary = Format("needs up to %s, %s free", FormatBytes(result.room_need), FormatBytes(result.room_free));
+	}
+	else if(!ok) {
 		Print("treesync-cli: " + error);
 		code = 2;
 		status = "Error";
@@ -399,6 +456,10 @@ CONSOLE_APP_MAIN
 		                    : Format("%d of %d attribute differences %s, %d failed", check.fixed, check.attr_diffs,
 		                             setup.flags.dry_run ? "would be set" : "set", check.failed);
 	}
+	else if(edit.GetCount()) {
+		status = "Good";
+		summary = edit_side + ": " + edited.done;
+	}
 	else if(clear_old) {   // a count only is not a clear: the status says which it was
 		status = cleared.found == 0 ? "Nothing to clear" : setup.flags.dry_run ? "Counted, not deleted" : "Good";
 		summary = cleared.found == 0 ? String("no .old folder")
@@ -411,19 +472,27 @@ CONSOLE_APP_MAIN
 			             result.done, result.planned));
 		else
 			Print("stopped while scanning; the hashes finished so far are kept, so the next run is quicker");
+		copy_report();
 		code = 3;
-		status = "Stopped";
+		status = result.disk_full ? "Stopped: disk full" : "Stopped";
 		summary = Format("%d of %d actions done", result.done, result.planned);
+		if(result.disk_full)
+			summary << "; the disk was nearly full";
+		if(result.copies.files)
+			summary << "; " << CopyReportShort(result.copies);
 	}
 	else {
 		code = result.failed || result.conflicts ? 1 : 0;
 		status = code ? "Failures or conflicts" : "Good";
 		summary = Format("%d actions, %d failed, %d conflicts, %s copied", result.done, result.failed,
 		                 result.conflicts, FormatBytes(result.bytes));
+		if(result.copies.files)
+			summary << "; " << CopyReportShort(result.copies);
 		if(!setup.flags.dry_run)
 			Print(Format("finished run %d: %d of %d actions done, %d failed, %d conflicts, %s copied",
 			             result.run, result.done, result.planned, result.failed, result.conflicts,
 			             FormatBytes(result.bytes)), run_started);
+		copy_report();
 	}
 	Print("took " + DurationWords(ended - started) + " (" + DurationClock(ended - started) + "), from " +
 	      ClockTime(started) + " to " + ClockTime(ended), run_started);
@@ -435,7 +504,8 @@ CONSOLE_APP_MAIN
 	};
 	const char *mode = setup.flags.mode == SyncMode::Mirror ? "Mirror" : setup.flags.mode == SyncMode::Merge
 	                   ? "Merge" : "Copy";
-	String what = scan_only ? "Scan only run " + AsString(result.run)
+	String what = edit.GetCount() ? "Edit (" + edit + ")"
+	            : scan_only ? "Scan only run " + AsString(result.run)
 	            : sync_attrs ? String(setup.flags.dry_run ? "Attrs dry run " : "Sync attrs run ") + AsString(result.run)
 	            : clear_old ? String(setup.flags.dry_run ? "Clear .old (count)" : "Clear .old")
 	            : setup.flags.dry_run ? String(mode) + " dry run"

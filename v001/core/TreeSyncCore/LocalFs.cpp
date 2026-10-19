@@ -107,6 +107,24 @@ int64 LocalFs::EntryEstimate()
 	return n;
 }
 
+bool LocalFs::FreeSpace(int64& free, int64& total, int64& block, String& error)
+{
+	String p = root;
+	struct statvfs vfs;
+	while(statvfs(p, &vfs) != 0) {
+		String up = GetFileFolder(p);
+		if(errno != ENOENT || up.IsEmpty() || up == p) {
+			error = "cannot tell the free space of " + root + ": " + strerror(errno);
+			return false;
+		}
+		p = up;
+	}
+	free = (int64)(geteuid() == 0 ? vfs.f_bfree : vfs.f_bavail) * vfs.f_frsize;
+	total = (int64)vfs.f_blocks * vfs.f_frsize;
+	block = max<int64>(vfs.f_frsize, 512);
+	return true;
+}
+
 bool LocalFs::StableIds()
 {
 	if(stable < 0) {

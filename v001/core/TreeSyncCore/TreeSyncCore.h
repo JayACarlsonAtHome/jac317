@@ -57,6 +57,7 @@ struct SyncFlags {
 	bool   keep_extra = false;
 	bool   skip_source_only = false;
 	bool   wipe_target = false;      // empty the target first (to .old with safe delete)
+	bool   precheck = true;          // before copying: whether the copies can fit on the target
 	String exclude_files;            // globs, ';'-separated
 	String exclude_dirs;             // globs, ';'-separated
 	String include_files;            // globs, ';'-separated; blank: every file
@@ -112,7 +113,7 @@ extern const char *HELP_INCLUDE_FILES;
 extern const char *HELP_INCLUDE_DIRS;
 extern const char *HELP_OWNERS;           // the Owners choice: off, by name, by number
 
-constexpr int BOOL_OPTION_COUNT = 16;
+constexpr int BOOL_OPTION_COUNT = 17;
 constexpr int INT_OPTION_COUNT = 8;
 extern const BoolOption BOOL_OPTIONS[];
 extern const IntOption  INT_OPTIONS[];

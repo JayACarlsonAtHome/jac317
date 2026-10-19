@@ -123,12 +123,14 @@ bool RunSync(const SyncSetup& setup, SyncReport& report, SyncResult& result, Str
 	key_flags.low_priority = def.low_priority;
 	key_flags.retries = def.retries;
 	key_flags.retry_wait = def.retry_wait;
+	key_flags.precheck = def.precheck;   // "start anyway" continues the same run
 	String key = Join(FlagArgs(key_flags), " ");
 
 	Runner r(db, report, result, setup);
 	for(int i = 0; i < 2; i++) {
 		r.main.fs[i] = ~side[i];
 		r.ids[i] = side[i]->Id();
+		r.PollFree(i);
 	}
 	const String& src = r.ids[0];
 	const String& dst = r.ids[1];

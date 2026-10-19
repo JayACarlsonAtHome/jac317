@@ -630,3 +630,123 @@ bool ClearOld(const SyncSetup& setup, bool dry, SyncReport& report, String& erro
 		*result = total;
 	return true;
 }
+
+// --edit ---------------------------------------------------------------------------
+
+// A path in a tree as the GUI gives it: relative, no "." or ".." or empty steps, and
+// none of TreeSync's own names on the way.
+static bool EditPathOk(const String& rel, String& error)
+{
+	if(rel.IsEmpty())   // the root
+		return true;
+	if(rel.StartsWith("/") || rel.EndsWith("/") || rel.Find('\0') >= 0) {
+		error = "not a path inside the tree: " + rel;
+		return false;
+	}
+	for(const String& step : Split(rel, '/', false)) {
+		if(step.IsEmpty() || step == "." || step == "..") {
+			error = "not a path inside the tree: " + rel;
+			return false;
+		}
+		if(SkipName(step)) {
+			error = step + " is TreeSync's own: it is not changed by hand";
+			return false;
+		}
+	}
+	return true;
+}
+
+bool TreeEdit(const SyncSetup& setup, int side, const String& op, const String& rel, const String& name,
+              SyncReport& report, EditResult& result, String& error)
+{
+	const TreeEndpoint& e = side ? setup.target : setup.source;
+	const char *which = side ? "target" : "source";
+	if(e.path.IsEmpty()) {
+		error = String("no ") + which + " tree is set";
+		return false;
+	}
+	bool named = op == "mkdir" || op == "rename";
+	if(op != "mkdir" && op != "rename" && op != "delete" && op != "delete-for-good") {
+		error = "--edit must be mkdir, rename, delete or delete-for-good";
+		return false;
+	}
+	if(!EditPathOk(rel, error))
+		return false;
+	if(op != "mkdir" && rel.IsEmpty()) {
+		error = String("the ") + which + " tree itself is not renamed or deleted here";
+		return false;
+	}
+	if(named && (name.IsEmpty() || name.Find('/') >= 0 || name == "." || name == ".." || name.Find('\0') >= 0 ||
+	             SkipName(name))) {
+		error = "not a usable name: " + name;
+		return false;
+	}
+	One<TreeFs> fs = MakeSide(e, setup, report, error);
+	if(!fs)
+		return false;
+	if(!fs->RootExists()) {
+		error = String("the ") + which + " tree " + e.path + " does not exist";
+		return false;
+	}
+	String place = rel.IsEmpty() ? name : rel + "/" + name;   // mkdir
+	Entry st;
+	String ignore;
+	if(op == "mkdir") {
+		if(fs->Stat(place, false, st, ignore)) {
+			error = place + " already exists";
+			return false;
+		}
+		if(!fs->Mkdir(place, 0755, error))
+			return false;
+		result.done = "made folder " + place;
+	}
+	else {
+		if(!fs->Stat(rel, false, st, error)) {
+			if(error.IsEmpty())
+				error = "no " + rel + " in the " + which + " tree";
+			return false;
+		}
+		if(op == "rename") {
+			int slash = rel.ReverseFind('/');
+			String to = slash < 0 ? name : rel.Left(slash) + "/" + name;   // in the same folder
+			if(fs->Stat(to, false, st, ignore)) {
+				error = to + " already exists: nothing was renamed";
+				return false;
+			}
+			if(!fs->Rename(rel, to, error))
+				return false;
+			result.done = "renamed " + rel + " to " + to;
+		}
+		else if(op == "delete") {   // safe delete: where a sync's deletes go
+			String old = SafeDeleteFolder(fs->RootPath(), fs->IsLocal());
+			if(side == 1 && setup.safe_delete_dir.GetCount())
+				old = e.remote ? setup.safe_delete_dir : CanonicalPath(setup.safe_delete_dir);
+			String moved;
+			if(!fs->MoveOut(rel, old + "/" + rel, moved, error))
+				return false;
+			result.done = "moved " + rel + " to " + moved;
+			if(st.type == 'd')
+				result.folders = 1;
+			else {
+				result.files = 1;
+				result.bytes = st.size;
+			}
+		}
+		else {
+			if(st.type == 'd') {
+				if(!RemoveTree(*fs, rel, false, report, result.files, result.bytes, result.folders, error))
+					return false;
+			}
+			else {
+				if(fs->Remove(rel, false, error) != 0)
+					return false;
+				result.files = 1;
+				result.bytes = st.size;
+			}
+			result.done = Format("deleted %s for good: %d files, %d folders, %s", rel, result.files, result.folders,
+			                     FormatBytes(result.bytes));
+		}
+	}
+	report.WhenLine(result.done);
+	return true;
+}

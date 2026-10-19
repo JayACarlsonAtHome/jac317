@@ -6,6 +6,7 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/xattr.h>
 #include <sys/resource.h>
 #include <sys/syscall.h>
@@ -657,6 +658,18 @@ static void TestEngineResume(const String& root)
 	Sync(s, r2, &lines, &stop);
 	EXPECT(r2.resumed && r2.run == r1.run, Format("resumed run %d (first was %d)", r2.run, r1.run));
 	EXPECT(r2.bytes < size, Format("resume copied %s, less than the %s file", FormatBytes(r2.bytes), FormatBytes(size)));
+	{
+		const CopyProofs& c = r2.copies;
+		const CopyProof *big = nullptr;
+		for(const CopyProof& p : c.biggest)
+			if(p.rel == "a big.bin")
+				big = &p;
+		EXPECT(big && big->resumed >= chunk && big->resumed < size && big->size[1] == size && big->sha[0] == big->sha[1],
+		       Format("the report says what the stopped run had copied (%s)", big ? FormatBytes(big->resumed) : String("no row")));
+		String text = Join(CopyReport(c, r2.bytes), "\n");
+		EXPECT(text.Find("copied by the stopped run before it") >= 0 && CopyReportShort(c).Find("copied by the stopped run") >= 0,
+		       "the report explains why this run copied fewer bytes than the file has");
+	}
 	bool said = false;
 	String about;   // what the run said about the big file, shown when the check fails
 	for(const String& l : lines) {
@@ -1125,6 +1138,132 @@ static void TestChecks(const String& root)
 
 // A sparse file past 4 GiB: offsets beyond 32 bits, and the copy stays sparse (zero
 // slices are not written). Holes cost no disk, only reading (zeros, hashed twice).
+// The report at the end of a run: both sides' bytes and SHA-256, and why the copies
+// take less disk than they hold (holes).
+static void TestCopyReport(const String& root)
+{
+	String src = root + "/cr-src", dst = root + "/cr-dst", db = root + "/report.db";
+	RealizeDirectory(src);
+	const int64 SIZE = 8LL << 20;   // 8 MiB, data only in the last MiB
+	String tail = Big(1 << 20, 11);
+	int fd = open(src + "/disk.img", O_CREAT | O_WRONLY | O_CLOEXEC, 0644);
+	bool made = fd >= 0 && ftruncate(fd, SIZE) == 0 && pwrite(fd, ~tail, tail.GetCount(), SIZE - tail.GetCount()) == tail.GetCount();
+	if(fd >= 0)
+		close(fd);
+	EXPECT(made, "made an 8 MiB sparse file");
+	Put(src + "/small.txt", "small\n");
+	SyncSetup s = Setup(src, dst, db);
+	SyncResult r;
+	Sync(s, r);
+	const CopyProofs& c = r.copies;
+	EXPECT(r.failed == 0 && c.files == 2 && c.matched == 2, Format("2 copies checked (%d, %d matched)", c.files, c.matched));
+	EXPECT(c.size[0] == SIZE + 6 && c.size[1] == c.size[0], Format("bytes on both sides: %lld, %lld", c.size[0], c.size[1]));
+	EXPECT(c.biggest.GetCount() == 2 && c.biggest[0].rel == "disk.img" && c.biggest[0].sha[0] == c.biggest[0].sha[1] &&
+	       c.biggest[0].sha[0].GetCount() == 64, "the biggest first, with both SHA-256s");
+	EXPECT(c.biggest[0].disk >= 0 && c.biggest[0].disk < SIZE, Format("the copy's disk use is known and below its size (%lld)",
+	                                                                   c.biggest[0].disk));
+	EXPECT(c.resumed == 0 && c.attr_diffs == 0, "nothing resumed, attributes kept");
+	Vector<String> lines = CopyReport(c, r.bytes);
+	String text = Join(lines, "\n");
+	EXPECT(lines.GetCount() && lines[0].Find("matches its source") >= 0 && text.Find("8,388,614 on the source, 8,388,614 in the copies: the same") >= 0,
+	       "report: totals to the byte, the same on both sides: " + (lines.GetCount() ? lines[0] : String()));
+	EXPECT(text.Find("  MATCH") >= 0 && text.Find("holes") >= 0 && text.Find("on both") >= 0,
+	       "report: MATCH per file, holes explained, time and mode on both");
+	EXPECT(CopyReportShort(c) == "2 files checked: 8,388,614 bytes on both sides, SHA-256 match", "short: " + CopyReportShort(c));
+	EXPECT(CopyReport(CopyProofs(), 0).IsEmpty(), "no copies: no report");
+}
+
+// Free space: asked for real at the start and the end of a run, both sides, even for a
+// target that does not exist yet (its nearest parent's disk).
+static void TestFreeSpace(const String& root)
+{
+	String src = root + "/fs-src", dst = root + "/fs-dst/not/yet", db = root + "/free.db";
+	Put(src + "/a.bin", Big(2 << 20, 21));
+	Put(src + "/b.bin", Big(2 << 20, 22));
+	SyncSetup s = Setup(src, dst, db);
+	SyncReport report;
+	Vector<Tuple<int, int64, int64, bool>> seen;
+	report.WhenFree = [&](int side, int64 free, int64 total, bool exact) { seen.Add(MakeTuple(side, free, total, exact)); };
+	SyncResult r;
+	String err;
+	bool ok = RunSync(s, report, r, err);
+	int exact[2] = {};
+	bool sane = true;
+	for(const auto& t : seen) {
+		if(t.d)
+			exact[t.a]++;
+		sane = sane && t.b >= 0 && t.c > 0 && t.b <= t.c;
+	}
+	EXPECT(ok && r.failed == 0, "copied: " + err);
+	EXPECT(seen.GetCount() >= 4 && seen[0].d && seen[1].d && seen[0].a == 0 && seen[1].a == 1,
+	       Format("free space of both sides asked at the start (%d reports)", seen.GetCount()));
+	EXPECT(exact[0] >= 2 && exact[1] >= 2 && seen.Top().d, Format("and again at the end (source %d, target %d exact)",
+	                                                              exact[0], exact[1]));
+	EXPECT(sane, "free between 0 and the disk's size");
+}
+
+// --precheck: the most the copies can need, from a listing of both trees: new and changed
+// files at full size in whole blocks; files the target already has are not counted.
+static void TestRoomCheck(const String& root)
+{
+	String src = root + "/rc-src", dst = root + "/rc-dst", db = root + "/room.db";
+	Put(src + "/same.bin", Big(300000, 31));
+	Put(src + "/sub/changed.bin", Big(5000, 32));
+	SyncSetup s = Setup(src, dst, db);
+	SyncResult r1;
+	Sync(s, r1);
+	EXPECT(r1.room_need >= 300000 && r1.room_free > 0, Format("first run: room checked (%lld needed)", r1.room_need));
+	Put(src + "/sub/changed.bin", Big(7000, 33));   // other size
+	Put(src + "/new.bin", Big(1, 34));
+	s.flags.dry_run = true;
+	SyncResult r2;
+	Sync(s, r2);
+	int64 block = 4096;
+	struct statvfs vfs;
+	if(statvfs(dst, &vfs) == 0)
+		block = max<int64>(vfs.f_frsize, 512);
+	int64 want = (7000 + block - 1) / block * block + block;
+	EXPECT(r2.room_need == want, Format("dry run: needs %lld (changed and new file, whole blocks), want %lld", r2.room_need, want));
+	EXPECT(FreeReserve(1LL << 40) == 4LL << 30 && FreeReserve(100LL << 30) == 1LL << 30 &&
+	       FreeReserve(20LL << 20) == 1LL << 20, "reserve: 1%, 256 MiB or 5% of a small disk, at most 4 GiB");
+	s.flags.precheck = false;
+	SyncResult r3;
+	Sync(s, r3);
+	EXPECT(r3.room_need < 0, "--no-precheck: not checked");
+}
+
+// --edit: the right-click changes, and what they refuse.
+static void TestEdits(const String& root)
+{
+	String src = root + "/ed-src", dst = root + "/ed-dst", db = root + "/edit.db";
+	Put(src + "/keep.txt", "k\n");
+	Put(dst + "/a.txt", "a\n");
+	Put(dst + "/d/b.txt", "b\n");
+	SyncSetup s = Setup(src, dst, db);
+	auto edit = [&](int side, const char *op, const String& rel, const String& name, String& err) {
+		SyncReport report;
+		EditResult r;
+		err.Clear();
+		return TreeEdit(s, side, op, rel, name, report, r, err);
+	};
+	String err;
+	EXPECT(edit(1, "mkdir", "", "New", err) && DirectoryExists(dst + "/New"), "new folder at the top: " + err);
+	EXPECT(edit(1, "mkdir", "d", "deeper", err) && DirectoryExists(dst + "/d/deeper"), "new folder inside one: " + err);
+	EXPECT(!edit(1, "mkdir", "", "New", err) && err.Find("already exists") >= 0, "a folder that exists: " + err);
+	EXPECT(edit(1, "rename", "a.txt", "a2.txt", err) && FileExists(dst + "/a2.txt") && !FileExists(dst + "/a.txt"),
+	       "rename: " + err);
+	EXPECT(!edit(1, "rename", "a2.txt", "d", err) && FileExists(dst + "/a2.txt"), "rename never replaces: " + err);
+	EXPECT(edit(1, "delete", "a2.txt", "", err) && !FileExists(dst + "/a2.txt") && FileExists(dst + ".old/a2.txt"),
+	       "delete moves to the .old folder: " + err);
+	EXPECT(edit(1, "delete-for-good", "d", "", err) && !DirectoryExists(dst + "/d") && !DirectoryExists(dst + ".old/d"),
+	       "delete for good, a folder and all in it: " + err);
+	EXPECT(edit(0, "rename", "keep.txt", "kept.txt", err) && FileExists(src + "/kept.txt"), "the source side too: " + err);
+	EXPECT(!edit(1, "delete", "", "", err), "the tree itself is refused");
+	EXPECT(!edit(1, "delete", "../x", "", err) && !edit(1, "rename", "New", "a/b", err) &&
+	       !edit(1, "mkdir", "", ".treesync-old", err) && !edit(1, "delete", "x.treesync-part", "", err) &&
+	       !edit(1, "frobnicate", "New", "", err), "bad paths, names, TreeSync's own files and unknown changes refused");
+}
+
 static void TestSparseBig(const String& root)
 {
 #ifdef _DEBUG
@@ -1394,6 +1533,10 @@ CONSOLE_APP_MAIN
 	TestCliLikeGui(eroot);
 	TestStreaming(eroot);
 	TestChecks(eroot);
+	TestCopyReport(eroot);
+	TestFreeSpace(eroot);
+	TestRoomCheck(eroot);
+	TestEdits(eroot);
 	TestSparseBig(eroot);
 	TestSafeDeleteInside(eroot);
 	TestWipe(eroot);

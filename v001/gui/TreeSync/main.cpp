@@ -2,6 +2,8 @@
 // side by side, each with a disk / mount / path picker, the setup screen, the runs.
 #include "TreeSync.h"
 
+#include <sys/statvfs.h>
+
 bool run_as_root = false;
 
 String CompilerTag()
@@ -29,7 +31,28 @@ static String AppSettingsPath()
 TreePanel::TreePanel()
 {
 	Add(picker.HSizePosZ(4, 4).TopPosZ(4, PathPicker::Height));
-	Add(tree.HSizePosZ(0, 0).VSizePosZ(PathPicker::Height + 8, 0));
+	Add(tree.HSizePosZ(0, 0).VSizePosZ(PathPicker::Height + 8, 24));
+	Add(used.LeftPosZ(4, 120).BottomPosZ(5, 14));
+	Add(free.HSizePosZ(132, 4).BottomPosZ(2, 20));
+	used.Set(0, 1000);
+}
+
+void TreePanel::ShowFree(int64 free_bytes, int64 total, bool exact)
+{
+	used.Set(total > 0 ? (int)((total - free_bytes) * 1000 / total) : 0, 1000);
+	free = String(exact ? "" : "~") + FormatBytes(free_bytes) + " free of " + FormatBytes(total) +
+	       Format(" (%d%% used)", total > 0 ? (int)((total - free_bytes) * 100 / total) : 0);
+	free.Tip(exact ? "The disk's free space, as the disk says"
+	               : "Worked out from what this run has written; the disk is asked again at the end");
+	free.SetInk(total > 0 && free_bytes < total / 20 ? LtRed() : SColorText());   // under 5% free
+}
+
+void TreePanel::NoFree(const String& why)
+{
+	used.Set(0, 1000);
+	free = why;
+	free.Tip(String());
+	free.SetInk(SColorDisabled());
 }
 
 TreeSyncWindow::TreeSyncWindow()
@@ -76,6 +99,8 @@ TreeSyncWindow::TreeSyncWindow()
 	// The source tree's checkboxes choose what is synced (--include-path, relative to
 	// the source: a new source starts with everything checked).
 	source_panel.tree.Checks();
+	source_panel.tree.WhenBar = [this](Bar& bar) { EditMenu(bar, 0); };
+	target_panel.tree.WhenBar = [this](Bar& bar) { EditMenu(bar, 1); };
 	source_panel.tree.WhenChecks = [this] {
 		setup.flags.include_paths = source_panel.tree.GetChecked();
 		ShowStatus();
@@ -179,6 +204,37 @@ void TreeSyncWindow::LoadTrees()
 	target_panel.picker.Set(setup.target.path);
 	target_panel.picker.Remote(setup.target.remote);
 	target_panel.tree.Load("Target", setup.target, setup.flags.follow_links, setup.known_hosts);
+	// Free space: a local tree's disk is asked here (its nearest existing folder); a
+	// remote one's comes with a run (the server is asked then), and stays until the
+	// tree changes.
+	auto disk = [](TreePanel& panel, const TreeEndpoint& e) {
+		String key = (e.remote ? e.user + "@" + e.host + ":" : String()) + e.path;
+		if(e.path.IsEmpty()) {
+			panel.NoFree(String());
+			panel.free_for = key;
+			return;
+		}
+		if(e.remote) {
+			if(panel.free_for != key)
+				panel.NoFree("Free space: shown when a run starts");
+			panel.free_for = key;
+			return;
+		}
+		panel.free_for = key;
+		String p = e.path;
+		struct statvfs vfs;
+		while(statvfs(p, &vfs) != 0) {
+			String up = GetFileFolder(p);
+			if(up.IsEmpty() || up == p) {
+				panel.NoFree("Free space: cannot be told");
+				return;
+			}
+			p = up;
+		}
+		panel.ShowFree((int64)vfs.f_bavail * vfs.f_frsize, (int64)vfs.f_blocks * vfs.f_frsize, true);
+	};
+	disk(source_panel, setup.source);
+	disk(target_panel, setup.target);
 }
 
 void TreeSyncWindow::ProgressVisible(bool on)

@@ -81,6 +81,13 @@ const BoolOption BOOL_OPTIONS[] = {
 	  "moved into <target>.old, which is instant and loses nothing. With it off, they are deleted "
 	  "for good.\n"
 	  "Refused for /, your home folder itself and system folders, and in Merge mode. Off by default." },
+	{ "precheck", &SyncFlags::precheck, "", "Check there is room before copying",
+	  "Before anything is copied, both trees are listed (quickly, without reading files) to add up "
+	  "the most the copies can need, and that is compared with the target disk's free space. If it may "
+	  "not fit, the run does not start; the GUI then asks whether to start anyway. It cannot be exact: "
+	  "a file whose content is mostly zeros (a VM image) takes much less disk than its size, and that "
+	  "is only known when it is read. Whether on or off, a run stops by itself, resumable, when the "
+	  "target is nearly full." },
 };
 static_assert(std::size(BOOL_OPTIONS) == BOOL_OPTION_COUNT);
 
@@ -476,7 +483,15 @@ String Usage()
 	  << "  --clear-old            (treesync-cli) Delete the --safe-delete folders (<target>.old,\n"
 	  << "                         <source>.old or --safe-delete-dir) for good (--dry-run: count)\n"
 	  << "  --home                 (treesync-cli) Run as yourself, inside your home: the installed\n"
-	  << "                         copy started by an administrator otherwise runs through sudo\n\n"
+	  << "                         copy started by an administrator otherwise runs through sudo\n"
+	  << "  --edit=OP              (treesync-cli) One change by hand, no sync (the GUI's right-click\n"
+	  << "                         menu): mkdir, rename, delete (to the .old folder) or\n"
+	  << "                         delete-for-good, with --edit-side=source|target,\n"
+	  << "                         --edit-path=PATH (in the tree) and --edit-name=NAME (mkdir: the\n"
+	  << "                         new folder in PATH; rename: the new name)\n\n"
+	  << "Exit codes: 0 in sync, 1 failures or conflicts (Scan only: differences), 2 could not\n"
+	  << "run, 3 stopped (also by itself when the target disk was nearly full), 4 may not fit\n"
+	  << "(the room check; nothing copied, --no-precheck starts anyway).\n\n"
 	  << "  -h, --help             Show this help\n";
 	return u;
 }

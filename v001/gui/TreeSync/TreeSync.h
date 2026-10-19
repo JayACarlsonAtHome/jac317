@@ -158,6 +158,9 @@ public:
 	void     SetChecked(const String& include_paths)   { checked.Set(include_paths); }   // before Load
 	String   GetChecked() const              { return checked.Get(); }   // for --include-path
 	bool     NothingChecked() const          { return checks && checked.Nothing(); }
+	// The node under the cursor: its path in the tree ("" = the root), and whether it is
+	// a folder (one that opens). False: none.
+	bool     Selected(String& rel, bool& folder) const;
 
 	DirTree();
 	~DirTree();
@@ -171,9 +174,15 @@ public:
 
 // One side of the main window: path picker above its tree.
 struct TreePanel : ParentCtrl {
-	PathPicker picker;
-	DirTree    tree;
+	PathPicker        picker;
+	DirTree           tree;
+	ProgressIndicator used;       // how full the tree's disk is
+	Label             free;
+	String            free_for;   // the tree the numbers are for: kept when it stays the same
 
+	// exact: just asked; else worked out during a run from what was written since.
+	void ShowFree(int64 free_bytes, int64 total, bool exact);
+	void NoFree(const String& why);
 	TreePanel();
 };
 
@@ -241,6 +250,15 @@ class TreeSyncWindow : public TopWindow {
 
 	// Lines from treesync-cli wait here; the GUI takes them in batches (Drain), so
 	// a run with tens of thousands of lines never floods the event queue.
+	Vector<String> proof;   // @proof lines: the copies as checked, for the popup at the end
+	String         room;    // the room check's line, for "may not fit"
+	String         cli_error;   // treesync-cli's last "treesync-cli: ..." line
+	String         edit_done;   // what a right-click change did, in words
+	bool           start_anyway = false;   // the next run skips the room check (--no-precheck)
+	Vector<String> edit_args;   // Edit.cpp: the --edit arguments of the change being made
+
+	void EditMenu(Bar& bar, int side);   // right-click on a tree: new folder, rename, delete
+	void Edit(int side, const String& op, const String& rel, const String& name);
 	std::mutex     inbox_m;
 	Vector<String> inbox;
 	bool           inbox_posted = false;

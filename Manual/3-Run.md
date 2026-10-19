@@ -60,9 +60,35 @@ see the table; saved on every change).
 
 - **Left: the source**, **right: the target**. Each side has a **Disk** and
     **Mount** list to jump to a drive, a **Path** box (type a path and press Enter, or
-    **...** to browse), and the tree below it.
+    **...** to browse), and the tree below it. TreeSyncRoot lists every disk;
+    TreeSyncHome lists only your home (the title bar says which window this is).
 - **Trees**: click [+] to open a folder, or use the + and - keys. **View > Reload
     trees** reads them again, **View > Collapse all** closes them.
+- **Right-click** a file or folder in either tree to change it by hand. The window
+    then reads the trees again:
+    - **New folder...**: a folder inside the one you clicked (or next to the file
+        you clicked).
+    - **Rename...**: a new name in the same folder. It never replaces something
+        that is already there.
+    - **Delete...**: moves it to the `.old` folder, like the files a sync deletes. It
+        can be brought back from there until **Clear .old**.
+    - **Delete for good...**: deletes it, and for a folder everything in it. This
+        cannot be undone.
+
+    The changes are made the way a sync is: as root in TreeSyncRoot (with the same
+    one password per window), as you inside your home in TreeSyncHome, over SFTP for
+    a remote tree. They are logged like a run (`Edit (delete)` in Results.txt).
+    The menu is greyed out while a sync runs, and TreeSync's own files
+    (`.treesync-old`, `*.treesync-part`) and the top folder itself cannot be
+    changed. Changing the **source** also changes what the next run does: a file
+    deleted from the source is removed from the target by the next Mirror.
+- **Free space**: under each tree, a bar and a line show the disk's free space, e.g.
+    `384.0 GiB free of 930.0 GiB (58% used)`. It turns red under 5% free. Local trees
+    show it all the time. A remote tree shows it once a run has asked its server.
+    During a run it updates after every file, at most once a second. Between the
+    disk's own figures, at the start and the end of the run, TreeSync works it out
+    from what the copies write (holes count as nothing), shown with a `~`. So
+    another program filling the disk at the same time only shows at the end.
 - **The progress boxes** and the list of files in progress appear while a run is
     going. The upper right of the menu bar shows how long it has run, how long the
     whole run will probably take, and when it should be done.
@@ -111,13 +137,32 @@ with **Host**, **Port**, **User** and **Key file** (see 3.10).
 - **Owners**: don't copy / by name (normal) / by number. Setting an owner needs root.
 - **Switches**: click any option to see what it does in the help box. The important
     ones: *Safe delete* (on; keep it on), *Hard links*, *Follow links*, *Skip older /
-    newer / changed*, *Keep extra*, *Wipe target first*, *Low priority*.
+    newer / changed*, *Keep extra*, *Wipe target first*, *Check there is room before
+    copying* (on; see 3.5), *Low priority*.
 - **Numbers**: threads (default 4), retries, chunk size, bandwidth limit, how long to
     wait for a lost network, time tolerance.
 - **Include / exclude**: file and folder names with `*` and `?`, separated by `;`.
     A blank box filters nothing; exclude wins over include.
 
 ## 3.5 Dry run, then run
+
+**Room check first.** Before a run copies anything, it lists both trees (quickly,
+without reading files) and adds up the most the copies can need: new and changed
+files at their full size. If that, plus a reserve, is more than the target disk has
+free, the run does not start (exit code 4) and the GUI shows the numbers and asks
+whether to start anyway. A dry run shows the same check, in the log and in its popup
+at the end (green, or red when it may not fit), e.g. *room check: the copies need at
+most 2.1 GiB (14 files); the target disk has 457.1 GiB free: room to copy*.
+
+The check cannot be exact. A file with long runs of zeros (a VM image) takes much less
+disk than its size: the 400 GiB image above takes 53 GiB. That is only known when it
+is read, so **start anyway** is often right for VM images. Either way, a run that gets
+close to filling the target **stops by itself**, before the disk is full in the
+middle of a file. It keeps a reserve free: 1% of the disk, at least 256 MiB (or 5%
+of a disk too small for that), at most 4 GiB. The log says *stopping: the target disk
+is nearly full*, and once you have made room, **Run** continues where it stopped. The
+switch **Check there is room before copying** (`--no-precheck`) turns the check off;
+the stop near full stays on.
 
 1. **Sync > Dry run** (Shift+F9): lists what a run would do (`copy`, `link`,
    `delete`, `attrs`, `mkdir`) and changes nothing. Read it.
@@ -136,6 +181,35 @@ While it runs:
 
 At the end a popup says how it went and how long it took. **Sync > Stop** (Esc) stops
 after the current file or chunk.
+
+When files were copied, the popup and the end of the log also show the **check**: the
+numbers that prove the copies are the source.
+
+```
+check: 1 file copied and read back; its SHA-256 matches the source's
+  bytes: 429,562,527,744 on the source, 429,562,527,744 in the copies: the same
+  this run copied 381.3 GiB; the other 18.8 GiB (...) were copied by the stopped run
+    before it, read back again and kept
+  on disk the copies take 53.0 GiB for 400.1 GiB of data: runs of zeros are kept as
+    holes (sparse), which read back as zeros, so the content and the SHA-256 are the same
+  mode, time and owner: kept
+  the file:
+    Fedora_Base.qcow2
+      source  429,562,527,744 bytes  SHA-256 0256ebac...
+      copy    429,562,527,744 bytes  SHA-256 0256ebac...  MATCH
+      time    2026-09-19 23:38:18.273011253 on both
+      mode    600 on both;  owner root:libvirt on both
+```
+
+Every byte is counted on both sides, and the SHA-256 of each copy (read back from
+the target) is shown next to the source's. With many files, the totals come first, then
+the 10 biggest in full. A number that differs on purpose says why where it is shown:
+- **Resumed run:** it copies fewer bytes than the file has, because a stopped run had
+    already copied the rest, and that part was checked again.
+- **Holes:** a copy can take less disk than its size (`du` shows less than `ls -l`).
+    Runs of zeros are kept as holes.
+Results.txt gets the totals on the run's line, e.g. *1 file checked: 429,562,527,744
+bytes on both sides, SHA-256 match*.
 
 ## 3.6 Stop and resume
 
@@ -275,6 +349,11 @@ treesync-cli --source=/data --target=/backup/data --sync-attrs --no-dry-run
 
 # Delete <target>.old for good (without --no-dry-run it only counts)
 treesync-cli --source=/data --target=/backup/data --clear-old --no-dry-run
+
+# One change by hand (what the right-click menu does): mkdir, rename, delete
+# (to the .old folder) or delete-for-good
+treesync-cli --source=/data --target=/backup/data --edit=rename --edit-side=target \
+             --edit-path=old/name.txt --edit-name=new-name.txt
 ```
 
 `treesync-cli --help` lists every option. In a terminal it shows one line per copied
@@ -282,7 +361,9 @@ file, `[  6/90] name  100% | 85.3 MiB/s | 130.9 MiB | 00m01s`, and Ctrl+C stops 
 (press twice to quit at once).
 
 **Exit codes**: 0 in sync (or, for Scan only, the trees are the same); 1 failures,
-conflicts or differences; 2 could not run (bad options, a path refused); 3 stopped.
+conflicts or differences; 2 could not run (bad options, a path refused); 3 stopped
+(also by itself, when the target disk was nearly full); 4 may not fit (the room
+check; nothing was copied, `--no-precheck` starts anyway).
 
 **Database views** for looking at results directly:
 

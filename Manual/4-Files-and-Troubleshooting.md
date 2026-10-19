@@ -99,6 +99,32 @@
 : Connect once with `ssh user@host` to check and accept the key; TreeSync never
   accepts an unknown or changed key by itself.
 
+**"the copies may not fit" (exit code 4)**
+: The room check found that the new and changed files, at full size, are more than
+  the target disk has free. Make room (**Clear .old** frees what earlier runs moved
+  aside), or start anyway: files with runs of zeros (VM images) need much less than
+  their size, and the run stops by itself before the disk is full.
+
+**"stopping: the target disk is nearly full"**
+: The run stopped itself to keep a reserve free (see 3.5). Nothing is lost: make room,
+  then **Run** again and it continues where it stopped.
+
+**A right-click change says "Not changed"**
+: The message says why: a name that already exists (Rename never replaces), a name
+  TreeSync keeps for itself, or no permission (TreeSyncHome changes only what you
+  may change; TreeSyncRoot changes anything).
+
+**The copy is smaller than the source in `du`, or in the disk's free space**
+: Runs of zeros (common in VM images) are kept as holes, so the copy takes less disk than
+  its size. `ls -l` shows the same size on both sides, and so does the check at the end
+  of the run, with the same SHA-256 on both sides. The check says so in its "on disk"
+  line.
+
+**A run says it copied fewer bytes than the file has**
+: It resumed a stopped run. The bytes the stopped run had copied were read back,
+  checked and kept, so only the rest was copied. The check at the end says how much
+  came from the stopped run, and shows both sides' full size and SHA-256.
+
 **A run was stopped and the target has `.treesync-part` files**
 : Run the same sync again: it resumes, re-checks what was already copied, and removes
   the part files when done. `--fresh` starts over instead.

@@ -61,8 +61,20 @@ void TreeSyncWindow::Drain()
 		}
 		else if(line.StartsWith("@overall\t"))
 			latest.GetAdd("overall") = line;
-		else
+		else if(line.StartsWith("@free\t"))   // only the newest of each side counts
+			latest.GetAdd("free " + line.Mid(6, 1)) = line;
+		else if(line.StartsWith("@proof\t"))   // already in the log as a plain line
+			proof.Add(line.Mid(7));
+		else {
+			if(line.StartsWith("room check:"))
+				room = line;
+			if(line.StartsWith("treesync-cli: ") && line.Find("not running as root") < 0)
+				cli_error = line.Mid(14);
+			for(const char *done : { "made folder ", "renamed ", "moved ", "deleted " })
+				if(line.StartsWith(done))
+					edit_done = line;
 			text << line << "\n";
+		}
 	}
 	if(text.GetCount())
 		LogText(text);
@@ -153,7 +165,9 @@ void TreeSyncWindow::DemoProgress()
 		"@file\t12\t52428800\t134217728\t1.7\t12\t140\tzig-x86_64-linux/zig",
 		"@file\t15\t1048576\t4194304\t0.2\t15\t140\tzig-x86_64-linux/lib/zig.h",
 		"@file\t16\t3145728\t3355443\t0.4\t16\t140\tzig-x86_64-linux.tar.xz",
-		"@stage\t2\t96\t412\t0\tzig-x86_64-linux/lib/std/crypto" })
+		"@stage\t2\t96\t412\t0\tzig-x86_64-linux/lib/std/crypto",
+		"@free\t0\t412316860416\t998579896320\t1",
+		"@free\t1\t384829069312\t491773755392\t0" })
 		ShowProgress(l);
 	ShowEta();
 }
@@ -261,6 +275,10 @@ void TreeSyncWindow::ShowProgress(const String& line)
 		net_wait = ScanInt(f[3]);
 		net_since = std::chrono::steady_clock::now();
 		Tick();
+		return;
+	}
+	if(f[0] == "@free" && f.GetCount() >= 5) {
+		(f[1] == "0" ? source_panel : target_panel).ShowFree(ScanInt64(f[2]), ScanInt64(f[3]), f[4] == "1");
 		return;
 	}
 	if(f[0] == "@overall" && f.GetCount() >= 3) {
@@ -538,15 +556,16 @@ void TreeSyncWindow::StartSync(bool dry_run, const String& extra)
 		Log("cannot find " + cli + "; build it with v001/build.sh");
 		return;
 	}
-	if(source_panel.tree.NothingChecked() && extra != "--clear-old") {
+	bool editing = extra == "--edit";   // a right-click change (Edit.cpp): confirmed already
+	if(source_panel.tree.NothingChecked() && extra != "--clear-old" && !editing) {
 		Exclamation("Nothing is checked in the source tree: check what to sync (the top box checks everything).");
 		return;
 	}
 	// The menu decides, not the Dry run switch: Run is real, Dry run previews.
 	SyncSetup s = setup;
 	s.flags.dry_run = dry_run;
-	if(extra.GetCount() ? !ConfirmExtra(s, extra) : !dry_run && !ConfirmRun(s))
-		return;
+	if(!start_anyway && !editing && (extra.GetCount() ? !ConfirmExtra(s, extra) : !dry_run && !ConfirmRun(s)))
+		return;   // (start anyway: confirmed already, then asked again)
 	StageLabels(extra);
 	bool via_session = as_root && !IsRoot();
 	Vector<String> args;   // via the session: without the program (it runs itself)
@@ -555,8 +574,13 @@ void TreeSyncWindow::StartSync(bool dry_run, const String& extra)
 	args.Append(ToArgs(s));
 	if(!as_root)   // TreeSyncHome: as the user, even for an administrator's installed copy
 		args.Add("--home");
-	if(extra.GetCount())
+	if(editing)
+		args.Append(edit_args);
+	else if(extra.GetCount())
 		args.Add(extra);
+	if(start_anyway)   // asked for after "may not fit"
+		args.Add("--no-precheck");
+	start_anyway = false;
 	args.Add("--stop-on-eof");
 	args.Add("--gui-progress");
 
@@ -603,10 +627,14 @@ void TreeSyncWindow::StartSync(bool dry_run, const String& extra)
 	sync_started = (int64)time(nullptr);
 	sync_dry = dry_run;
 	Log(String(as_root ? "[as root: " + cli + "] " : "") + CommandLineText(ToArgs(s)) +
-	    (extra.GetCount() ? " " + extra : String()));
+	    (editing ? " " + Join(edit_args, " ") : extra.GetCount() ? " " + extra : String()));
 	if(root_note.GetCount())
 		Log(root_note);
-	status = "Running...";
+	status = editing ? "Changing..." : "Running...";
+	proof.Clear();
+	room.Clear();
+	cli_error.Clear();
+	edit_done.Clear();
 	active.Clear();
 	copy_started.Clear();
 	net_down = false;
@@ -617,7 +645,7 @@ void TreeSyncWindow::StartSync(bool dry_run, const String& extra)
 	ShowEta();
 	for(int i = 0; i < 3; i++)
 		StageShow(i, 0, 0, String());
-	ProgressVisible(true);
+	ProgressVisible(!editing);
 	last_progress = std::chrono::steady_clock::now();
 	SetTimeCallback(1000, [this] { Tick(); }, 77);
 
@@ -695,9 +723,10 @@ void TreeSyncWindow::SyncFinished(int code)
 	child_stdin = -1;
 	child = 0;
 	bool scan = run_extra == "--scan-only", attrs = run_extra == "--sync-attrs", clear = run_extra == "--clear-old";
-	const char *what = code == 0 ? (scan ? "the trees are the same" : attrs ? "attributes in sync" : clear ? "done" : "in sync")
+	const char *what = code == 0 ? (scan ? "the trees are the same" : attrs ? "attributes in sync" : clear || run_extra == "--edit" ? "done" : "in sync")
 	                 : code == 1 ? (scan ? "found differences (History > SHA-256 checks)" : "finished with failures or conflicts")
 	                 : code == 2 ? "could not run" : code == 3 ? (run_extra.GetCount() ? "stopped" : "stopped; Run again to resume")
+	                 : code == 4 ? "may not fit on the target; nothing was copied"
 	                 : code == 126 || code == 127 ? "pkexec refused or was cancelled" : "ended abnormally";
 	String name = scan ? "Scan only" : attrs ? "Sync attributes" : clear ? "Clear .old" : sync_dry ? "Dry run" : "Sync";
 	Log(Format("treesync-cli exit code %d: %s", code, what));
@@ -716,11 +745,38 @@ void TreeSyncWindow::SyncFinished(int code)
 	ProgressVisible(false);
 	status = "Last run: " + String(what) + ", took " + took_text;
 	LoadTrees();
+	if(run_extra == "--edit") {   // a right-click change: the tree shows it; a refusal says why
+		status = code == 0 ? Nvl(edit_done, String("done")) : "Not changed: " + Nvl(cli_error, String(what));
+		if(code != 0 && code != 126 && code != 127 && !closing)
+			Exclamation("[* Not changed.]&&" + DeQtf(Nvl(cli_error, String(what))));
+		return;
+	}
 	// How long it took, in a popup (not when pkexec was refused or the window is closing).
+	// May not fit: say how much, and offer to start anyway (files of zeros need less).
+	if(code == 4 && !closing) {
+		if(PromptYesNo("[* The copies may not fit on the target.]&&" + DeQtf(room) + "&&"
+		               "Nothing was copied. The check counts every file at its full size, but a file with "
+		               "long runs of zeros (a VM image) takes much less disk than that, which is only known "
+		               "when it is read. If you start anyway, the run stops by itself, and can be resumed, "
+		               "before the target is full.&&[* Start anyway?]")) {
+			start_anyway = true;
+			StartSync(sync_dry, run_extra);
+		}
+		return;
+	}
+	// With the copies as checked: the numbers that show source and copies match.
+	String checked;
+	for(const String& l : proof)
+		checked << "[C1 " << DeQtf(l) << "]&";
+	if(sync_dry && room.GetCount()) {   // a dry run: whether the run it previews has room
+		bool fits = room.EndsWith("room to copy");
+		checked << (fits ? "[@2 " : "[*@6 ") << DeQtf("Room check: " + room.Mid(room.Find(':') + 2)) << "]&";
+	}
 	if(!closing && code != 126 && code != 127)
 		PromptOK("[* " + DeQtf(name + ": " + what) + ".]&&"
 		         "It took [* " + DeQtf(took_text) + "]&"
-		         "([C " + DurationClock(took) + "], from " + ClockTime(sync_started) + " to " + ClockTime(ended) + ")");
+		         "([C " + DurationClock(took) + "], from " + ClockTime(sync_started) + " to " + ClockTime(ended) + ")" +
+		         (checked.GetCount() ? "&&" + checked : String()));
 }
 
 void TreeSyncWindow::Close()
