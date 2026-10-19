@@ -16,12 +16,6 @@ static void Warn(const String& text)
 	Exclamation(qtf);
 }
 
-void WarnNotRoot()
-{
-	if(!IsRoot())
-		Warn(NotRootMessage());
-}
-
 void RefusePath(const String& p)
 {
 	Warn(RefusedPathMessage(p));

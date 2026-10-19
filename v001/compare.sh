@@ -32,7 +32,7 @@ fact() { printf '@cmp\t%s\t%s\n' "$1" "$2"; }
 secs() { local t0=$(date +%s.%N); "$@" > "$PROBE/last.txt" 2>&1; local rc=$?; ELAPSED=$(printf '%.2f' "$(echo "$(date +%s.%N) - $t0" | bc)"); return $rc; }
 
 fact "version" "$($CXX --version | head -1)"
-for p in treesync treesync-cli treesync-test; do
+for p in treesync-root treesync-cli treesync-test; do
   [ -f "$OUT/$p" ] && fact "size: $p (MiB)" "$(echo "scale=1; $(stat -c %s "$OUT/$p") / 1048576" | bc)"
 done
 if [ -x "$OUT/treesync-cli" ]; then

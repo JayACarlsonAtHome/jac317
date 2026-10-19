@@ -1,9 +1,30 @@
-// TreeSync bootstrap: main window with source and target trees side by side, each
-// with a disk / mount / path picker, plus the setup screen. Scan, SHA-256 hashing,
-// SQLite cache, remote transport and sync are not implemented yet.
+// The sync window shared by TreeSyncRoot and TreeSyncHome: source and target trees
+// side by side, each with a disk / mount / path picker, the setup screen, the runs.
 #include "TreeSync.h"
 
 bool run_as_root = false;
+
+String CompilerTag()
+{
+#if defined(__clang__)
+	return "Clang";
+#else
+	return "GCC";
+#endif
+}
+
+String AppName()
+{
+	return String(run_as_root ? "TreeSyncRoot-" : "TreeSyncHome-") + CompilerTag();
+}
+
+// Each keeps its own settings: TreeSyncRoot the settings file TreeSync always had
+// (its trees are anywhere), TreeSyncHome settings-home (its trees are in the home).
+// The GCC and Clang builds of one share them, so either runs the same sync.
+static String AppSettingsPath()
+{
+	return run_as_root ? SettingsPath() : SettingsPath() + "-home";
+}
 
 TreePanel::TreePanel()
 {
@@ -13,7 +34,9 @@ TreePanel::TreePanel()
 
 TreeSyncWindow::TreeSyncWindow()
 {
-	Title(IsRoot() ? "TreeSync [root]" : "TreeSync");
+	// What its runs are, in the caption: every window of it says so.
+	Title(AppName() + (run_as_root ? String("  -  syncs as root") : "  -  syncs as " + GetUserName() + ", inside " + HomeDir()) +
+	      (IsRoot() ? "  [this window is root]" : ""));
 	AddFrame(menu);
 	AddFrame(status);
 	menu.Set([this](Bar& bar) { MainMenu(bar); });
@@ -71,8 +94,8 @@ TreeSyncWindow::TreeSyncWindow()
 	};
 
 	LoadTrees();
-	status = String(IsRoot() ? "Ready" : run_as_root ? "Ready: syncs run as root"
-	                : "Not running as root: limited to " + HomeDir()) +
+	status = (run_as_root ? String(IsRoot() ? "Ready" : "Ready: syncs run as root (pkexec)")
+	                      : "Ready: syncs run as you, inside " + HomeDir()) +
 	         (TS_CONTRACTS_NATIVE ? " (native contracts)" : "");
 	Sizeable().Zoomable();
 	SetRect(0, 0, Zx(1000), Zy(620));
@@ -83,21 +106,16 @@ void TreeSyncWindow::MainMenu(Bar& bar)
 	bar.Sub("File", [this](Bar& bar) { FileMenu(bar); });
 	bar.Sub("View", [this](Bar& bar) { ViewMenu(bar); });
 	bar.Sub("Sync", [this](Bar& bar) { SyncMenu(bar); });
-	bar.Sub("Help", [](Bar& bar) { HelpMenu(bar); });
+	bar.Sub("Help", [](Bar& bar) { HelpMenu(bar, "3-Run"); });
 }
 
 void TreeSyncWindow::FileMenu(Bar& bar)
 {
 	bar.Add("Setup..", [this] { EditSetup(); });
-	if(CanBuild()) {   // in the source tree, as yourself; the installed copy only runs
-		bar.Add("Build...", [] { ShowBuild(); })
-		   .Help("Compile TreeSync with gcc, clang or both, and run the tests if ticked (v001/build.sh)");
-		bar.Add("Install for root...", [this] { InstallForRoot(); })
-		   .Help("Copy this build to /usr/local/bin, owned by root, for Run as root (v001/install.sh, through pkexec)");
-	}
 	bar.Separator();
 	bar.Add("About..", [this] {
-		String qtf = "[* TreeSync]&&Sync two directory trees by SHA-256.&&[*@6 Use at your own risk.]&";
+		String qtf = "[* " + AppName() + "]&&Sync two directory trees by SHA-256" +
+		             (run_as_root ? ", as root." : ", as you, inside your home.") + "&&[*@6 Use at your own risk.]&";
 		qtf << "&Display: " << DeQtf(DisplayName(DisplayNow())) << "&";
 		for(const String& line : Split(DISCLAIMER, '\n'))
 			qtf << DeQtf(line) << " ";
@@ -149,15 +167,6 @@ void TreeSyncWindow::SyncMenu(Bar& bar)
 	bar.Add(idle, "Clear .old folders...", [this] { StartSync(false, "--clear-old"); })
 	   .Help("Delete the safe-delete folders (<target>.old) for good, after a confirmation");
 	bar.Separator();
-	if(InstalledCopy() && IsAdmin())   // the installed TreeSync syncs as root for an administrator
-		bar.Add(false, "Runs as root (installed)", [] {}).Check(true)
-		   .Help("The installed TreeSync runs every sync as root, through pkexec");
-	else if(InstalledCopy())           // anyone else: as themselves, inside their home
-		bar.Add(false, "Run as root (administrators only)", [] {}).Check(false)
-		   .Help("Syncing as root needs an administrator (a member of wheel); you sync as yourself, inside your home");
-	else
-		bar.Add(idle, "Run as root (pkexec)", [this] { as_root = !as_root; }).Check(as_root)
-	   .Help("Start treesync-cli through pkexec; the GUI itself stays an ordinary user");
 	bar.Add("Clear log", [this] { log.Clear(); });
 }
 
@@ -196,7 +205,7 @@ void TreeSyncWindow::ShowStatus()
 	status = CommandLineText(WithoutDryRun(ToArgs(setup)));
 	// Every change of the setup comes through here: saved at once, so a crash loses nothing.
 	String error;
-	if(save_settings && !SaveSettings(SettingsPath(), setup, error))
+	if(save_settings && !SaveSettings(AppSettingsPath(), setup, error))
 		Log("warning: settings not saved: " + error);
 }
 
@@ -234,74 +243,18 @@ void TreeSyncWindow::SetSetup(const SyncSetup& s)
 	ShowStatus();
 }
 
-// The manual -------------------------------------------------------------------------
-
-void OpenManual(const String& chapter)
+// TreeSyncRoot (root_app) syncs as root, through pkexec: for administrators only.
+// TreeSyncHome syncs as the user, inside their home: for anyone, never as root.
+void TreeSyncMain(bool root_app)
 {
-	// In the source tree: Manual/ three folders up; installed: share/doc/treesync next to bin/.
-	String folder = NormalizePath(AppendFileName(GetExeFolder(), "../../../Manual"));
-	String installed = NormalizePath(AppendFileName(GetExeFolder(), "../share/doc/treesync"));
-	if(!DirectoryExists(folder) && DirectoryExists(installed))
-		folder = installed;
-	String pdf = AppendFileName(folder, "pdf/" + chapter + ".pdf");
-	if(!FileExists(pdf)) {
-		Exclamation("The manual is not built yet: [C " + DeQtf(pdf) + "] is missing.&&"
-		            "Build it with [C " + DeQtf(AppendFileName(folder, "build-pdf.sh")) + "], or read the "
-		            "Markdown sources in [C " + DeQtf(folder) + "].");
-		return;
-	}
-	LaunchWebBrowser(pdf);   // the desktop's PDF viewer (xdg-open)
-}
-
-void HelpMenu(Bar& bar)
-{
-	bar.Add("Manual (all chapters)", [] { OpenManual("TreeSync-Manual"); })
-	   .Help("The whole manual as one PDF");
-	bar.Separator();
-	bar.Add("1. Bootstrap", [] { OpenManual("1-Bootstrap"); })
-	   .Help("From a fresh machine to a first build: requirements, U++, bootstrap.sh");
-	bar.Add("2. Build", [] { OpenManual("2-Build"); })
-	   .Help("build.sh, the Build page, debug and release, tests, verify.sh and the pre-push hook");
-	bar.Add("3. Run", [] { OpenManual("3-Run"); }).Key(K_F1)
-	   .Help("The GUI step by step, the command line, remote trees, root, checking and attributes");
-	bar.Add("4. Files and troubleshooting", [] { OpenManual("4-Files-and-Troubleshooting"); })
-	   .Help("Where everything is kept, and what to do when something goes wrong");
-}
-
-void SaveScreenshot(Ctrl& c, const String& path)
-{
-	Size sz = c.GetRect().GetSize();
-	// Never shown, so lay it out here: a tree adds and places its checkboxes while it
-	// paints (a first, thrown-away draw), then the layout puts them where they belong.
-	{
-		ImageDraw warm(sz);
-		c.DrawCtrl(warm);
-	}
-	c.RefreshLayoutDeep();
-	ImageDraw iw(sz);
-	iw.DrawRect(sz, SColorFace());
-	c.DrawCtrl(iw);
-	PNGEncoder().SaveFile(path, iw);
-}
-
-GUI_APP_MAIN
-{
+	run_as_root = root_app;
 	Vector<String> args = clone(CommandLine());
 	String shots;
 	int bench = 0;
-	bool from_start_page = false;
 	for(int i = args.GetCount() - 1; i >= 0; i--)
 		if(args[i].StartsWith("--screenshot=")) {
 			shots = args[i].Mid(13);
 			args.Remove(i);
-		}
-		else if(args[i] == "--from-start-page") {   // started by the options page's Continue
-			from_start_page = true;
-			args.Remove(i);
-		}
-		else if(args[i] == "--build-run") {   // a developer aid: Build, started at once
-			BuildRun();
-			return;
 		}
 		else if(args[i].StartsWith("--bench-log=")) {
 			bench = (int)clamp(ScanInt64(args[i].Mid(12)), (int64)0, (int64)INT_MAX);   // not cut to int
@@ -340,7 +293,6 @@ GUI_APP_MAIN
 			SetupDlg dlg;
 			dlg.Set(setup);
 			dlg.Screenshots(shots);
-			BuildScreenshots(shots);
 			if(setup.db.GetCount())
 				HistoryScreenshot(setup.db, AppendFileName(shots, "history.png"));
 		}
@@ -353,27 +305,24 @@ GUI_APP_MAIN
 	bool from_file = false;
 	if(args.IsEmpty()) {
 		String why;
-		from_file = LoadSettings(SettingsPath(), setup, why);
+		from_file = LoadSettings(AppSettingsPath(), setup, why);
 		if(why.GetCount())
 			Exclamation("The saved settings could not be read; starting with the defaults.&&[C " + DeQtf(why) + "]");
 	}
 	save_settings = true;
-	ApplyDisplayChoice();   // Wayland or X11, as chosen on the options page
-	// First screen: compiler and test options (like jac313's runner); then the sync
-	// window. If this program was rebuilt there, start the new build in its place.
-	bool page = !from_start_page && BuildPageAtStart();
-	String use = page ? BuildStartPage() : String();
-	if(page && use.IsEmpty())   // Exit on the options page
+	ApplyDisplayChoice();   // Wayland or X11, as chosen in TreeSyncBuild
+	if(root_app && !IsAdmin()) {
+		Exclamation("[* " + AppName() + " is for administrators.]&&It syncs as root, which needs a member of "
+		            "wheel (or sudo, admin). Use [* TreeSyncHome] to sync inside your home, as yourself.");
+		SetExitCode(2);
 		return;
-	if(use.GetCount()) {   // the chosen compiler's build, newest, without the page again
-		Vector<String> pass = clone(CommandLine());
-		pass.Add("--from-start-page");
-		ExecOnDisplay(TreeSyncExe(use), pass, DisplayChoice());
 	}
-	if(InstalledCopy() && IsAdmin())   // the installed TreeSync syncs as root: any path, no warning
-		run_as_root = true;
-	else
-		WarnNotRoot();
+	if(!root_app && IsRoot()) {
+		Exclamation("[* " + AppName() + " does not run as root.]&&It syncs as you, inside your home. "
+		            "Start [* TreeSyncRoot] as yourself: it runs each sync as root.");
+		SetExitCode(2);
+		return;
+	}
 	for(TreeEndpoint *e : { &setup.source, &setup.target })
 		if(!e->remote && !run_as_root && !PathAllowed(e->path)) {
 			RefusePath(e->path);

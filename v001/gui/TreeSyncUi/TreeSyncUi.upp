@@ -1,0 +1,10 @@
+description "TreeSync GUI parts shared by TreeSyncRoot, TreeSyncHome, TreeSyncBuild and TreeSyncInstall: display, manual, screenshots\377";
+
+uses
+	CtrlLib,
+	plugin/png,
+	TreeSyncCore;
+
+file
+	TreeSyncUi.h,
+	Ui.cpp;

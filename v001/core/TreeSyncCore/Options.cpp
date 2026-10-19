@@ -53,6 +53,8 @@ const BoolOption BOOL_OPTIONS[] = {
 	{ "safe-delete", &SyncFlags::safe_delete, "", "Move deleted/replaced files to <target>.old",
 	  "Nothing a sync removes or overwrites is lost: those files are moved to a folder next to the "
 	  "target, <target>.old, in the same folder layout. A name already there gets .1, .2, ... added. "
+	  "When the target is the top folder of a disk, the folder is <target>/.treesync-old instead, "
+	  "on the same disk (a move cannot cross disks); syncs and scans leave it alone. "
 	  "Off: removed and replaced files are deleted for good." },
 	{ "low-priority", &SyncFlags::low_priority, "", "Low CPU and disk priority (nice, ionice)",
 	  "Runs the sync at the lowest CPU and disk priority, so other programs and copies go first. The "
@@ -424,8 +426,8 @@ String Usage()
 	const SyncFlags def = DefaultsFor(SyncMode::Mirror);
 	String u;
 	u << "Usage: " << ToLower(GetExeTitle()) << " [OPTION]...\n"
-	  << "Sync two directory trees by SHA-256. treesync opens the GUI with these\n"
-	  << "settings; treesync-cli runs the sync in the terminal.\n\n"
+	  << "Sync two directory trees by SHA-256. treesync-root and treesync-home open the\n"
+	  << "GUI with these settings; treesync-cli runs the sync in the terminal.\n\n"
 	  << DISCLAIMER << "\n"
 	  << "Trees (SIDE is source or target):\n"
 	  << "  --SIDE=PATH            tree root\n"
@@ -461,7 +463,8 @@ String Usage()
 	  << "  --db=PATH              Database file (default " << DefaultDbPath() << ")\n"
 	  << "  --known-hosts=FILE     SSH known_hosts file (default ~/.ssh/known_hosts)\n"
 	  << "  --safe-delete-dir=PATH Where --safe-delete moves files on the target side\n"
-	  << "                         (default <target>.old; must be on the same disk)\n"
+	  << "                         (default <target>.old, or <target>/.treesync-old when the\n"
+	  << "                         target is the top folder of a disk; must be on the same disk)\n"
 	  << "  --compare-ids          (treesync-cli) Compare users and groups on the two machines,\n"
 	  << "                         suggest one numbering for both, and print the commands\n"
 	  << "  --scan-only            (treesync-cli) Change nothing: read and hash every file on both\n"
@@ -471,7 +474,9 @@ String Usage()
 	  << "                         owner, extended attributes) on the target; no content copied\n"
 	  << "                         (with --dry-run, the default: only list them)\n"
 	  << "  --clear-old            (treesync-cli) Delete the --safe-delete folders (<target>.old,\n"
-	  << "                         <source>.old or --safe-delete-dir) for good (--dry-run: count)\n\n"
+	  << "                         <source>.old or --safe-delete-dir) for good (--dry-run: count)\n"
+	  << "  --home                 (treesync-cli) Run as yourself, inside your home: the installed\n"
+	  << "                         copy started by an administrator otherwise runs through sudo\n\n"
 	  << "  -h, --help             Show this help\n";
 	return u;
 }

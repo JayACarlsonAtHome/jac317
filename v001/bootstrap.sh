@@ -9,15 +9,17 @@
 #   ./bootstrap.sh --compiler gcc   # build with one compiler (default: both)
 #   ./bootstrap.sh --no-build       # stop after the checks and installs
 #   ./bootstrap.sh --upp-dir DIR    # where U++ goes if it has to be fetched (default ~/u++)
-#   ./bootstrap.sh --check          # only check, quietly, one "@req" line each (the GUI's
-#                                   # options page uses this); exit 1 if a required one is missing
+#   ./bootstrap.sh --check          # only check, quietly, one "@req" line each (TreeSyncBuild's
+#                                   # "This machine" uses this); exit 1 if a required one is missing
 #
 #   1. Detects the Linux family (rhel, fedora, linuxmint).
 #   2. Checks each requirement in setup/recipes.conf; for the missing ones shows the
 #      install commands (most need sudo), asks, runs them and checks again.
 #   3. U++: uses the one already there (tools.sh find_upp); otherwise fetches the latest
 #      U++ release for POSIX into ~/u++ and builds its umk, no sudo needed.
-#   4. Builds and tests TreeSync with each compiler (build.sh --test).
+#   4. Builds and tests TreeSync with each compiler (build.sh --test), and puts
+#      TreeSyncBuild and TreeSyncInstall in the TreeSyncApp folder of your app list
+#      (setup/app-folder.sh).
 #   5. Ends with start : stop : duration per step (the j5c Results.txt layout), also
 #      appended to Bootstrap-Results.txt in TreeSync's logs folder.
 #
@@ -222,10 +224,19 @@ for c in $COMPILERS; do
   record "$t0" "$(date +%s)" "Build and test with $c" "$rc" "$st" "$checks"
 done
 
+# TreeSyncBuild and TreeSyncInstall in your own app list (not root's: they run from your
+# source tree), in the TreeSyncApp folder, where install.sh adds TreeSyncRoot and TreeSyncHome.
+for c in $COMPILERS; do
+  [ -x "$HERE/out/$c/treesync-build" ] || continue
+  bash "$HERE/setup/app-folder.sh" --compiler "$c" || echo "warning: the TreeSyncApp folder was not set up"
+  break
+done
+
 # --- 5. summary --------------------------------------------------------------------------
 summary "$([ $all = Good ] && echo 'all good' || echo FAILED)"
 if [ $all = Good ]; then
-  echo; echo "Start TreeSync:"
-  for c in $COMPILERS; do echo "  $HERE/out/$c/treesync"; done
+  echo; echo "Next: TreeSyncBuild (in the TreeSyncApp folder of your app list) builds a release,"
+  echo "TreeSyncInstall installs it for root; then TreeSyncRoot and TreeSyncHome sync. Or now, as you:"
+  for c in $COMPILERS; do echo "  $HERE/out/$c/treesync-home"; done
 fi
 [ $all = Good ]

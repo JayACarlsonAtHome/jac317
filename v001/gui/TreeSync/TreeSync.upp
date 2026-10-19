@@ -1,9 +1,7 @@
-description "TreeSync GUI - on top of TreeSyncCore\n";
+description "The sync GUI shared by TreeSyncRoot and TreeSyncHome - on top of TreeSyncCore\377";
 
 uses
-	CtrlLib,
-	plugin/png,
-	TreeSyncCore;
+	TreeSyncUi;
 
 file
 	TreeSync.h,
@@ -13,8 +11,4 @@ file
 	Messages.cpp,
 	SyncRun.cpp,
 	History.cpp,
-	Build.cpp,
 	main.cpp;
-
-mainconfig
-	"" = "GUI WAYLAND";

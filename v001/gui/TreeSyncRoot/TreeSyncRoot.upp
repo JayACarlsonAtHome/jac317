@@ -1,0 +1,10 @@
+description "TreeSyncRoot: syncs as root, through pkexec (administrators)\377";
+
+uses
+	TreeSync;
+
+file
+	main.cpp;
+
+mainconfig
+	"" = "GUI WAYLAND";

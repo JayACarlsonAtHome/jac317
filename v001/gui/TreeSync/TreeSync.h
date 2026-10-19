@@ -1,22 +1,25 @@
 #ifndef TREESYNC_TREESYNC_H
 #define TREESYNC_TREESYNC_H
 
-// TreeSync GUI: a presenter on top of TreeSyncCore, which does the real work.
-#include <CtrlLib/CtrlLib.h>
-#include <plugin/png/png.h>
-#include <TreeSyncCore/TreeSyncCore.h>
-
-// --screenshot (a developer aid): draws a window or dialog offscreen into a PNG,
-// so the layout can be checked without a screen.
-void SaveScreenshot(Ctrl& c, const String& path);
+// The sync GUI, a presenter on top of TreeSyncCore, which does the real work. Two
+// programs show it: TreeSyncRoot (gui/TreeSyncRoot: every sync as root, through
+// pkexec) and TreeSyncHome (gui/TreeSyncHome: as the user, inside their home). It only
+// syncs; building is TreeSyncBuild's, installing TreeSyncInstall's.
+#include <TreeSyncUi/TreeSyncUi.h>
 
 #include <mutex>
 #include <thread>
 #include <sys/types.h>
 
-// Sync > Run as root: treesync-cli runs through pkexec, so local paths outside
-// home are allowed even though the GUI itself is not root.
+// TreeSyncRoot: treesync-cli runs through pkexec, so local paths outside home are
+// allowed even though the GUI itself is not root. TreeSyncHome: false.
 extern bool run_as_root;
+String CompilerTag();                  // "GCC" or "Clang": which compiler built this program
+String AppName();                      // "TreeSyncRoot-GCC", "TreeSyncHome-Clang", ...
+// The treesync-cli this program runs: next to it, treesync-cli-<gcc|clang> when installed
+// (install.sh puts both compilers' side by side), else treesync-cli (the build in out/).
+String OwnCli();
+void   TreeSyncMain(bool root_app);    // the whole program; root_app: TreeSyncRoot
 
 // Disk -> Mount -> Path, with a browse button.
 class PathPicker : public ParentCtrl {
@@ -105,36 +108,12 @@ void   ShowHistory(const String& db_path);
 void   HistoryScreenshot(const String& db_path, const String& png);
 void   ShowLogFile(const String& path);
 void   ExportForAi(const String& db_path, int64 run, bool logs, bool sql);   // run 0: the newest
-void   ShowBuild();                                // Build.cpp: build (and test, if ticked), like jac313's runner
-// Building is for the user, in the source tree: this program came from v001/out/<compiler>/
-// and is not running as root. An installed copy, and root, only run TreeSync.
-bool   CanBuild();
-// The installed copy (install.sh: root owns it, in /usr/local/bin): it always syncs as root.
-bool   InstalledCopy();
-// Run as root: a treesync-cli only root can change (the installed one); note: what to
+// TreeSyncRoot: a treesync-cli only root can change (the installed one); note: what to
 // tell the user about it (it differs from this build, or none is installed).
 String RootCli(String& note);
-void   BuildScreenshots(const String& folder);
-void   BuildRun();
-bool   BuildPageAtStart();                         // the options page is the first screen
-String BuildStartPage();                           // shows it; returns "gcc"/"clang" to continue with
-String TreeSyncExe(const String& compiler);        // out/<compiler>/treesync
-String DisplayNow();                               // "wayland" or "x11": what this program runs on
-String DisplayChoice();                            // the saved choice (x11 when there is no Wayland)
-String DisplayName(const String& d);
-void   ExecOnDisplay(const String& exe, const Vector<String>& args, const String& display);
-void   ApplyDisplayChoice();                       // restart on the chosen display if needed
 String LatestLog(const String& db_path);
 
-// The manual: Manual/pdf/<chapter>.pdf, three folders above the program (out/<compiler>/),
-// built from the Markdown next to it by Manual/build-pdf.sh. Opened in the desktop's
-// PDF viewer. chapter: "TreeSync-Manual" (all), "1-Bootstrap", "2-Build", "3-Run",
-// "4-Files-and-Troubleshooting".
-void   OpenManual(const String& chapter);
-void   HelpMenu(Bar& bar);
-
 // Messages.cpp: core messages shown in a dialog and printed to the terminal.
-void   WarnNotRoot();
 void   RefusePath(const String& p);
 
 // Browsable view of one tree, local or over SFTP, with [+]/[-] expanders and
@@ -250,6 +229,10 @@ class TreeSyncWindow : public TopWindow {
 	// SyncRun.cpp: treesync-cli as a child process.
 	pid_t       child = 0;
 	int         child_stdin = -1;
+	pid_t       session = 0;        // TreeSyncRoot: pkexec treesync-cli --root-session, for the window
+	int         session_fd = -1;    // its socket: runs go through it (one password per window)
+	bool        SessionStart(const String& cli);
+	void        SessionEnd();
 	bool&       as_root = run_as_root;
 	std::thread reader;
 
@@ -280,7 +263,6 @@ class TreeSyncWindow : public TopWindow {
 	void SyncMenu(Bar& bar);
 	void EditSetup();
 	void LoadTrees();
-	void InstallForRoot();   // File > Install for root: install.sh through pkexec
 
 public:
 	void SetSetup(const SyncSetup& s);

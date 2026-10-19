@@ -1,32 +1,35 @@
 # 3. Run
 
-## 3.1 Start the GUI
+## 3.1 Start the GUI: TreeSyncRoot or TreeSyncHome
 
-There are two copies of TreeSync, for two jobs:
+Two programs sync, with the same window; they differ in who the syncs run as:
 
-| | The installed TreeSync | The build in the source tree |
+| | **TreeSyncRoot** | **TreeSyncHome** |
 |---|---|---|
-| Start it | **TreeSync** in the desktop's app list, or `treesync` | `v001/out/gcc/treesync` (or `out/clang/`) |
-| Syncs as | **root** for an administrator (each run through `pkexec`); anyone else: themselves | you; root only with **Sync > Run as root** |
-| Paths | any (administrator); inside their home (anyone else) | only inside your home, unless Run as root |
-| Build page | none: it only runs | yes (File > Build..., and at start if ticked) |
-| Comes from | `./install.sh` (see [2.6](2-Build.md)) | `./build.sh` or `./verify.sh` |
+| Start it | **TreeSyncRoot-GCC** or **-Clang** in the TreeSyncApp folder, or `treesync-root-gcc` | **TreeSyncHome-GCC** or **-Clang** in the TreeSyncApp folder, or `treesync-home-gcc` |
+| Syncs as | **root**, each run through `pkexec` | you |
+| Paths | any | only inside your home |
+| Who | administrators (root, `wheel`, `sudo`, `admin`); anyone else is told to use TreeSyncHome | anyone; it refuses to start as root |
+| Settings | `~/.config/treesync/settings` | `~/.config/treesync/settings-home` |
 
-For everyday syncs use the **installed** TreeSync. The source-tree build is for
-working on TreeSync itself: it starts on the Build page if **Show this page when
-TreeSync starts** is ticked (click **Continue to TreeSync using GCC exe** to go on).
+Each comes once per compiler, GCC and Clang; TreeSyncInstall installs one or both (see
+[2.6](2-Build.md)). They do the same; both builds share the settings, database and
+logs. For everyday syncs use the **installed** ones. The builds in the source tree
+(`v001/out/gcc/treesync-home`, `treesync-root`) are for working on TreeSync itself;
+**Run TreeSyncHome-GCC (just built)** in TreeSyncBuild starts one. Neither has anything to do with building: that is
+**TreeSyncBuild** (see [2.3](2-Build.md)).
 
 Always start the GUI as yourself, not with `sudo`: it is an ordinary desktop program,
-and only the syncs run as root.
+and only TreeSyncRoot's syncs run as root.
 
 Options on the command line set up the window and become the saved settings:
 
 ```bash
-treesync --source=/home/jay/Photos --target=/run/media/jay/Backup/Photos --mirror
+treesync-root-gcc --source=/home/jay/Photos --target=/run/media/jay/Backup/Photos --mirror
 ```
 
-Without options, the settings saved last time are used
-(`~/.config/treesync/settings`, saved on every change).
+Without options, the settings saved last time are used (each program its own file,
+see the table; saved on every change).
 
 
 ## 3.2 The main window
@@ -100,7 +103,8 @@ with **Host**, **Port**, **User** and **Key file** (see 3.10).
     - **Copy**: new and changed files go from source to target; nothing on the target
       is removed. Turns on *Skip older*: a newer file on the target is not overwritten.
     - **Mirror**: the target is made to match the source; files only the target has are
-      removed (with safe delete: moved to `<target>.old`).
+      removed (with safe delete: moved to `<target>.old`, or to `<target>/.treesync-old`
+    when the target is the top folder of a disk, such as a USB drive).
     - **Merge**: changes go both ways; a file changed on both sides since the last sync
       is a conflict and is left alone. Nothing is removed.
 - **Reset to the defaults** of Copy, Mirror or Merge.
@@ -155,7 +159,7 @@ To start over instead, use `--fresh` on the command line.
     folders. No content is copied.
 - **Sync > Clear .old folders...**: deletes the safe-delete folders (`<target>.old`)
     for good, after a confirmation that says how many files and bytes. Folders made by
-    a root run need **Run as root**. On the command line, without `--no-dry-run` it
+    a root run need **TreeSyncRoot**. On the command line, without `--no-dry-run` it
     only counts; its result says *Counted, not deleted*, *Good* (deleted) or *Nothing
     to clear*.
 
@@ -179,26 +183,34 @@ To start over instead, use `--fresh` on the command line.
 ## 3.9 Running as root
 
 A sync often meets files your user cannot read or replace (other users' files,
-system files), so the installed TreeSync **syncs as root for an administrator**: root,
-or a member of `wheel` (`sudo` or `admin` on Debian, Ubuntu and Mint), the users who
-may use sudo. A tool that can overwrite any file as root is as powerful as root, so
-nobody else gets that: **anyone else runs the installed TreeSync as themselves**,
-inside their own home, with no password asked (the Sync menu shows *Run as root
-(administrators only)*, greyed out).
+system files), so **TreeSyncRoot syncs as root, for an administrator**: root, or a
+member of `wheel` (`sudo` or `admin` on Debian, Ubuntu and Mint), the users who may
+use sudo. A tool that can overwrite any file as root is as powerful as root, so nobody
+else gets that: for anyone else TreeSyncRoot says so and does not start, and they use
+**TreeSyncHome**, which syncs as themselves, inside their own home, with no password
+asked.
+
+The window's title says which one it is and how its syncs run: *TreeSyncRoot-GCC - syncs
+as root*, or *TreeSyncHome-GCC - syncs as jay, inside /home/jay*. TreeSyncRoot offers
+every disk; TreeSyncHome only your home.
 
 For an administrator:
 
-- **The installed GUI** runs every sync through `pkexec`. The first run asks for your
-    password; polkit then remembers it for a few minutes. **Sync > Runs as root
-    (installed)** is shown ticked and cannot be turned off. Any path may be chosen.
+- **TreeSyncRoot** runs every sync through `pkexec`, with the installed
+    `treesync-cli-gcc` (or `-clang`: the one of its own compiler), which only root can
+    change. The first run of a window asks for your password, once: that window's later
+    runs go through the same root process (`treesync-cli --root-session`), which ends
+    when the window closes. A window opened within a few minutes does not ask either
+    (polkit remembers it). Any path may be chosen.
+- **TreeSyncHome** runs every sync as you (it passes `--home` to `treesync-cli`), so it
+    never asks for a password and stays inside your home.
 - **The installed `treesync-cli`**, started from a terminal by an administrator, starts
     itself again through `sudo`: `treesync-cli --source=... --target=...` runs as root
-    (sudo asks for your password). `--help` does not need it.
-- **The source-tree build** syncs as you, limited to your home folder. Ticking
-    **Sync > Run as root (pkexec)** makes its runs use the **installed**
-    `treesync-cli`, which only root can change. If that is not this build, the log says
-    so (`File > Install for root` updates it); if nothing is installed, it warns that it
-    runs a copy your user could change.
+    (sudo asks for your password). `--help` and `--home` do not.
+- **The source-tree TreeSyncRoot** (`out/gcc/treesync-root`) also uses the
+    **installed** `treesync-cli`. If that is not this build, the log says so
+    (TreeSyncInstall updates it); if nothing is installed, it warns that it runs a copy
+    your user could change.
 
 A root run keeps its own database and logs under `/root/.local/share/treesync/`,
 separate from yours. To resume a root run, run it as root again.

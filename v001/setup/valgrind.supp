@@ -1,0 +1,15 @@
+# Valgrind suppressions for build.sh --valgrind / --helgrind. Only reports that are not
+# TreeSync's, each with why.
+
+# libp11-kit (loaded through OpenSSL, which TreeSync hashes with) destroys a mutex it
+# initialised statically, while the program exits; helgrind takes that for a mutex
+# that was never set up. System library, at exit, after all threads are gone.
+{
+   p11-kit-static-mutex-destroyed-at-exit
+   Helgrind:Misc
+   fun:mutex_destroy_WRK
+   fun:pthread_mutex_destroy
+   obj:*/libp11-kit.so*
+   ...
+   fun:_dl_fini
+}

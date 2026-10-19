@@ -578,7 +578,7 @@ bool ClearOld(const SyncSetup& setup, bool dry, SyncReport& report, String& erro
 		if(e.path.IsEmpty())
 			continue;
 		String root = e.remote ? e.path : CanonicalPath(e.path);
-		String old = root + ".old";
+		String old = SafeDeleteFolder(root, !e.remote);
 		if(i == 1 && setup.safe_delete_dir.GetCount())
 			old = e.remote ? setup.safe_delete_dir : CanonicalPath(setup.safe_delete_dir);
 		while(old.GetCount() > 1 && old.EndsWith("/"))
@@ -591,6 +591,8 @@ bool ClearOld(const SyncSetup& setup, bool dry, SyncReport& report, String& erro
 			const TreeEndpoint& o = t ? setup.target : setup.source;
 			if(o.path.GetCount() && o.remote == e.remote && o.host == e.host) {
 				String other = o.remote ? o.path : CanonicalPath(o.path);
+				if(t == i && IsSafeDeleteInside(old, other))
+					continue;   // the reserved .treesync-old inside its own tree
 				bad = IsUnder(other, old) || IsUnder(old, other);
 			}
 		}

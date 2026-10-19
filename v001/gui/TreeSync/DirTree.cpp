@@ -284,8 +284,8 @@ void DirTree::Fill(int id, const String& parent_key, const Vector<FolderEntry>& 
 	Vector<String> dirs, links, files;
 	for(const FolderEntry& e : entries) {
 		String child = is_remote ? String() : AppendFileName(parent_key, e.name);
-		// --follow-links off, or (local) a link leaving home without root: never descended into
-		if(e.is_dir && e.is_link && (!follow_links || (!is_remote && !PathAllowed(child))))
+		// --follow-links off, or (local, TreeSyncHome) a link leaving home: never descended into
+		if(e.is_dir && e.is_link && (!follow_links || (!is_remote && !run_as_root && !PathAllowed(child))))
 			links.Add(e.name);
 		else if(e.is_dir)
 			dirs.Add(e.name);

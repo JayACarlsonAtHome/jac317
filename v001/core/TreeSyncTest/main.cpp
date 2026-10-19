@@ -296,7 +296,7 @@ static void TestMessages()
 {
 	String m = NotRootMessage();
 	EXPECT(Split(m, '\n').GetCount() == 3, "not-root message has 3 lines: " + Show(m));
-	EXPECT(m.Find("run TreeSync as root") >= 0, "not-root message says how to fix it: " + Show(m));
+	EXPECT(m.Find("TreeSyncRoot") >= 0, "not-root message says how to fix it: " + Show(m));
 	EXPECT(IsAdminGroup("wheel") && IsAdminGroup("sudo") && IsAdminGroup("admin") && !IsAdminGroup("users") &&
 	       !IsAdminGroup("wheels"), "administrator groups: wheel, sudo, admin");
 	EXPECT(!IsRoot() || IsAdmin(), "root is an administrator");
@@ -1169,6 +1169,56 @@ static void TestSparseBig(const String& root)
 	EXPECT(q.Step() && q.Int(0) == 1, "sparse copy verified by SHA-256");
 }
 
+// Safe delete on a target that is the top folder of a disk: the folder is
+// <target>/.treesync-old, inside it (a move cannot leave the disk), and every scan,
+// comparison and Mirror leaves that folder alone. A real disk needs root, so the
+// same folder is given with --safe-delete-dir here.
+static void TestSafeDeleteInside(const String& root)
+{
+	EXPECT(SkipName(".treesync-old") && !SkipName("treesync-old") && !SkipName(".treesync-older"),
+	       "the name .treesync-old is reserved, and only it");
+	EXPECT(IsMountRoot("/") && SafeDeleteFolder("/", true) == "/.treesync-old", "/ is the top of a disk");
+	if(DirectoryExists("/proc"))
+		EXPECT(IsMountRoot("/proc") && SafeDeleteFolder("/proc", true) == "/proc/.treesync-old",
+		       "a mount point gets .treesync-old inside it");
+	EXPECT(!IsMountRoot(root) && SafeDeleteFolder(root, true) == root + ".old", "a plain folder gets <folder>.old");
+	EXPECT(SafeDeleteFolder("/mnt/disk", false) == "/mnt/disk.old", "a remote tree keeps <folder>.old");
+
+	String src = root + "/in-src", dst = root + "/in-dst", db = root + "/inside.db";
+	String old = dst + "/.treesync-old";
+	Put(src + "/a.txt", "one\n");
+	Put(src + "/d/b.txt", "two\n");
+	SyncSetup s = Setup(src, dst, db);
+	s.flags.mode = SyncMode::Mirror;
+	s.safe_delete_dir = old;
+	SyncResult r;
+	Sync(s, r);
+	EXPECT(r.failed == 0 && FileExists(dst + "/a.txt"), "the inside folder is accepted as the safe-delete folder");
+
+	Put(src + "/a.txt", "one, changed\n");   // replaced: the old one moves in
+	DeleteFile(src + "/d/b.txt");              // gone: it moves in too
+	Sync(s, r);
+	EXPECT(r.failed == 0 && LoadFile(old + "/a.txt") == "one\n" && FileExists(old + "/d/b.txt") &&
+	       !FileExists(dst + "/d/b.txt"), "replaced and deleted files moved into <target>/.treesync-old");
+	Sync(s, r);
+	EXPECT(r.done == 0 && DirectoryExists(old), Format("a second Mirror leaves .treesync-old alone (%d steps)", r.done));
+	SyncReport report;
+	CheckResult c;
+	String err;
+	EXPECT(RunCheck(s, CheckMode::Scan, report, c, err) && c.files == 1 && c.same == 1,
+	       "Scan only does not see .treesync-old: " + err);
+
+	SyncSetup w = s;   // wipe: everything moves in, but not the folder into itself
+	w.flags.wipe_target = true;
+	Sync(w, r);
+	EXPECT(r.failed == 0 && LoadFile(dst + "/a.txt") == "one, changed\n" && DirectoryExists(old + "/d") &&
+	       !DirectoryExists(old + "/.treesync-old"), "a wipe moves into .treesync-old, not the folder into itself");
+
+	ClearResult cr;
+	EXPECT(ClearOld(s, false, report, err, &cr) && !DirectoryExists(old) && FileExists(dst + "/a.txt"),
+	       "--clear-old empties .treesync-old and leaves the tree: " + err);
+}
+
 // --wipe-target: the target is emptied first, into <target>.old with safe delete.
 static void TestWipe(const String& root)
 {
@@ -1345,6 +1395,7 @@ CONSOLE_APP_MAIN
 	TestStreaming(eroot);
 	TestChecks(eroot);
 	TestSparseBig(eroot);
+	TestSafeDeleteInside(eroot);
 	TestWipe(eroot);
 	TestBandwidthAndPriority(eroot);   // last: it lowers this process's priority
 	int efd = open(GetFileFolder(eroot), O_RDONLY | O_DIRECTORY | O_CLOEXEC);

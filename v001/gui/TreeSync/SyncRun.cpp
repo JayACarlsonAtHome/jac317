@@ -1,13 +1,15 @@
 // Runs treesync-cli (from the same folder as this program) and shows its output.
-// The GUI never runs the engine in its own process, and never as root: with
-// "Run as root" it starts treesync-cli through pkexec, so the GUI itself stays an
-// ordinary Wayland client. Stop closes the child's stdin (--stop-on-eof), which
+// The GUI never runs the engine in its own process, and never as root: TreeSyncRoot
+// starts treesync-cli --root-session through pkexec once per window (one password),
+// and that root process starts each run, so the GUI itself stays an ordinary Wayland
+// client; TreeSyncHome starts it as the user, with --home. Stop closes the child's stdin (--stop-on-eof), which
 // works even when the child is a root process the GUI may not signal.
 #include "TreeSync.h"
 
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <spawn.h>
+#include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <cerrno>
@@ -335,14 +337,17 @@ bool TreeSyncWindow::ConfirmRun(const SyncSetup& s)
 	case SyncMode::Mirror: what = "make it match the source, removing files the source does not have"; break;
 	case SyncMode::Merge:  what = "copy changes both ways, so the source can change too"; break;
 	}
+	// Where safe delete puts things: next to the target, or inside it on a whole disk.
+	String old_dir = s.safe_delete_dir.GetCount() ? s.safe_delete_dir
+	               : s.target.remote ? where(s.target) + ".old" : SafeDeleteFolder(CanonicalPath(s.target.path), true);
 	String old = s.flags.safe_delete
-	           ? "Removed and replaced files are moved to [C " + DeQtf(where(s.target)) + ".old] (safe delete)."
+	           ? "Removed and replaced files are moved to [C " + DeQtf(old_dir) + "] (safe delete)."
 	           : "[* Safe delete is off: removed and replaced files are deleted.]";
 	String wipe;
 	if(s.flags.wipe_target)
 		wipe = s.flags.safe_delete
 		     ? "[*@6 The target is emptied first]: everything in it is moved to [C " +
-		       DeQtf(where(s.target)) + ".old], then all files are copied fresh.&"
+		       DeQtf(old_dir) + "], then all files are copied fresh.&"
 		     : "[*@6 The target is emptied first and everything in it is DELETED], then all files "
 		       "are copied fresh.&";
 	return PromptYesNo("[* Run the sync for real?]&&"
@@ -380,13 +385,13 @@ bool TreeSyncWindow::ConfirmExtra(const SyncSetup& s, const String& extra)
 		return PromptYesNo("[*@6 Delete the .old folders for good?]&&" +
 		                   Nvl(counted, "[C " + DeQtf(where(s.target)) + ".old]&") +
 		                   "&They hold the files safe delete moved out of the way. This cannot be undone." +
-		                   String(as_root ? "" : "&(Folders written by a root run need Sync > Run as root.)"));
+		                   String(as_root ? "" : "&(Folders written by a root run need TreeSyncRoot.)"));
 	}
 	return true;
 }
 
 // Root must not run a program the user can change: anything running as the user could
-// swap it, and then run as root. So Run as root uses a treesync-cli that belongs to root
+// swap it, and then run as root. So TreeSyncRoot uses a treesync-cli that belongs to root
 // and only root may write (install.sh puts one in /usr/local/bin).
 static bool RootOwned(const String& path)
 {
@@ -399,57 +404,133 @@ static String FileHash(const String& path)
 	return Sha256Hex(LoadFile(path));
 }
 
-bool InstalledCopy()
+String OwnCli()
 {
-	return RootOwned(AppendFileName(GetExeFolder(), "treesync-cli"));
+	String installed = AppendFileName(GetExeFolder(), "treesync-cli-" + ToLower(CompilerTag()));
+	return FileExists(installed) ? installed : AppendFileName(GetExeFolder(), "treesync-cli");
 }
 
+// The installed treesync-cli of this program's compiler: a GCC build runs the GCC engine.
 String RootCli(String& note)
 {
 	note.Clear();
-	String own = AppendFileName(GetExeFolder(), "treesync-cli");
+	String own = OwnCli();
 	if(RootOwned(own))   // this program is the installed one
 		return own;
-	for(const char *p : { "/usr/local/bin/treesync-cli", "/usr/bin/treesync-cli" })
-		if(RootOwned(p)) {
+	String name = "treesync-cli-" + ToLower(CompilerTag());
+	for(const char *dir : { "/usr/local/bin", "/usr/bin" })
+		if(String p = AppendFileName(dir, name); RootOwned(p)) {
 			if(FileExists(own) && FileHash(own) != FileHash(p))
 				note = String("note: running the installed ") + p + " as root, which is not this build; "
-				       "File > Install for root installs this one";
+				       "TreeSyncInstall installs this one";
 			return p;
 		}
-	note = "warning: no treesync-cli installed for root; running " + own + " as root, which your user can "
-	       "change. File > Install for root installs a root-owned copy (v001/install.sh)";
+	note = "warning: no " + name + " installed for root; running " + own + " as root, which your user can "
+	       "change. TreeSyncInstall installs a root-owned copy (v001/install.sh)";
 	return own;
 }
 
-void TreeSyncWindow::InstallForRoot()
+// TreeSyncRoot asks for the password once per window: the first root run starts
+// treesync-cli --root-session through pkexec, and that one root process runs every
+// sync of the window (the CLI's RootSession). Started without waiting: the run's
+// request waits in the socket while polkit asks.
+bool TreeSyncWindow::SessionStart(const String& cli)
 {
-	String script = NormalizePath(AppendFileName(GetExeFolder(), "../../install.sh"));
-	String compiler = GetFileName(GetExeFolder());   // gcc or clang: the build this program came from
-	if(!FileExists(script)) {
-		Exclamation("Cannot find [C " + DeQtf(script) + "].");
-		return;
+	if(session_fd >= 0)
+		return true;
+	int sv[2];
+	if(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sv) != 0) {
+		Log(String("socketpair: ") + strerror(errno));
+		return false;
 	}
-	if(!PromptYesNo("[* Install this build for root?]&&The " + DeQtf(compiler) + " release build of treesync and "
-	                "treesync-cli goes to [C /usr/local/bin], owned by root, with the manual in "
-	                "[C /usr/local/share/doc/treesync]. Sync > Run as root then runs it.&&"
-	                "You will be asked for your password (pkexec)."))
-		return;
-	String out;
-	int code = Sys("/usr/bin/pkexec '" + script + "' --compiler " + compiler, out);
-	LogText(out);
-	if(code == 0)
-		PromptOK("[* Installed for root.]&&" + DeQtf(out.Mid(max(0, out.Find("TreeSync installed")))));
-	else
-		Exclamation(code == 126 || code == 127 ? String("Not installed: pkexec was refused or cancelled.")
-		            : "Not installed (exit code " + AsString(code) + "):&[C " + DeQtf(out.Right(600)) + "]");
+	posix_spawn_file_actions_t fa;
+	posix_spawn_file_actions_init(&fa);
+	posix_spawn_file_actions_adddup2(&fa, sv[1], 0);
+	posix_spawn_file_actions_adddup2(&fa, sv[1], 1);
+	const char *argv[] = { "/usr/bin/pkexec", ~cli, "--root-session", nullptr };
+	pid_t pid;
+	int rc = posix_spawn(&pid, argv[0], &fa, nullptr, (char **)argv, environ);
+	posix_spawn_file_actions_destroy(&fa);
+	close(sv[1]);
+	if(rc != 0) {
+		close(sv[0]);
+		Log(String("cannot start /usr/bin/pkexec: ") + strerror(rc));
+		return false;
+	}
+	session = pid;
+	session_fd = sv[0];
+	return true;
+}
+
+// Closing the socket ends the session (it is idle between runs).
+void TreeSyncWindow::SessionEnd()
+{
+	if(session_fd >= 0)
+		close(session_fd);
+	session_fd = -1;
+	if(session > 0)
+		while(waitpid(session, nullptr, 0) < 0 && errno == EINTR)
+			;
+	session = 0;
+}
+
+// A run through the session: its arguments and the two pipe ends it gets as stdin and
+// stdout. False when the session is gone.
+static bool SessionSend(int fd, const Vector<String>& args, int run_in, int run_out)
+{
+	String all;
+	for(const String& a : args)
+		all << a << '\0';
+	uint32 size = all.GetCount();
+	alignas(cmsghdr) char ctl[CMSG_SPACE(2 * sizeof(int))] = {};
+	iovec iov = { &size, sizeof(size) };
+	msghdr m = {};
+	m.msg_iov = &iov;
+	m.msg_iovlen = 1;
+	m.msg_control = ctl;
+	m.msg_controllen = sizeof(ctl);
+	cmsghdr *c = CMSG_FIRSTHDR(&m);
+	c->cmsg_level = SOL_SOCKET;
+	c->cmsg_type = SCM_RIGHTS;
+	c->cmsg_len = CMSG_LEN(2 * sizeof(int));
+	int fds[2] = { run_in, run_out };
+	memcpy(CMSG_DATA(c), fds, sizeof(fds));
+	ssize_t n;
+	while((n = sendmsg(fd, &m, MSG_NOSIGNAL)) < 0 && errno == EINTR)
+		;
+	if(n != sizeof(size))
+		return false;
+	for(const char *p = all.Begin(), *e = all.End(); p < e;) {
+		n = send(fd, p, e - p, MSG_NOSIGNAL);
+		if(n < 0 && errno == EINTR)
+			continue;
+		if(n <= 0)
+			return false;
+		p += n;
+	}
+	return true;
+}
+
+static bool SessionCode(int fd, int& code)
+{
+	int32 c;
+	for(char *p = (char *)&c, *e = p + sizeof(c); p < e;) {
+		ssize_t n = recv(fd, p, e - p, 0);
+		if(n < 0 && errno == EINTR)
+			continue;
+		if(n <= 0)
+			return false;
+		p += n;
+	}
+	code = c;
+	return true;
 }
 
 void TreeSyncWindow::StartSync(bool dry_run, const String& extra)
 {
 	if(child > 0)
 		return;
-	String cli = AppendFileName(GetExeFolder(), "treesync-cli");
+	String cli = OwnCli();
 	String root_note;
 	if(as_root)
 		cli = RootCli(root_note);
@@ -467,11 +548,13 @@ void TreeSyncWindow::StartSync(bool dry_run, const String& extra)
 	if(extra.GetCount() ? !ConfirmExtra(s, extra) : !dry_run && !ConfirmRun(s))
 		return;
 	StageLabels(extra);
-	Vector<String> args;
-	if(as_root)
-		args.Add("/usr/bin/pkexec");
-	args.Add(cli);
+	bool via_session = as_root && !IsRoot();
+	Vector<String> args;   // via the session: without the program (it runs itself)
+	if(!via_session)
+		args.Add(cli);
 	args.Append(ToArgs(s));
+	if(!as_root)   // TreeSyncHome: as the user, even for an administrator's installed copy
+		args.Add("--home");
 	if(extra.GetCount())
 		args.Add(extra);
 	args.Add("--stop-on-eof");
@@ -482,25 +565,38 @@ void TreeSyncWindow::StartSync(bool dry_run, const String& extra)
 		Log(String("pipe: ") + strerror(errno));
 		return;
 	}
-	posix_spawn_file_actions_t fa;
-	posix_spawn_file_actions_init(&fa);
-	posix_spawn_file_actions_adddup2(&fa, in[0], 0);
-	posix_spawn_file_actions_adddup2(&fa, out[1], 1);
-	posix_spawn_file_actions_adddup2(&fa, out[1], 2);
-	Vector<const char *> argv;
-	for(const String& a : args)
-		argv.Add(a);
-	argv.Add(nullptr);
-	pid_t pid;
-	int rc = posix_spawn(&pid, args[0], &fa, nullptr, (char **)argv.begin(), environ);
-	posix_spawn_file_actions_destroy(&fa);
-	close(out[1]);
-	close(in[0]);
-	if(rc != 0) {
-		close(out[0]);
-		close(in[1]);
-		Log("cannot start " + args[0] + ": " + strerror(rc));
-		return;
+	pid_t pid = 0;
+	if(via_session) {
+		bool fresh = session_fd < 0;
+		if(!SessionStart(cli)) {
+			for(int fd : { out[0], out[1], in[0], in[1] })
+				close(fd);
+			return;
+		}
+		pid = session;
+		if(fresh)
+			Log("[as root: " + cli + "] asking for the password once for this window (pkexec)");
+	}
+	else {
+		posix_spawn_file_actions_t fa;
+		posix_spawn_file_actions_init(&fa);
+		posix_spawn_file_actions_adddup2(&fa, in[0], 0);
+		posix_spawn_file_actions_adddup2(&fa, out[1], 1);
+		posix_spawn_file_actions_adddup2(&fa, out[1], 2);
+		Vector<const char *> argv;
+		for(const String& a : args)
+			argv.Add(a);
+		argv.Add(nullptr);
+		int rc = posix_spawn(&pid, args[0], &fa, nullptr, (char **)argv.begin(), environ);
+		posix_spawn_file_actions_destroy(&fa);
+		close(out[1]);
+		close(in[0]);
+		if(rc != 0) {
+			close(out[0]);
+			close(in[1]);
+			Log("cannot start " + args[0] + ": " + strerror(rc));
+			return;
+		}
 	}
 	child = pid;
 	child_stdin = in[1];
@@ -526,13 +622,22 @@ void TreeSyncWindow::StartSync(bool dry_run, const String& extra)
 	SetTimeCallback(1000, [this] { Tick(); }, 77);
 
 	// Reader thread: lines go to the log on the GUI thread; exit status at the end.
-	int fd = out[0];
+	// Through the session it first hands the run over (that waits while polkit asks),
+	// and the exit code comes back over the socket; a session that is gone (password
+	// refused, or it died) gives pkexec's code, and the next run starts a new one.
+	int fd = out[0], sfd = via_session ? session_fd : -1;
 	if(reader.joinable())
 		reader.join();
-	reader = std::thread([this, fd, pid] {
+	reader = std::thread([this, fd, pid, sfd, args = pick(args), run_in = in[0], run_out = out[1]] {
+		bool sent = true;
+		if(sfd >= 0) {
+			sent = SessionSend(sfd, args, run_in, run_out);
+			close(run_in);    // the session has its own copies now
+			close(run_out);
+		}
 		String pending;
 		char buf[4096];
-		for(ssize_t n; (n = read(fd, buf, sizeof(buf))) != 0;) {
+		for(ssize_t n; sent && (n = read(fd, buf, sizeof(buf))) != 0;) {
 			if(n < 0) {
 				if(errno == EINTR)
 					continue;
@@ -552,11 +657,23 @@ void TreeSyncWindow::StartSync(bool dry_run, const String& extra)
 			}
 		}
 		close(fd);
-		int st = 0;
-		while(waitpid(pid, &st, 0) < 0 && errno == EINTR)
-			;
-		int code = WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
-		PostCallback([this, code] { SyncFinished(code); });
+		int code = 0;
+		bool lost = false;
+		if(sfd < 0 || !sent || !SessionCode(sfd, code)) {
+			lost = sfd >= 0;
+			int st = 0;
+			while(waitpid(pid, &st, 0) < 0 && errno == EINTR)
+				;
+			code = WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
+		}
+		PostCallback([this, code, lost] {
+			if(lost) {   // reaped above: only the socket is left
+				close(session_fd);
+				session_fd = -1;
+				session = 0;
+			}
+			SyncFinished(code);
+		});
 	});
 }
 
@@ -625,4 +742,5 @@ TreeSyncWindow::~TreeSyncWindow()
 		close(child_stdin);
 	if(reader.joinable())
 		reader.join();
+	SessionEnd();
 }

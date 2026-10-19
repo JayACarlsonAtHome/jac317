@@ -1,0 +1,10 @@
+description "TreeSyncInstall: installs the release build for root, or removes it (not installed itself)\377";
+
+uses
+	TreeSyncUi;
+
+file
+	Install.cpp;
+
+mainconfig
+	"" = "GUI WAYLAND";

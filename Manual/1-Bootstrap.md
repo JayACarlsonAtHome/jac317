@@ -100,6 +100,9 @@ For each compiler it runs `./build.sh --compiler <gcc|clang> --test`: a **debug*
 build of the three programs and the core tests. The output of each goes to
 `out/bootstrap-gcc.txt` and `out/bootstrap-clang.txt`.
 
+It puts **TreeSyncBuild** and **TreeSyncInstall** in the **TreeSyncApp** folder of your
+app list (`setup/app-folder.sh`; see [2.6](2-Build.md)).
+
 It also points git at the project's pre-push hook
 (`git config core.hooksPath v001/setup/hooks`), so every `git push` first runs the
 full check (see [2.5](2-Build.md#25-verifysh-the-full-check-and-the-pre-push-hook)).
@@ -125,18 +128,20 @@ The same lines are added to `Bootstrap-Results.txt` in TreeSync's logs folder.
 | `--compiler gcc` / `clang` / `both` | Build with one compiler (default both) |
 | `--no-build` | Stop after the checks and installs |
 | `--upp-dir DIR` | Where U++ goes if it has to be fetched (default `~/u++`) |
-| `--check` | Only check, one `@req` line per requirement (the Build page uses this); exit 1 if a required one is missing |
+| `--check` | Only check, one `@req` line per requirement (TreeSyncBuild uses this); exit 1 if a required one is missing |
 | `-h`, `--help` | Show the help |
 
 ## 1.6 After bootstrap
 
 Bootstrap leaves **debug** builds in `out/gcc/` and `out/clang/`. For everyday use
-build the faster **release** programs, which is what the GUI should run:
+build the faster **release** programs, and install them:
 
-```bash
-./verify.sh          # debug and release, all tests, both compilers; ends with release builds
-./install.sh         # copy them to /usr/local/bin for root (asks for your sudo password)
-```
+1. **TreeSyncBuild** (TreeSyncApp folder): Type *Release*, **Build** (or
+   `./verify.sh`: debug and release, all tests, both compilers; ends with release builds).
+2. **TreeSyncInstall**: **Install GCC...** and / or **Install Clang...** copies that build
+   to `/usr/local/bin` for root (asks for your password; or `./install.sh`).
+   TreeSyncRoot-GCC, TreeSyncHome-GCC (and the Clang ones) then join the TreeSyncApp
+   folder.
 
 Most syncs need root, and root runs the installed copy: see
-[2.6 Install for root](2-Build.md). Then go on to [3. Run](3-Run.md).
+[2.6 TreeSyncInstall](2-Build.md). Then go on to [3. Run](3-Run.md).

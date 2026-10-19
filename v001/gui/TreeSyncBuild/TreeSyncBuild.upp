@@ -1,0 +1,12 @@
+description "TreeSyncBuild: build and test TreeSync, with the bootstrap checks (not installed itself)\377";
+
+uses
+	TreeSyncUi;
+
+file
+	TreeSyncBuild.h,
+	Build.cpp,
+	main.cpp;
+
+mainconfig
+	"" = "GUI WAYLAND";

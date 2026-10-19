@@ -26,9 +26,10 @@ void PathPicker::LoadDisks()
 	disk.ClearList();
 	disk.Add(Null, "All disks");
 
-	// Without root only the home directory is offered, on the disk that holds it.
+	// TreeSyncHome only offers the home directory, on the disk that holds it; TreeSyncRoot
+	// (its runs are root's) offers every disk. The title says which one this is.
 	String home_disk;
-	if(!IsRoot()) {
+	if(!run_as_root) {
 		String home = HomeDir();
 		int best = -1;
 		for(int i = 0; i < mounts.GetCount(); i++)
@@ -38,14 +39,14 @@ void PathPicker::LoadDisks()
 		MountInfo h;
 		h.dir = home;
 		h.disk = best >= 0 ? mounts[best].disk : String();
-		h.label = home + "  (home, not root)";
+		h.label = home;
 		home_disk = h.disk;
 		mounts.Clear();
 		mounts.Add(h);
 	}
 
 	for(const DiskInfo& d : ListDisks())
-		if(IsRoot() || d.id == home_disk)
+		if(run_as_root || d.id == home_disk)
 			disk.Add(d.id, d.label);
 	for(const MountInfo& m : mounts)
 		if(m.disk == DISK_NETWORK) {

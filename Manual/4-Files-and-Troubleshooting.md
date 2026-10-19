@@ -4,20 +4,22 @@
 
 | What | Where |
 |---|---|
-| Installed programs | `/usr/local/bin/treesync`, `/usr/local/bin/treesync-cli` (`root:root`, 755; by `install.sh`) |
-| Installed manual | `/usr/local/share/doc/treesync/pdf/`, and `INSTALLED`: which build, commit, when |
-| Desktop entry | `/usr/local/share/applications/treesync.desktop` |
+| Installed programs | `/usr/local/bin/treesync-root-gcc`, `treesync-home-gcc`, `treesync-cli-gcc`, the same with `-clang`, and `treesync-cli` (a link) (`root:root`, 755; by TreeSyncInstall / `install.sh`) |
+| Installed manual | `/usr/local/share/doc/treesync/pdf/`, and `INSTALLED-gcc`, `INSTALLED-clang`: which build, commit, when |
+| App entries, installed | `/usr/local/share/applications/treesync-root-gcc.desktop`, `treesync-home-gcc.desktop`, and the same with `-clang` |
 | polkit action | `/usr/share/polkit-1/actions/org.treesync.run-as-root.policy` |
-| Built programs | `v001/out/gcc/` and `v001/out/clang/`: `treesync`, `treesync-cli`, `treesync-test` |
+| Built programs | `v001/out/gcc/` and `v001/out/clang/`: `treesync-root`, `treesync-home`, `treesync-cli`, `treesync-build`, `treesync-install`, `treesync-test` |
 | Build and test output | `v001/out/` (`verify/` logs, `bootstrap-*.txt`); ignored by git |
-| GUI settings | `~/.config/treesync/settings`: one option per line, as on the command line |
-| Build page choices | `~/.config/treesync/build` |
+| GUI settings | `~/.config/treesync/settings` (TreeSyncRoot), `settings-home` (TreeSyncHome): one option per line, as on the command line |
+| TreeSyncBuild's choices (and the display) | `~/.config/treesync/build` |
+| TreeSyncBuild and TreeSyncInstall in your app list | `~/.local/share/applications/treesync-build.desktop`, `treesync-install.desktop` (by `setup/app-folder.sh`) |
+| The TreeSyncApp folder | GNOME: `gsettings get org.gnome.desktop.app-folders folder-children`; other desktops: `~/.config/menus/applications-merged/treesyncapp.menu` |
 | Database | `~/.local/share/treesync/treesync.db` (SQLite): runs, actions, hash cache, checks |
 | Run logs | `~/.local/share/treesync/logs/YYYY-MM-DD_HHMMSS.log` |
 | Results of every run | `~/.local/share/treesync/logs/Results.txt`, one line per run |
 | AI exports | `~/.local/share/treesync/logs/ai/run-N-logs.AI.md`, `run-N-sql.AI.md` |
 | Root runs | the same under `/root/.local/share/treesync/` |
-| Safe-delete folder | `<target>.old` next to the target (or `--safe-delete-dir`) |
+| Safe-delete folder | `<target>.old` next to the target; `<target>/.treesync-old` inside it when the target is the top folder of a disk (or `--safe-delete-dir`) |
 | Unfinished copies | `NAME.treesync-part` next to where the file goes; removed when done |
 | This manual | `Manual/*.md` (the sources) and `Manual/pdf/` (built by `Manual/build-pdf.sh`) |
 
@@ -25,24 +27,31 @@
 
 ## 4.2 Troubleshooting
 
-**"TreeSync is not running as root ... only inside your home directory"**
-: That is the source-tree build running as you. Use the installed TreeSync, which
-  syncs as root for administrators (`./install.sh`, then **TreeSync** in the app list or
-  `treesync-cli ...`), or tick **Sync > Run as root**. Inside your home nothing is needed.
+**"... is outside your home directory. Without root, TreeSync only works inside ..."**
+: That is TreeSyncHome (or `treesync-cli` running as you). To sync other folders use
+  **TreeSyncRoot**, which syncs as root for administrators. Inside your home nothing
+  is needed.
 
-**Root runs use an older TreeSync, or the log says the installed one "is not this build"**
-: The installed copy does not follow `out/`: run `./install.sh` (or **File > Install for
-  root**) after building. `cat /usr/local/share/doc/treesync/INSTALLED` shows which
-  build is installed.
-
-**"ask an administrator (a member of wheel) to run TreeSync as root"**
-: You are not an administrator, so TreeSync syncs as you, inside your home. To sync
-  other folders, an administrator runs it, or adds you to wheel
+**"TreeSyncRoot is for administrators"**
+: You are not an administrator, so you sync with TreeSyncHome, as yourself, inside your
+  home. To sync other folders, an administrator does it, or adds you to wheel
   (`sudo usermod -aG wheel NAME`; log in again), which also lets you use sudo.
 
+**TreeSyncRoot and TreeSyncHome are not in the app list, or not in the TreeSyncApp folder**
+: They are installed by TreeSyncInstall; until then only TreeSyncBuild and
+  TreeSyncInstall are there. The folder is per user: run `v001/setup/app-folder.sh` as
+  yourself (TreeSyncInstall and bootstrap do). GNOME may need you to log out and in
+  once to show a new folder.
+
+**Root runs use an older TreeSync, or the log says the installed one "is not this build"**
+: The installed copy does not follow `out/`: install again with TreeSyncInstall (or
+  `./install.sh`) after building. TreeSyncInstall shows which build is installed, and so
+  does `cat /usr/local/share/doc/treesync/INSTALLED-gcc` (or `-clang`).
+
 **The password is asked at every run**
-: The polkit action is missing: it is installed only when `install.sh` runs as root
-  (the default, through sudo), not for a `--prefix` of your own.
+: TreeSyncRoot asks once per window; if each new window asks at once, the polkit
+  action is missing: it is installed only when `install.sh` runs as root (the default,
+  through sudo), not for a `--prefix` of your own.
 
 **`sudo treesync-cli`: "command not found"**
 : sudo does not search `/usr/local/bin` on RHEL. Leave the sudo out: the installed
@@ -82,9 +91,9 @@
   Many small files: more threads (`--threads=8`) can help. Over SFTP the network is
   usually the limit; `--compress` helps text, not media.
 
-**"no Wayland session found" on the Build page**
+**"no Wayland session found" in TreeSyncBuild**
 : The GUI was started without `WAYLAND_DISPLAY`, usually through `sudo`. Start it as
-  yourself and use **Sync > Run as root** for root runs.
+  yourself, and use TreeSyncRoot for root runs.
 
 **The host key is refused (remote trees)**
 : Connect once with `ssh user@host` to check and accept the key; TreeSync never
@@ -93,6 +102,11 @@
 **A run was stopped and the target has `.treesync-part` files**
 : Run the same sync again: it resumes, re-checks what was already copied, and removes
   the part files when done. `--fresh` starts over instead.
+
+**"cannot move ... it is on a different disk"**
+: A move cannot cross disks. A target at the top of a disk gets its safe-delete
+  folder inside it (`.treesync-old`) by itself; this message means `--safe-delete-dir`
+  points to another disk. Use a folder on the target's disk, or no `--safe-delete-dir`.
 
 **The `.old` folder keeps growing**
 : Safe delete never deletes. **Sync > Clear .old folders...** (or

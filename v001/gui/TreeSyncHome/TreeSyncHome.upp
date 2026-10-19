@@ -1,0 +1,10 @@
+description "TreeSyncHome: syncs as the user, inside their home (anyone)\377";
+
+uses
+	TreeSync;
+
+file
+	main.cpp;
+
+mainconfig
+	"" = "GUI WAYLAND";

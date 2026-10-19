@@ -149,7 +149,16 @@ inline void ListingLine(String& listing, char type, const String& hash, const St
 	listing << type << ' ' << hash << ' ' << name << '\n';
 }
 
-bool SkipName(const String& name);   // ".", "..", our own .treesync-part files
+bool SkipName(const String& name);   // ".", "..", our own .treesync-part files and .treesync-old folder
+
+// --safe-delete: where a side's deleted and replaced files go. Normally <root>.old next
+// to the tree; when a local tree is the top folder of a disk (its parent is on another
+// disk, where a move cannot go), <root>/.treesync-old inside it, on the same disk. That
+// name is reserved: every scan, comparison and Mirror skips it (SkipName).
+extern const char *const SAFE_DELETE_INSIDE;   // ".treesync-old"
+bool   IsMountRoot(const String& path);         // a local folder whose parent is on another disk
+String SafeDeleteFolder(const String& root, bool local);
+bool   IsSafeDeleteInside(const String& old, const String& root);   // old is root/.treesync-old
 bool UnstableInodes(int fd);         // FAT, FUSE, network filesystems
 bool GlobMatch(const String& patterns, const String& name);   // name matches one of the ';' globs
 bool AnyPattern(const String& patterns);                      // not blank: something to match

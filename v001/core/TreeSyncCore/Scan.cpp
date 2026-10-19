@@ -22,9 +22,32 @@ String SortKey(const String& rel)
 	return k;
 }
 
+const char *const SAFE_DELETE_INSIDE = ".treesync-old";
+
 bool SkipName(const String& name)
 {
-	return name == "." || name == ".." || name.EndsWith(".treesync-part");
+	return name == "." || name == ".." || name.EndsWith(".treesync-part") || name == SAFE_DELETE_INSIDE;
+}
+
+bool IsMountRoot(const String& path)
+{
+	struct stat a, b;
+	if(path == "/")
+		return true;
+	String parent = GetFileFolder(path);
+	return stat(path, &a) == 0 && stat(parent.IsEmpty() ? String("/") : parent, &b) == 0 && a.st_dev != b.st_dev;
+}
+
+String SafeDeleteFolder(const String& root, bool local)
+{
+	if(local && IsMountRoot(root))
+		return (root == "/" ? String() : root) + "/" + SAFE_DELETE_INSIDE;
+	return root + ".old";
+}
+
+bool IsSafeDeleteInside(const String& old, const String& root)
+{
+	return old == (root == "/" ? String() : root) + "/" + SAFE_DELETE_INSIDE;
 }
 
 bool GlobMatch(const String& patterns, const String& name)

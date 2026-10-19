@@ -56,8 +56,8 @@ String NotRootMessage()
 {
 	return "TreeSync is not running as root.\n"
 	       "It will still work, but only inside your home directory: " + HomeDir() + "\n" +
-	       String(IsAdmin() ? "To sync other folders, run TreeSync as root."
-	                        : "To sync other folders, ask an administrator (a member of wheel) to run TreeSync as root.");
+	       String(IsAdmin() ? "To sync other folders, use TreeSyncRoot (or treesync-cli as root)."
+	                        : "To sync other folders, ask an administrator (a member of wheel) to sync them with TreeSyncRoot.");
 }
 
 String RefusedPathMessage(const String& p)

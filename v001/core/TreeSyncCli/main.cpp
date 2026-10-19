@@ -3,6 +3,10 @@
 // Ctrl+C twice: quit at once.
 // --stop-on-eof (used by the GUI): stop the same way when stdin is closed. The GUI
 // can always close a pipe, even when pkexec made this a root process it may not signal.
+// --home (used by TreeSyncHome): run as yourself, inside your home, even when an
+// administrator starts the installed copy (which otherwise starts itself through sudo).
+// --root-session (used by TreeSyncRoot): one root process for a whole window, so the
+// password is asked once (pkexec) and not at every run; see RootSession below.
 // --gui-progress (used by the GUI): also print progress as tagged lines,
 //   @file <TAB> id <TAB> done <TAB> size <TAB> seconds <TAB> index <TAB> count <TAB> name [<TAB> verify]
 //   @overall <TAB> done <TAB> total
@@ -18,6 +22,8 @@
 #include <thread>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
+#include <sys/wait.h>
 #include <cerrno>
 #include <cstring>
 #include <vector>
@@ -82,7 +88,8 @@ static void *WatchStdin(void *)
 
 // The installed treesync-cli (install.sh: owned by root, only root may change it) runs
 // as root for an administrator: started by one, it starts itself again through sudo.
-// Anyone else runs it as themselves, inside their own home; so does the build in out/.
+// Anyone else runs it as themselves, inside their own home; so does the build in out/,
+// and so does a run started with --home (TreeSyncHome).
 static void AsRootIfInstalled(const Vector<String>& args)
 {
 	struct stat st;
@@ -90,7 +97,7 @@ static void AsRootIfInstalled(const Vector<String>& args)
 	if(IsRoot() || !IsAdmin() || stat(self, &st) != 0 || st.st_uid != 0 || (st.st_mode & 022))
 		return;
 	for(const String& a : args)
-		if(a == "--help" || a == "-h")
+		if(a == "--help" || a == "-h" || a == "--home")
 			return;
 	std::vector<char *> argv;
 	argv.push_back((char *)"sudo");
@@ -103,9 +110,108 @@ static void AsRootIfInstalled(const Vector<String>& args)
 	exit(2);
 }
 
+static bool ReadAll(int fd, void *data, size_t size)
+{
+	for(char *p = (char *)data; size;) {
+		ssize_t n = read(fd, p, size);
+		if(n < 0 && errno == EINTR)
+			continue;
+		if(n <= 0)
+			return false;
+		p += n;
+		size -= n;
+	}
+	return true;
+}
+
+// --root-session: started by TreeSyncRoot through pkexec, with a Unix socket as stdin.
+// Each request is a run: 4 bytes of length, then its arguments, each ending in a NUL,
+// with two file descriptors attached (the run's stdin and stdout, pipes of the GUI).
+// It runs this program again with those arguments and answers with the 4-byte exit
+// code. It only ever runs itself, one run at a time, and ends when the GUI closes the
+// socket (the window closed, or the GUI died).
+static int RootSession()
+{
+	if(!IsRoot()) {
+		Cerr() << "treesync-cli: --root-session is for TreeSyncRoot, through pkexec\n";
+		return 2;
+	}
+	String self = GetExeFilePath();
+	for(;;) {
+		uint32 size = 0;
+		alignas(cmsghdr) char ctl[CMSG_SPACE(2 * sizeof(int))];
+		iovec iov = { &size, sizeof(size) };
+		msghdr m = {};
+		m.msg_iov = &iov;
+		m.msg_iovlen = 1;
+		m.msg_control = ctl;
+		m.msg_controllen = sizeof(ctl);
+		ssize_t n = recvmsg(0, &m, MSG_CMSG_CLOEXEC | MSG_WAITALL);
+		if(n < 0 && errno == EINTR)
+			continue;
+		if(n != sizeof(size))
+			return 0;   // the GUI is gone
+		int fds[2] = { -1, -1 }, nfd = 0;
+		for(cmsghdr *c = CMSG_FIRSTHDR(&m); c; c = CMSG_NXTHDR(&m, c))
+			if(c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS)
+				for(size_t i = 0; i < (c->cmsg_len - CMSG_LEN(0)) / sizeof(int); i++) {
+					int fd;
+					memcpy(&fd, CMSG_DATA(c) + i * sizeof(int), sizeof(int));
+					if(nfd < 2)
+						fds[nfd++] = fd;
+					else
+						close(fd);
+				}
+		if(size > (1u << 24))
+			return 0;   // not a request of ours
+		StringBuffer buf((int)size);
+		if(!ReadAll(0, buf.Begin(), size))
+			return 0;
+		bool ok = nfd == 2 && !(m.msg_flags & MSG_CTRUNC);
+		int32 code = 2;
+		if(ok) {
+			String all = buf;
+			Vector<String> args;   // not Split: it reads a C string, which ends at the first NUL
+			for(int at = 0, end; at < all.GetCount(); at = end + 1) {
+				end = all.Find('\0', at);
+				if(end < 0)
+					end = all.GetCount();
+				args.Add(all.Mid(at, end - at));
+			}
+			std::vector<char *> argv;
+			argv.push_back((char *)~self);
+			for(const String& a : args)
+				argv.push_back((char *)~a);
+			argv.push_back(nullptr);
+			pid_t pid = fork();
+			if(pid == 0) {
+				dup2(fds[0], 0);
+				dup2(fds[1], 1);
+				dup2(fds[1], 2);
+				signal(SIGPIPE, SIG_DFL);
+				execv(self, argv.data());
+				_exit(127);
+			}
+			int st = 0;
+			while(pid > 0 && waitpid(pid, &st, 0) < 0 && errno == EINTR)
+				;
+			code = pid < 0 ? 2 : WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
+		}
+		for(int fd : fds)
+			if(fd >= 0)
+				close(fd);
+		if(send(1, &code, sizeof(code), MSG_NOSIGNAL) != sizeof(code))
+			return 0;
+	}
+}
+
 CONSOLE_APP_MAIN
 {
 	Vector<String> args = clone(CommandLine());
+	if(args.GetCount() == 1 && args[0] == "--root-session") {
+		SetExitCode(RootSession());
+		return;
+	}
 	AsRootIfInstalled(args);
 	// Developer switches for comparing compilers (the Build window's compare step):
 	// facts about this build, one "key<TAB>value" per line.
@@ -143,12 +249,14 @@ CONSOLE_APP_MAIN
 		}
 	}
 	bool stop_on_eof = false, compare_ids = false, scan_only = false, sync_attrs = false, clear_old = false;
+	bool home = false;   // only read before this point (AsRootIfInstalled)
 	static bool gui_progress = false;
 	static bool checking = false;   // Scan only / Sync attributes: the pre-scan counts folders
 	for(int i = args.GetCount() - 1; i >= 0; i--) {
 		bool *flag = args[i] == "--compare-ids" ? &compare_ids : args[i] == "--stop-on-eof" ? &stop_on_eof
 		           : args[i] == "--gui-progress" ? &gui_progress : args[i] == "--scan-only" ? &scan_only
-		           : args[i] == "--sync-attrs" ? &sync_attrs : args[i] == "--clear-old" ? &clear_old : nullptr;
+		           : args[i] == "--sync-attrs" ? &sync_attrs : args[i] == "--clear-old" ? &clear_old
+		           : args[i] == "--home" ? &home : nullptr;
 		if(flag) {
 			*flag = true;
 			args.Remove(i);

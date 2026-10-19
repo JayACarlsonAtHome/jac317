@@ -15,8 +15,12 @@
 #                                          # (fair build times when comparing compilers)
 #
 # Packages: core/TreeSyncCore (engine, no GUI), core/TreeSyncCli (the engine in a
-# terminal), gui/TreeSync (GUI on top), core/TreeSyncTest (tests of the core).
-# Output: v001/out/<compiler>/treesync, treesync-cli, treesync-test (gitignored).
+# terminal), gui/TreeSync (the sync window), shown by gui/TreeSyncRoot (syncs as root)
+# and gui/TreeSyncHome (as you, inside your home), gui/TreeSyncBuild (builds and tests,
+# with bootstrap's checks), gui/TreeSyncInstall (installs for root), gui/TreeSyncUi
+# (what the GUIs share), core/TreeSyncTest (tests of the core).
+# Output: v001/out/<compiler>/treesync-root, treesync-home, treesync-cli, treesync-build,
+# treesync-install, treesync-test (gitignored).
 # Both build methods pass -std=c++26; U++'s stock ones pass -std=c++17.
 set -eu
 
@@ -71,7 +75,8 @@ same_type() {   # same_type OUT
   local want mark="$1/.build-type"
   case "$MODE" in -br*) want=release ;; *) want=debug ;; esac
   if [ "$(cat "$mark" 2>/dev/null)" != "$want" ]; then
-    rm -f "$1/treesync" "$1/treesync-cli" "$1/treesync-test"
+    rm -f "$1/treesync-root" "$1/treesync-home" "$1/treesync-cli" "$1/treesync-build" \
+          "$1/treesync-install" "$1/treesync-test"
   fi
   echo "$want" > "$mark"
 }
@@ -128,10 +133,12 @@ if [ -n "$CHECK" ]; then
     "$UMK" "$ASSEMBLY" TreeSyncTest "$BM" $MODE +USEMALLOC "$OUT/treesync-test"
     if [ "$CHECK" = valgrind ]; then
       TREESYNC_VALGRIND=1 valgrind --tool=memcheck --error-exitcode=99 --track-origins=yes \
+               --suppressions="$HERE/setup/valgrind.supp" \
                --leak-check=full --errors-for-leak-kinds=definite --show-leak-kinds=definite \
                "$OUT/treesync-test"
     else
-      TREESYNC_VALGRIND=1 valgrind --tool=helgrind --error-exitcode=99 "$OUT/treesync-test"
+      TREESYNC_VALGRIND=1 valgrind --tool=helgrind --error-exitcode=99 \
+               --suppressions="$HERE/setup/valgrind.supp" "$OUT/treesync-test"
     fi
     ;;
   esac
@@ -146,8 +153,12 @@ ASSEMBLY="$HERE/core,$HERE/gui,$UPPSRC"
 # The programs are always built, so --test never leaves them older than the tests.
 echo "Building TreeSyncCli with $CXX"
 "$UMK" "$ASSEMBLY" TreeSyncCli "$BM" $MODE "$OUT/treesync-cli"
-echo "Building TreeSync with $CXX"
-"$UMK" "$ASSEMBLY" TreeSync "$BM" $MODE "$OUT/treesync"
+rm -f "$OUT/treesync"   # the one GUI before TreeSyncRoot and TreeSyncHome
+for p in TreeSyncRoot:treesync-root TreeSyncHome:treesync-home TreeSyncBuild:treesync-build \
+         TreeSyncInstall:treesync-install; do
+  echo "Building ${p%%:*} with $CXX"
+  "$UMK" "$ASSEMBLY" "${p%%:*}" "$BM" $MODE "$OUT/${p#*:}"
+done
 if [ "$TEST" = 1 ]; then
   echo "Building TreeSyncTest with $CXX"
   "$UMK" "$ASSEMBLY" TreeSyncTest "$BM" $MODE "$OUT/treesync-test"

@@ -133,9 +133,10 @@ bool RunSync(const SyncSetup& setup, SyncReport& report, SyncResult& result, Str
 	const String& src = r.ids[0];
 	const String& dst = r.ids[1];
 
-	// --safe-delete: <side>.old next to each tree, or --safe-delete-dir for the target.
+	// --safe-delete: <side>.old next to each tree (inside it, as .treesync-old, when it is
+	// the top folder of a disk), or --safe-delete-dir for the target.
 	for(int i = 0; i < 2; i++) {
-		r.old_roots[i] = side[i]->RootPath() + ".old";
+		r.old_roots[i] = SafeDeleteFolder(side[i]->RootPath(), side[i]->IsLocal());
 		if(i == 1 && setup.safe_delete_dir.GetCount())
 			r.old_roots[i] = setup.target.remote ? setup.safe_delete_dir : CanonicalPath(setup.safe_delete_dir);
 	}
@@ -145,11 +146,15 @@ bool RunSync(const SyncSetup& setup, SyncReport& report, SyncResult& result, Str
 	if(flags.safe_delete)
 		for(int i = 0; i < 2; i++) {
 			const String& old = r.old_roots[i];
-			for(int t = 0; t < 2; t++)
+			for(int t = 0; t < 2; t++) {
+				if(t == i && IsSafeDeleteInside(old, side[t]->RootPath()))
+					continue;   // the reserved folder inside its own tree, which every scan skips
 				if((t == i || both_local) && (IsUnder(old, side[t]->RootPath()) || IsUnder(side[t]->RootPath(), old))) {
-					error = "--safe-delete folder " + old + " must be outside both trees";
+					error = "--safe-delete folder " + old + " must be outside both trees (or be " +
+					        side[t]->RootPath() + "/" + SAFE_DELETE_INSIDE + ")";
 					return false;
 				}
+			}
 			if(side[i]->IsLocal() && !PathAllowed(old)) {
 				error = RefusedPathMessage(old);
 				return false;

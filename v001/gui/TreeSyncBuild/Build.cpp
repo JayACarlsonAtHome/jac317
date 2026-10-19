@@ -1,10 +1,12 @@
-// Build: compiles TreeSync with the chosen compilers and, when "Run the tests" is
-// ticked, runs the tests and the checked runs under it, like jac313's Jac313Runner. A presenter: v001/build.sh does the work; this window
+// TreeSyncBuild: compiles TreeSync with the chosen compilers and, when "Run the tests"
+// is ticked, runs the tests and the checked runs under it, like jac313's Jac313Runner;
+// checks the machine's requirements (bootstrap.sh --check) and opens bootstrap.sh in a
+// terminal to fix them; opens TreeSyncInstall to install the release build for root;
+// starts the TreeSyncHome it built. A presenter: v001/build.sh does the work; this window
 // builds its command lines, runs them one after another as child processes,
 // streams their output and sums up how each went.
 //
-//   Screen 1  Options + Start   (choices saved to ~/.config/treesync/build); also the
-//                               first screen when TreeSync starts, unless switched off
+//   Screen 1  Options + Build   (choices saved to ~/.config/treesync/build)
 //   Screen 2  Running           (each step's state, elapsed time, live output, Stop)
 //   Screen 3  Results           (start : stop : duration per step, the j5c Results.txt layout;
 //                                with Compare, a table of the compilers side by side)
@@ -12,11 +14,11 @@
 // Compare runs compare.sh per compiler after the builds: versions, C++26 features,
 // import std (works? compile times against #include), benchmarks of the built
 // program, sizes; plus each build's time and test result. Rows that differ are marked.
-#include "TreeSync.h"
+#include "TreeSyncBuild.h"
 
 #include <signal.h>
 
-// out/<compiler>/treesync -> v001/build.sh; empty when this program was not run
+// out/<compiler>/treesync-build -> v001/build.sh; empty when this program was not run
 // from a build tree.
 static String BuildScript()
 {
@@ -24,64 +26,20 @@ static String BuildScript()
 	return FileExists(s) ? s : String();
 }
 
-// The TreeSync program built by one compiler: out/<compiler>/treesync.
-String TreeSyncExe(const String& compiler)
+// A program built by one compiler: out/<compiler>/<name>.
+String TreeSyncExe(const String& compiler, const String& name)
 {
-	return NormalizePath(AppendFileName(GetExeFolder(), "../" + compiler + "/treesync"));
+	return NormalizePath(AppendFileName(GetExeFolder(), "../" + compiler + "/" + name));
 }
 
-static String BuildSettingsPath()
+// Starts that program in a window of its own, on the chosen display; this window stays.
+static void RunTreeSync(const String& compiler, const String& name, const String& args = String())
 {
-	return AppendFileName(GetFileFolder(SettingsPath()), "build");
-}
-
-// Display: Wayland (recommended) or X Windows (X11, not recommended: any X11 program
-// can read the keyboard and the screen of the others). GTK picks by GDK_BACKEND.
-bool WaylandAvailable()
-{
-	return GetEnv("WAYLAND_DISPLAY").GetCount();
-}
-
-String DisplayNow()
-{
-	return Ctrl::IsWayland() ? "wayland" : "x11";
-}
-
-String DisplayChoice()
-{
-	String d = "wayland";
-	for(const String& line : Split(LoadFile(BuildSettingsPath()), '\n'))
-		if(line == "display=x11")
-			d = "x11";
-	return WaylandAvailable() ? d : String("x11");
-}
-
-String DisplayName(const String& d)
-{
-	return d == "wayland" ? "Wayland" : "X Windows (X11)";
-}
-
-// Starts exe (with args) on the chosen display, in place of this program.
-void ExecOnDisplay(const String& exe, const Vector<String>& args, const String& display)
-{
-	setenv("GDK_BACKEND", display == "wayland" ? "wayland" : "x11", 1);
-	setenv("TREESYNC_DISPLAY_SET", "1", 1);   // the started program does not switch again
-	std::vector<char *> argv;
-	argv.push_back(const_cast<char *>(~exe));
-	for(const String& a : args)
-		argv.push_back(const_cast<char *>(~a));
-	argv.push_back(nullptr);
-	execv(exe, argv.data());
-	Exclamation("Could not start " + DeQtf(exe) + ": " + DeQtf(strerror(errno)));
-}
-
-// At start: if this program came up on the other display than the chosen one, start
-// it again on the chosen one (once; GDK_BACKEND is only read when GTK starts).
-void ApplyDisplayChoice()
-{
-	if(GetEnv("TREESYNC_DISPLAY_SET").GetCount() || DisplayNow() == DisplayChoice())
-		return;
-	ExecOnDisplay(GetExeFilePath(), CommandLine(), DisplayChoice());
+	String exe = TreeSyncExe(compiler, name);
+	setenv("GDK_BACKEND", DisplayChoice() == "wayland" ? "wayland" : "x11", 1);
+	setenv("TREESYNC_DISPLAY_SET", "1", 1);
+	if(system("/usr/bin/setsid -f " + ShellQuote(exe) + " " + args + " > /dev/null 2>&1 < /dev/null") != 0)
+		Exclamation("Could not start [C " + DeQtf(exe) + "].");
 }
 
 namespace {
@@ -120,11 +78,11 @@ class BuildWindow : public TopWindow {
 	Label     display_now;
 	Label     compiler_label, type_label;
 	Switch    compiler, type;
-	Option    tests, tsan, asan, valgrind, helgrind, clean, compare;
+	Option    tests, tsan, asan, valgrind, helgrind, clean, compare, install_after;
 	LineEdit  toolchain;
 	Label     command;
-	Button    start, close1;
-	Option    at_start;
+	Button    start, close1, install1;
+	MenuBar   menu;
 
 	// Screen 2
 	ArrayCtrl steps_list;
@@ -136,9 +94,8 @@ class BuildWindow : public TopWindow {
 	Splitter  split3;
 	ArrayCtrl compare_list;
 	LineEdit  results;
-	Button    back, close3;
-	Button    use_gcc1, use_clang1, use_gcc3, use_clang3;   // startup: continue with that build
-	Button    exit1, exit3;                                  // startup: quit TreeSync
+	Button    back, close3, install3;
+	Button    use_gcc1, use_clang1, use_gcc3, use_clang3;   // start the TreeSyncHome of that build
 
 	Vector<BuildStep> steps;
 	int               step = -1;
@@ -162,15 +119,14 @@ class BuildWindow : public TopWindow {
 	void Stop();
 	void ShowCompare();
 	String CompareText();
+	void Install();          // opens TreeSyncInstall
 
 public:
-	bool startup = false;              // the page TreeSync opens on: Continue instead of Close
-	String continue_with;              // startup: "gcc" or "clang", the build to run next
 	String DisplayChosen() const       { return AsString(~display); }
-	void Startup();
 	void UseButtons();
 	bool auto_run = false;             // --build-run: start at once, close when done
 	void Run()                         { Start(); }
+	void Run(bool plan);
 	void Snap(const String& folder);   // --screenshot: the three screens as PNGs
 	void Close() override;
 	bool Key(dword key, int count) override
@@ -188,9 +144,11 @@ public:
 
 BuildWindow::BuildWindow()
 {
-	Title("TreeSync - Build");
+	Title("TreeSyncBuild");
 	Sizeable().Zoomable();
-	SetRect(0, 0, Zx(900), Zy(760));
+	SetRect(0, 0, Zx(1000), Zy(790));
+	AddFrame(menu);
+	menu.Set([](Bar& bar) { bar.Sub("Help", [](Bar& bar) { HelpMenu(bar, "2-Build"); }); });
 	Add(s1.SizePos());
 	Add(s2.SizePos());
 	Add(s3.SizePos());
@@ -200,7 +158,7 @@ BuildWindow::BuildWindow()
 	compiler.Add("gcc", "gcc 15 (gcc-toolset-15)").Add("clang", "clang 21").Add("both", "both, one after the other");
 	s1.Add(compiler.HSizePosZ(20, 20).TopPosZ(28, 22));
 
-	s1.Add(build_box.SetLabel("Build").HSizePosZ(8, 8).TopPosZ(66, 222));
+	s1.Add(build_box.SetLabel("Build").HSizePosZ(8, 8).TopPosZ(66, 246));
 	s1.Add(type_label.SetText("Type:").LeftPosZ(20, 60).TopPosZ(86, 22));
 	type.Add("debug", "Debug").Add("release", "Release (optimized)");
 	s1.Add(type.LeftPosZ(80, 400).TopPosZ(86, 22));
@@ -221,33 +179,35 @@ BuildWindow::BuildWindow()
 	s1.Add(clean.LeftPosZ(20, 700).TopPosZ(232, 22));
 	compare.SetLabel("Compare the compilers: versions, C++26 features, import std, speed, size");
 	s1.Add(compare.LeftPosZ(20, 700).TopPosZ(256, 22));
+	install_after.SetLabel("Open TreeSyncInstall after a good release build (to install it for root)");
+	s1.Add(install_after.LeftPosZ(20, 860).TopPosZ(280, 22));
 
-	s1.Add(display_box.SetLabel("Display").HSizePosZ(8, 8).TopPosZ(294, 52));
+	s1.Add(display_box.SetLabel("Display").HSizePosZ(8, 8).TopPosZ(318, 52));
 	display.Add("wayland", "Wayland (recommended)").Add("x11", "X Windows / X11 (not recommended)");
-	s1.Add(display.LeftPosZ(20, 520).TopPosZ(314, 22));
-	s1.Add(display_now.HSizePosZ(560, 16).TopPosZ(314, 22));
+	s1.Add(display.LeftPosZ(20, 520).TopPosZ(338, 22));
+	s1.Add(display_now.HSizePosZ(560, 16).TopPosZ(338, 22));
 	display.Tip("X11 lets any program read the keyboard and the screen of the others, and is no "
 	            "longer developed. Use it only on a desktop without Wayland.");
-	s1.Add(machine_box.SetLabel("This machine").HSizePosZ(8, 8).TopPosZ(352, 52));
-	s1.Add(req_status.HSizePosZ(20, 360).TopPosZ(372, 22));
-	s1.Add(check_again.SetLabel("Check again").RightPosZ(196, 110).TopPosZ(370, 26));
-	s1.Add(fix.SetLabel("Open terminal to fix...").RightPosZ(20, 170).TopPosZ(370, 26));
+	s1.Add(machine_box.SetLabel("This machine").HSizePosZ(8, 8).TopPosZ(376, 52));
+	s1.Add(req_status.HSizePosZ(20, 360).TopPosZ(396, 22));
+	s1.Add(check_again.SetLabel("Check again").RightPosZ(196, 110).TopPosZ(394, 26));
+	s1.Add(fix.SetLabel("Open terminal to fix...").RightPosZ(20, 170).TopPosZ(394, 26));
 	check_again << [this] { CheckRequirements(); };
 	fix << [this] { OpenFixTerminal(); };
 	fix.Tip("Opens a terminal with ./bootstrap.sh typed at the prompt; press Enter to run it. "
 	        "It asks before it installs anything.");
-	s1.Add(toolchain_box.SetLabel("This program was built with").HSizePosZ(8, 8).VSizePosZ(410, 204));
+	s1.Add(toolchain_box.SetLabel("This program was built with").HSizePosZ(8, 8).VSizePosZ(434, 204));
 	toolchain.SetReadOnly();
 	toolchain.SetFont(Monospace());
 	toolchain <<= ToolchainReport();
-	s1.Add(toolchain.HSizePosZ(16, 16).VSizePosZ(430, 212));
+	s1.Add(toolchain.HSizePosZ(16, 16).VSizePosZ(454, 212));
 
 	command.SetFont(Monospace());
 	s1.Add(command.HSizePosZ(8, 8).BottomPosZ(42, 156));   // up to 10 steps, one line each
-	s1.Add(start.SetLabel("Build").RightPosZ(116, 100).BottomPosZ(8, 28));
-	s1.Add(close1.SetLabel("Close").RightPosZ(8, 100).BottomPosZ(8, 28));
-	at_start.SetLabel("Show this page when TreeSync starts");
-	s1.Add(at_start.LeftPosZ(8, 400).BottomPosZ(10, 24));
+	// Bottom row: Build, Install, Run TreeSyncHome (gcc, clang), Close.
+	s1.Add(start.SetLabel("Build").LeftPosZ(8, 110).BottomPosZ(8, 28));
+	s1.Add(install1.SetLabel("Install...").LeftPosZ(124, 150).BottomPosZ(8, 28));
+	s1.Add(close1.SetLabel("Close").RightPosZ(8, 90).BottomPosZ(8, 28));
 
 	// Screen 2: running
 	steps_list.AddColumn("Step", 40);
@@ -273,19 +233,20 @@ BuildWindow::BuildWindow()
 	split3.SetPos(6500);
 	s3.Add(split3.HSizePosZ(8, 8).VSizePosZ(8, 44));
 	s3.Add(back.SetLabel("Back").LeftPosZ(8, 100).BottomPosZ(8, 28));
-	s3.Add(close3.SetLabel("Close").RightPosZ(8, 100).BottomPosZ(8, 28));
+	s3.Add(install3.SetLabel("Install...").LeftPosZ(114, 150).BottomPosZ(8, 28));
+	s3.Add(close3.SetLabel("Close").RightPosZ(8, 90).BottomPosZ(8, 28));
+	for(Button *b : { &install1, &install3 }) {
+		*b << [this] { Install(); };
+		b->Tip("Opens TreeSyncInstall: it copies the GCC and / or Clang release build to /usr/local/bin, owned "
+		       "by root, as TreeSyncRoot-GCC, TreeSyncHome-GCC, ... (v001/install.sh through pkexec)");
+	}
 	for(Button *b : { &use_gcc1, &use_clang1, &use_gcc3, &use_clang3 }) {
 		bool gcc = b == &use_gcc1 || b == &use_gcc3;
-		b->SetLabel(gcc ? "Continue to TreeSync using GCC exe" : "Continue to TreeSync using Clang exe");
-		*b << [this, gcc] { continue_with = gcc ? "gcc" : "clang"; Close(); };
-		(b == &use_gcc1 || b == &use_clang1 ? s1 : s3).Add(b->RightPosZ(gcc ? 266 : 8, 250).BottomPosZ(8, 28));
-		b->Hide();
-	}
-	for(Button *b : { &exit1, &exit3 }) {
-		b->SetLabel("Exit").Tip("Quit TreeSync without going on");
-		*b << [this] { continue_with.Clear(); Close(); };
-		(b == &exit1 ? s1 : s3).Add(b->RightPosZ(8, 80).BottomPosZ(8, 28));
-		b->Hide();
+		b->SetLabel(gcc ? "Run TreeSyncHome-GCC (just built)" : "Run TreeSyncHome-Clang (just built)");
+		b->Tip(String("Starts the TreeSyncHome this window built (v001/out/") + (gcc ? "gcc" : "clang") +
+		       "), as you, to try it before installing; the installed one is in the TreeSyncApp folder");
+		*b << [gcc] { RunTreeSync(gcc ? "gcc" : "clang", "treesync-home"); };
+		(b == &use_gcc1 || b == &use_clang1 ? s1 : s3).Add(b->RightPosZ(gcc ? 352 : 104, 240).BottomPosZ(8, 28));
 	}
 
 	compiler << [this] { ShowCommand(); };
@@ -297,11 +258,11 @@ BuildWindow::BuildWindow()
 	helgrind << [this] { ShowCommand(); };
 	clean << [this] { ShowCommand(); };
 	compare << [this] { ShowCommand(); };
+	install_after << [this] { ShowCommand(); };
 	start << [this] { Start(); };
 	close1 << [this] { Close(); };
 	close3 << [this] { Close(); };
 	stop << [this] { Stop(); };
-	at_start << [this] { Save(); };
 	display << [this] { Save(); };
 	back << [this] { Screen(1); };
 
@@ -310,10 +271,14 @@ BuildWindow::BuildWindow()
 	CheckRequirements();
 	if(BuildScript().IsEmpty()) {
 		start.Disable();
+		install1.Disable();
 		command = "Cannot build from here: build.sh is not two folders above this program (" +
 		          GetExeFolder() + ").";
 	}
+	UseButtons();
 	Screen(1);
+	if(!req_ok)   // missing requirements: the fix, ready to run, as soon as the window is up
+		PostCallback([this] { OpenFixTerminal(); });
 }
 
 BuildWindow::~BuildWindow()
@@ -392,16 +357,31 @@ void BuildWindow::Plan()
 	}
 }
 
+// TreeSyncInstall, of this program's own build: a button per compiler there.
+void BuildWindow::Install()
+{
+	if(proc)   // not while a build is replacing the programs
+		return;
+	String here = GetFileName(GetExeFolder());
+	if(!FileExists(TreeSyncExe(here, "treesync-install"))) {
+		Exclamation("TreeSyncInstall is not built yet: Build first.");
+		return;
+	}
+	RunTreeSync(here, "treesync-install");
+}
+
 void BuildWindow::ShowCommand()
 {
 	Plan();
 	String text;
 	for(const BuildStep& s : steps)
-		text << (text.GetCount() ? "\n" : "") << (s.compare ? "compare.sh " : "build.sh ") << Join(s.args, " ");
+		text << (text.GetCount() ? "\n" : "") << (s.compare ? "compare.sh " : "build.sh ")
+		     << Join(s.args, " ");
 	command = text;
 	for(Option *o : { &tsan, &asan, &valgrind, &helgrind })
 		o->Enable(tests);
 	start.Enable(BuildScript().GetCount() && steps.GetCount());
+	install_after.Enable(String(~type) == "release");
 }
 
 void BuildWindow::Load()
@@ -415,7 +395,7 @@ void BuildWindow::Load()
 	helgrind = false;
 	clean = false;
 	compare = false;
-	at_start = true;
+	install_after = false;
 	display <<= DisplayChoice();
 	display.EnableCase(0, WaylandAvailable());
 	display_now = "Now running on " + DisplayName(DisplayNow()) +
@@ -440,8 +420,8 @@ void BuildWindow::Load()
 			clean = value == "1";
 		else if(key == "compare")
 			compare = value == "1";
-		else if(key == "at_start")
-			at_start = value == "1";
+		else if(key == "install_after")
+			install_after = value == "1";
 	}
 }
 
@@ -454,7 +434,7 @@ void BuildWindow::Save()
 		               "\nasan=" + AsString((int)asan) + "\nvalgrind=" + AsString((int)valgrind) +
 		               "\nhelgrind=" + AsString((int)helgrind) +
 	               "\nclean=" + AsString((int)clean) + "\ncompare=" + AsString((int)compare) +
-	               "\nat_start=" + AsString((int)at_start) + "\ndisplay=" + AsString(~display) + "\n");
+	               "\ninstall_after=" + AsString((int)install_after) + "\ndisplay=" + AsString(~display) + "\n");
 }
 
 // What this machine has, from bootstrap.sh --check (a fraction of a second): each
@@ -519,7 +499,14 @@ void BuildWindow::Start()
 	                           "will probably fail.&&Build anyway?"))
 		return;
 	Save();
-	Plan();
+	Run(true);
+}
+
+// Runs the steps (planned again when plan): each its own child process, one after another.
+void BuildWindow::Run(bool plan)
+{
+	if(plan)
+		Plan();
 	steps_list.Clear();
 	for(const BuildStep& s : steps)
 		steps_list.Add(s.title, "waiting", "", "");
@@ -541,7 +528,8 @@ void BuildWindow::NextStep()
 		return;
 	}
 	BuildStep& s = steps[step];
-	String script = s.compare ? AppendFileName(GetFileFolder(BuildScript()), "compare.sh") : BuildScript();
+	String folder = GetFileFolder(BuildScript());
+	String script = s.compare ? AppendFileName(folder, "compare.sh") : BuildScript();
 	Vector<String> args;
 	args << "bash" << script;
 	args.Append(s.args);
@@ -552,7 +540,7 @@ void BuildWindow::NextStep()
 	// Its own session, so Stop ends build.sh and the compilers it started.
 	proc.Create();
 	if(!proc->Start("/usr/bin/setsid", args, nullptr, GetFileFolder(script))) {
-		Out("cannot start build.sh\n");
+		Out("cannot start " + GetFileName(script) + "\n");
 		s.code = 127;
 		StepDone();
 		return;
@@ -650,14 +638,16 @@ void BuildWindow::Finish()
 	String here = GetFileName(GetExeFolder());   // gcc or clang: the build this program came from
 	bool rebuilt_me = false;
 	for(const BuildStep& s : steps)
-		rebuilt_me = rebuilt_me || (s.code == 0 && s.args.GetCount() >= 2 && s.args[1] == here && !s.Checked());
+		rebuilt_me = rebuilt_me || (s.code == 0 && s.args.GetCount() >= 2 && s.args[1] == here && !s.Checked() &&
+		                            !s.compare);
 	ShowCompare();
 	if(facts.GetCount())
 		text << "\n\n" << CompareText();
 	String kept = text;   // for Build-Results.txt: without the note below
 	if(rebuilt_me)
-		text << "\n\nThis program (" << here << ") was rebuilt: " <<
-		        (startup ? "the Continue buttons start the new builds." : "close TreeSync and start it again to use the new build.");
+		text << "\n\nTreeSyncBuild (" << here << ") was rebuilt: close it and start it again to use the new one.";
+	text << "\n\nRun TreeSyncHome starts the builds in out/. TreeSyncRoot runs the installed copy: "
+	        "Install (TreeSyncInstall) updates it.";
 	UseButtons();
 	results <<= text;
 	// Kept: Build-Results.txt in the logs folder, next to the sync runs' Results.txt.
@@ -677,6 +667,8 @@ void BuildWindow::Finish()
 	}
 	running = good ? "Done: all good." : stopping ? "Stopped." : "Done, with failures: see the red steps.";
 	Screen(3);
+	if(good && install_after && String(~type) == "release" && !auto_run)
+		Install();
 }
 
 // The compilers side by side: every "what" any of them reported, in the order first
@@ -765,7 +757,7 @@ void BuildWindow::Snap(const String& folder)
 		VectorMap<String, String>& f = facts.GetAdd(i ? "clang" : "gcc");
 		f.Add("build (clean): time (s)", i ? "21" : "37");
 		f.Add("tests", "passed: 214/214 checks");
-		f.Add("size: treesync (MiB)", i ? "33.3" : "40.3");
+		f.Add("size: treesync-root (MiB)", i ? "33.3" : "40.3");
 		f.Add("feature:__cpp_structured_bindings", i ? "202411" : "202403");
 		f.Add("feature:__cpp_pack_indexing", "202311");
 		f.Add("bench:sha256 MiB/s", i ? "158" : "174");
@@ -778,71 +770,21 @@ void BuildWindow::Snap(const String& folder)
 	Screen(1);
 }
 
-// The first screen when TreeSync starts: instead of Close, one Continue button per
-// compiler, each starting that compiler's build of TreeSync (the newest one).
-void BuildWindow::Startup()
-{
-	startup = true;
-	Title("TreeSync - build options");
-	SetRect(0, 0, Zx(1000), Zy(760));
-	// Bottom row, right to left: Exit, Continue (Clang), Continue (GCC), Build (with the
-	// tests when "Run the tests" is ticked).
-	start.SetLabel("Build").RightPosZ(612, 140);
-	exit1.Show();
-	exit3.Show();
-	at_start.SetLabel("Show this page at start").LeftPosZ(8, 220);
-	close1.Hide();
-	close3.Hide();
-	UseButtons();
-	if(!req_ok)   // missing requirements: the fix, ready to run, as soon as the page is up
-		PostCallback([this] { OpenFixTerminal(); });
-}
-
-// Each Continue button needs its program built.
+// Each Run TreeSync button needs that compiler's build.
 void BuildWindow::UseButtons()
 {
-	if(!startup)
-		return;
 	for(Button *b : { &use_gcc1, &use_clang1, &use_gcc3, &use_clang3 }) {
 		String c = b == &use_gcc1 || b == &use_gcc3 ? "gcc" : "clang";
-		bool built = FileExists(TreeSyncExe(c));
-		b->Show();
-		b->RightPosZ(c == "gcc" ? 354 : 96, 250);
+		bool built = FileExists(TreeSyncExe(c, "treesync-home"));
 		b->Enable(built);
-		b->Tip(built ? "Starts " + TreeSyncExe(c) : "Not built yet: Build with " + c + " first");
+		b->Tip(built ? "Starts " + TreeSyncExe(c, "treesync-home") + " (the build in out/, as you, inside your home)"
+		             : "Not built yet: Build with " + c + " first");
 	}
 }
 
-bool CanBuild()
+void ShowBuildWindow()
 {
-	return BuildScript().GetCount() && !IsRoot();
-}
-
-void ShowBuild()
-{
-	if(CanBuild())
-		BuildWindow().Execute();
-}
-
-bool BuildPageAtStart()
-{
-	if(!CanBuild())   // installed, or root: nothing to build here
-		return false;
-	for(const String& line : Split(LoadFile(BuildSettingsPath()), '\n'))
-		if(line == "at_start=0")
-			return false;
-	return true;
-}
-
-// The first screen: compiler and test options, Build, then Continue with the
-// gcc or the clang build. Returns which ("gcc" or "clang"); empty for Exit (or the
-// window's close box): quit TreeSync.
-String BuildStartPage()
-{
-	BuildWindow w;
-	w.Startup();
-	w.Execute();
-	return w.continue_with;
+	BuildWindow().Execute();
 }
 
 // --build-run (a developer aid): the saved choices, built and tested for real.
@@ -866,7 +808,6 @@ void BuildScreenshots(const String& folder)
 		BuildWindow w;
 		w.Snap(folder);
 	}
-	BuildWindow w;   // as the first screen when TreeSync starts
-	w.Startup();
+	BuildWindow w;
 	SaveScreenshot(w, AppendFileName(folder, "build-startup.png"));
 }

@@ -91,7 +91,7 @@ struct Streamer {
 			return Missing(error);   // no target yet: nothing to empty
 		int n = 0;
 		for(const FolderEntry& f : list) {
-			if(f.name == "." || f.name == "..")
+			if(SkipName(f.name))   // also the .treesync-old folder the wipe moves into
 				continue;
 			if(r.report.Stopping())
 				return true;
