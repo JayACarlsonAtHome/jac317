@@ -785,8 +785,11 @@ static void TestSplit(const String& root)
 		s.flags.threads = 4;
 		std::atomic<bool> stop = false;
 		SyncResult r1;
+		// A shared file's bar moves at most every 0.25 s and after each chunk its owner
+		// copies, never at the end: on a fast run it can pass a later mark between two
+		// updates and finish unstopped. The owner's first chunk always shows.
 		Sync(s, r1, nullptr, &stop, [&](const CopyProgress& p) {
-			if(p.name == "one big.bin" && p.done >= 12 * MIB)
+			if(p.name == "one big.bin" && p.done >= MIB)
 				stop = true;
 		});
 		EXPECT(r1.stopped && FileExists(dst + "/one big.bin.treesync-part"), "split: stopped mid-file");

@@ -420,6 +420,7 @@ struct Runner {
 		String rel, part;
 		int64  size = 0, chunk = 0, count = 0;
 		bool   sparse = false;         // a local target: all-zero slices stay holes
+		bool   full_size = false;      // sparse and already its full size (--split-files): never truncated
 		bool   count_read = false, count_write = false, count_back = false;   // for --bwlimit
 	};
 
@@ -498,8 +499,10 @@ struct Runner {
 			return false;
 		}
 		// A chunk that ends in skipped zeros: the file reaches its end as a hole, so the
-		// read-back below finds zeros there, not the end of the file.
-		if(cf.sparse && written_end < off + len) {
+		// read-back below finds zeros there, not the end of the file. A file already at
+		// its full size is left alone: shortening it would cut off chunks other threads
+		// have written further on.
+		if(cf.sparse && !cf.full_size && written_end < off + len) {
 			if(!out.Truncate(off + len, error))
 				return false;
 			written_end = off + len;
@@ -627,6 +630,8 @@ struct Runner {
 			else {
 				j->state[idx] = SharedCopy::FREE;   // the owner, or another helper, copies it
 				j->copied -= moved;
+				Lock rl(mx);   // and counts it then (share_m before mx, as in SharedMoved)
+				result.bytes -= moved;
 				if(verify)
 					j->failed = error;
 				else if(error != "stopped" && !lost)
@@ -774,8 +779,10 @@ struct Runner {
 			// at once, holes where nothing is written yet.
 			if(cf.sparse && !out->Truncate(size, error))
 				return false;
-			if(cf.sparse)
+			if(cf.sparse) {
 				written_end = size;
+				cf.full_size = true;
+			}
 			job.cf = cf;
 			job.dir = 1 - side;
 			job.state.SetCount((int)count, SharedCopy::FREE);
