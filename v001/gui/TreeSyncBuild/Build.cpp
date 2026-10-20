@@ -212,7 +212,7 @@ BuildWindow::BuildWindow()
 	// Screen 2: running
 	steps_list.AddColumn("Step", 40);
 	steps_list.AddColumn("State", 12);
-	steps_list.AddColumn("Time", 10).HeaderTab().AlignRight();
+	steps_list.AddColumn("Time", 10).SetDisplay(StdRightDisplay()).HeaderTab().AlignRight();
 	steps_list.AddColumn("Tests", 20);
 	steps_list.NoCursor();
 	s2.Add(steps_list.HSizePosZ(8, 8).TopPosZ(8, 110));

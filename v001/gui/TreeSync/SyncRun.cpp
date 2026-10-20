@@ -134,6 +134,7 @@ void TreeSyncWindow::StageLabels(const String& extra)
 	stage_box[1].SetLabel(scan ? "Check: SHA-256 of both sides" : extra == "--sync-attrs" ? "Attributes" : "Copy");
 	stage_box[2].SetLabel(check ? "Post-scan: folders checked" : "Post-scan: target");
 	active.HeaderTab(0).SetText(scan ? "Checking" : "Copying");
+	active.HeaderTab(2).SetText(scan ? "Read" : "Copied");   // the bytes column after the bar
 }
 
 // --screenshot: a Scan only run part-way.
@@ -187,7 +188,7 @@ void TreeSyncWindow::Tick()
 	for(int i = 0; i < active.GetCount(); i++) {
 		int q = copy_started.Find((int)active.Get(i, 0));
 		if(q >= 0)
-			active.Set(i, 5, MinSec(std::chrono::duration<double>(now - copy_started[q]).count()));
+			active.Set(i, 6, MinSec(std::chrono::duration<double>(now - copy_started[q]).count()));   // Time
 	}
 	double quiet = std::chrono::duration<double>(now - last_progress).count();
 	stage_text[1].SetInk(net_down ? LtRed() : SColorText());
@@ -333,10 +334,11 @@ void TreeSyncWindow::ShowProgress(const String& line)
 	String what = Format("[%s/%s] ", f[5], f[6]) + f[7] +
 	              (verifying ? "   (verifying the copy)" : checking ? "   (hashing both sides)" : "");
 	int permille = size > 0 ? (int)(done * 1000 / size) : 0;
+	// id | Copying | bar | Copied (bytes so far) | Rate | Size | Time
 	if(row < 0)
-		active.Add(id, what, permille, rate, FormatBytes(size), elapsed);
+		active.Add(id, what, permille, FormatBytes(done), rate, FormatBytes(size), elapsed);
 	else
-		active.Set(row, Vector<Value>{ id, what, permille, rate, FormatBytes(size), elapsed });
+		active.Set(row, Vector<Value>{ id, what, permille, FormatBytes(done), rate, FormatBytes(size), elapsed });
 }
 
 // What a real run will do to the target, in plain words, before it starts.

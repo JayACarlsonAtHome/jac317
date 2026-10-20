@@ -82,9 +82,10 @@ TreeSyncWindow::TreeSyncWindow()
 	active.AddKey();                                   // copy id
 	active.AddColumn("Copying", 50);
 	active.AddColumn("", 30).SetDisplay(ProgressDisplay());   // 0..1000
-	active.AddColumn("Rate", 12).HeaderTab().AlignRight();
-	active.AddColumn("Size", 12).HeaderTab().AlignRight();
-	active.AddColumn("Time", 8).HeaderTab().AlignRight();
+	active.AddColumn("Copied", 12).SetDisplay(StdRightDisplay()).HeaderTab().AlignRight();   // bytes so far ("Read" in Scan only)
+	active.AddColumn("Rate", 12).SetDisplay(StdRightDisplay()).HeaderTab().AlignRight();
+	active.AddColumn("Size", 12).SetDisplay(StdRightDisplay()).HeaderTab().AlignRight();
+	active.AddColumn("Time", 8).SetDisplay(StdRightDisplay()).HeaderTab().AlignRight();
 	active.NoCursor().NoGrid();
 
 	bottom.Vert(progress_pane, log);

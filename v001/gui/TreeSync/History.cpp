@@ -83,13 +83,13 @@ HistoryWindow::HistoryWindow(const String& path) : db_path(path)
 	runs.AddColumn("Started", 14);
 	runs.AddColumn("State", 7);
 	runs.AddColumn("Source -> target", 45);
-	runs.AddColumn("Folders", 6).HeaderTab().AlignRight();
-	runs.AddColumn("Copied", 6).HeaderTab().AlignRight();
-	runs.AddColumn("Deleted", 6).HeaderTab().AlignRight();
-	runs.AddColumn("Attrs set", 6).HeaderTab().AlignRight();
-	runs.AddColumn("Failed", 6).HeaderTab().AlignRight();
-	runs.AddColumn("Conflicts", 7).HeaderTab().AlignRight();
-	runs.AddColumn("Bytes", 9).HeaderTab().AlignRight();
+	runs.AddColumn("Folders", 6).SetDisplay(StdRightDisplay()).HeaderTab().AlignRight();
+	runs.AddColumn("Copied", 6).SetDisplay(StdRightDisplay()).HeaderTab().AlignRight();
+	runs.AddColumn("Deleted", 6).SetDisplay(StdRightDisplay()).HeaderTab().AlignRight();
+	runs.AddColumn("Attrs set", 6).SetDisplay(StdRightDisplay()).HeaderTab().AlignRight();
+	runs.AddColumn("Failed", 6).SetDisplay(StdRightDisplay()).HeaderTab().AlignRight();
+	runs.AddColumn("Conflicts", 7).SetDisplay(StdRightDisplay()).HeaderTab().AlignRight();
+	runs.AddColumn("Bytes", 9).SetDisplay(StdRightDisplay()).HeaderTab().AlignRight();
 	runs.AddIndex();   // log path
 	runs.WhenSel = [this] { LoadActions(); };
 	runs.WhenLeftDouble = [this] { show_log.WhenAction(); };
@@ -98,7 +98,7 @@ HistoryWindow::HistoryWindow(const String& path) : db_path(path)
 	actions.AddColumn("Action", 7);
 	actions.AddColumn("Path", 60);
 	actions.AddColumn("State", 8);
-	actions.AddColumn("Size", 9).HeaderTab().AlignRight();
+	actions.AddColumn("Size", 9).SetDisplay(StdRightDisplay()).HeaderTab().AlignRight();
 	actions.AddColumn("Error", 40);
 
 	// Each folder is one line across the whole row; its copied files follow, each with

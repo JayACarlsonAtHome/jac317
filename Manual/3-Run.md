@@ -49,8 +49,8 @@ see the table; saved on every change).
 | Pre-scan: source        | Copy                    | Post-scan: target         |
 | [==========      ]      | [=====           ]      | [===             ]        |
 +-------------------------------------------------------------------------------+
-| Copying                                  Rate       Size     Time             |
-| [ 12/140] 2024/IMG_0001.jpg  [====   ]   85 MiB/s   130 MiB  0:01             |
+| Copying                         Copied       Rate       Size     Time         |
+| [ 12/140] 2024/IMG_0001.jpg  [====   ]   52 MiB   85 MiB/s   130 MiB    0:01  |
 +-------------------------------------------------------------------------------+
 | log: one line per copied file, warnings, the summary                          |
 +-------------------------------------------------------------------------------+
@@ -90,8 +90,10 @@ see the table; saved on every change).
     from what the copies write (holes count as nothing), shown with a `~`. So
     another program filling the disk at the same time only shows at the end.
 - **The progress boxes** and the list of files in progress appear while a run is
-    going. The upper right of the menu bar shows how long it has run, how long the
-    whole run will probably take, and when it should be done.
+    going. Each file in progress shows a bar, **Copied** (the bytes copied so far;
+    **Read** in a Scan only run), its **Rate**, its **Size** and its **Time** so far.
+    The upper right of the menu bar shows how long it has run, how long the whole run
+    will probably take, and when it should be done.
 - **The log** shows what happened; **View > Show log file** (Ctrl+L) opens the full
     log of the newest run.
 
