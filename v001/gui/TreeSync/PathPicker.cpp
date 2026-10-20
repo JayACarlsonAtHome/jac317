@@ -140,7 +140,7 @@ void PathPicker::Remote(bool r)
 {
 	if(r && !remote) {
 		disk.ClearList();
-		disk.Add(Null, "Remote machine (host and user: File > Setup)");
+		disk.Add(Null, "Remote machine (host and user: Setup)");
 		disk.SetIndex(0);
 		mount.ClearList();
 		mount.Add(Null, "(remote)");

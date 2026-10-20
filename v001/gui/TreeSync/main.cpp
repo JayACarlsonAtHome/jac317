@@ -129,29 +129,28 @@ TreeSyncWindow::TreeSyncWindow()
 
 void TreeSyncWindow::MainMenu(Bar& bar)
 {
-	bar.Sub("File", [this](Bar& bar) { FileMenu(bar); });
+	bar.Add("Setup", [this] { EditSetup(); });
 	bar.Sub("View", [this](Bar& bar) { ViewMenu(bar); });
 	bar.Sub("Sync", [this](Bar& bar) { SyncMenu(bar); });
-	bar.Sub("Help", [](Bar& bar) { HelpMenu(bar, "3-Run"); });
+	bar.Sub("Help", [this](Bar& bar) {
+		HelpMenu(bar, "3-Run");
+		bar.Separator();
+		bar.Add("About...", [this] { ShowAbout(); });
+	});
+	bar.Add("Exit", [this] { Close(); });
 }
 
-void TreeSyncWindow::FileMenu(Bar& bar)
+void TreeSyncWindow::ShowAbout()
 {
-	bar.Add("Setup..", [this] { EditSetup(); });
-	bar.Separator();
-	bar.Add("About..", [this] {
-		String qtf = "[* " + AppName() + "]&&Sync two directory trees by SHA-256" +
-		             (run_as_root ? ", as root." : ", as you, inside your home.") + "&&[*@6 Use at your own risk.]&";
-		qtf << "&Display: " << DeQtf(DisplayName(DisplayNow())) << "&";
-		for(const String& line : Split(DISCLAIMER, '\n'))
-			qtf << DeQtf(line) << " ";
-		qtf << "&&[C1 ";
-		for(const String& line : Split(ToolchainReport(), '\n'))
-			qtf << DeQtf(line) << "&";
-		PromptOK(qtf + "]");
-	});
-	bar.Separator();
-	bar.Add("Exit", [this] { Close(); });
+	String qtf = "[* " + AppName() + "]&&Sync two directory trees by SHA-256" +
+	             (run_as_root ? ", as root." : ", as you, inside your home.") + "&&[*@6 Use at your own risk.]&";
+	qtf << "&Display: " << DeQtf(DisplayName(DisplayNow())) << "&";
+	for(const String& line : Split(DISCLAIMER, '\n'))
+		qtf << DeQtf(line) << " ";
+	qtf << "&&[C1 ";
+	for(const String& line : Split(ToolchainReport(), '\n'))
+		qtf << DeQtf(line) << "&";
+	PromptOK(qtf + "]");
 }
 
 void TreeSyncWindow::ViewMenu(Bar& bar)

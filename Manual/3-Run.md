@@ -122,7 +122,7 @@ with everything checked. If nothing is checked, Run refuses to start.
 
 ## 3.4 Setup: mode and options
 
-**File > Setup...** has three tabs.
+**Setup** (in the menu bar) has three tabs.
 
 **Source tree / Target tree**: the path, and for a remote machine the **Remote** box
 with **Host**, **Port**, **User** and **Key file** (see 3.10).
@@ -312,7 +312,7 @@ ssh-copy-id jay@server           # passwordless login
 ssh jay@server                   # once, to check and accept the host key
 ```
 
-TreeSync logs in with keys only, never passwords. In the GUI: **File > Setup >
+TreeSync logs in with keys only, never passwords. In the GUI: **Setup >
 Target tree**, tick **Remote**, and fill in Host, Port, User (and Key file if not the
 usual one). On the command line: `--target-host=server --target-user=jay`.
 

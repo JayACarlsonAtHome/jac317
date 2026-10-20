@@ -276,7 +276,7 @@ class TreeSyncWindow : public TopWindow {
 
 	void ShowStatus();
 	void MainMenu(Bar& bar);
-	void FileMenu(Bar& bar);
+	void ShowAbout();
 	void ViewMenu(Bar& bar);
 	void SyncMenu(Bar& bar);
 	void EditSetup();
