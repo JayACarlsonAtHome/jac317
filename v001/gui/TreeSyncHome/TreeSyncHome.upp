@@ -8,3 +8,6 @@ file
 
 mainconfig
 	"" = "GUI WAYLAND";
+
+options
+	"-Wformat=2 -Werror=format";

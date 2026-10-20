@@ -13,3 +13,6 @@ file
 	Edit.cpp,
 	History.cpp,
 	main.cpp;
+
+options
+	"-Wformat=2 -Werror=format";

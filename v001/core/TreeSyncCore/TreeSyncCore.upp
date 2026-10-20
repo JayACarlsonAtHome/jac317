@@ -29,3 +29,6 @@ file
 	Sync.cpp,
 	Stream.cpp,
 	Check.cpp;
+
+options
+	"-Wformat=2 -Werror=format";

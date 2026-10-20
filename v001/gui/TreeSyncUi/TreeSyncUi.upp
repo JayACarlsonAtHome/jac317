@@ -8,3 +8,6 @@ uses
 file
 	TreeSyncUi.h,
 	Ui.cpp;
+
+options
+	"-Wformat=2 -Werror=format";

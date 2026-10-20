@@ -8,3 +8,6 @@ file
 
 mainconfig
 	"" = "";
+
+options
+	"-Wformat=2 -Werror=format";
