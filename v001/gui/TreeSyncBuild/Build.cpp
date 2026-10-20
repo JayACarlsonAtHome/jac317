@@ -61,8 +61,6 @@ struct BuildStep : Moveable<BuildStep> {
 	}
 };
 
-}
-
 class BuildWindow : public TopWindow {
 	enum { POLL = 1 };   // the output timer
 	ParentCtrl s1, s2, s3;
@@ -141,6 +139,8 @@ public:
 	BuildWindow();
 	~BuildWindow();
 };
+
+}
 
 BuildWindow::BuildWindow()
 {

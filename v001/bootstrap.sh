@@ -166,6 +166,7 @@ read -r UMK UPPSRC <<< "$(find_upp)"
 if [ -n "${UMK:-}" ]; then
   echo; echo "U++: $UMK with $UPPSRC"
   record "$t0" "$(date +%s)" "U++ found" 0 "Good" "$UMK, $UPPSRC"
+  upp_quiet_sqlite3mc "$UPPSRC"
 else
   url=$(curl -s --max-time 30 https://api.github.com/repos/ultimatepp/ultimatepp/releases/latest |
         sed -n 's/.*"browser_download_url": *"\([^"]*upp-posix-[0-9]*\.tar\.xz\)".*/\1/p' | head -1)
@@ -191,6 +192,7 @@ else
     export UPP_DIR="$UPP_TARGET"
     read -r UMK UPPSRC <<< "$(find_upp)"
     [ -n "${UPPSRC:-}" ] && upp_fix_heap "$UPPSRC"   # the release has the heap bug too
+    [ -n "${UPPSRC:-}" ] && upp_quiet_sqlite3mc "$UPPSRC"
   fi
   if [ -n "${UMK:-}" ]; then
     record "$t0" "$(date +%s)" "Fetch and build U++" 0 "Good" "$(basename "$url") -> $UPP_TARGET"

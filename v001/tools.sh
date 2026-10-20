@@ -98,6 +98,30 @@ upp_fix_heap() {
   upp_heap_fixed "${1:-}"
 }
 
+# SQLite3 Multiple Ciphers warnings (docs/findings/sqlite3mc_stringop_overread.md): gcc 15
+# -Wstringop-overread flags sha1_update and sqlite3Strlen30 in the amalgamation U++ bundles;
+# both are false alarms. Silenced for that one file in U++'s plugin/sqlite3/lib.c, which
+# includes it; gcc only (clang does not warn).
+#   upp_sqlite3mc_quiet [UPPSRC]   true if done (or no U++ yet: nothing to do)
+#   upp_quiet_sqlite3mc [UPPSRC]   adds the pragma; keeps the original as lib.c.orig
+upp_sqlite3_lib() {
+  local s="${1:-}"
+  [ -n "$s" ] || s=$(find_upp | cut -d' ' -f2)
+  [ -n "$s" ] && echo "$s/plugin/sqlite3/lib.c"
+}
+upp_sqlite3mc_quiet() {
+  local f; f=$(upp_sqlite3_lib "${1:-}")
+  [ -z "$f" ] || [ ! -f "$f" ] || grep -q 'Wstringop-overread' "$f"
+}
+upp_quiet_sqlite3mc() {
+  local f; f=$(upp_sqlite3_lib "${1:-}")
+  [ -n "$f" ] || return 0
+  upp_sqlite3mc_quiet "${1:-}" && return 0
+  cp -n "$f" "$f.orig" &&
+  sed -i 's|^#include "lib/sqlite3mc_amalgamation.c"|#if defined(__GNUC__) \&\& !defined(__clang__)\n#pragma GCC diagnostic ignored "-Wstringop-overread"   // false alarms (TreeSync docs/findings/sqlite3mc_stringop_overread.md)\n#endif\n&|' "$f" &&
+  upp_sqlite3mc_quiet "${1:-}"
+}
+
 # The checked test runs (build.sh --asan, --valgrind): true when both compilers have
 # their AddressSanitizer + UBSan runtimes and valgrind is installed.
 checks_present() {

@@ -43,18 +43,18 @@ void TreeSyncWindow::EditMenu(Bar& bar, int side)
 		own = own || SkipName(step);
 	String in = folder ? rel : rel.Mid(0, max(rel.ReverseFind('/'), 0));   // where a new folder goes
 	String shown = Nvl(rel, String(side ? "the target" : "the source") + " folder");
-	bar.Add(any && idle && !own, "New folder...", [=] {
+	bar.Add(any && idle && !own, "New folder...", [=, this] {
 		String name = AskName("New folder", "Name of the new folder", String());
 		if(name.GetCount())
 			Edit(side, "mkdir", in, name);
 	}).Help("Makes a folder inside " + Nvl(in, String("the top folder")));
-	bar.Add(any && idle && !own && rel.GetCount(), "Rename...", [=] {
+	bar.Add(any && idle && !own && rel.GetCount(), "Rename...", [=, this] {
 		String name = AskName("Rename", "New name", GetFileName(rel));
 		if(name.GetCount() && name != GetFileName(rel))
 			Edit(side, "rename", rel, name);
 	});
 	bar.Separator();
-	bar.Add(any && idle && !own && rel.GetCount(), "Delete...", [=] {
+	bar.Add(any && idle && !own && rel.GetCount(), "Delete...", [=, this] {
 		String old = side && setup.safe_delete_dir.GetCount() ? setup.safe_delete_dir
 		           : e.remote ? e.path + ".old" : SafeDeleteFolder(CanonicalPath(e.path), true);
 		if(PromptYesNo("[* Delete " + DeQtf(shown) + "?]&&It is moved to [C " + DeQtf(old) + "], like the files a "
@@ -63,7 +63,7 @@ void TreeSyncWindow::EditMenu(Bar& bar, int side)
 		                                         "target too.")) ))
 			Edit(side, "delete", rel, String());
 	});
-	bar.Add(any && idle && !own && rel.GetCount(), "Delete for good...", [=] {
+	bar.Add(any && idle && !own && rel.GetCount(), "Delete for good...", [=, this] {
 		if(PromptYesNo("[*@6 Delete " + DeQtf(shown) + " for good?]&&" +
 		               String(folder ? "The folder and everything in it are deleted. " : "") +
 		               "This cannot be undone." +
