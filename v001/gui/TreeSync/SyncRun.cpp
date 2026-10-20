@@ -230,7 +230,7 @@ void TreeSyncWindow::EtaSample(int64 done, int64 total)
 void TreeSyncWindow::ShowEta()
 {
 	double now = std::chrono::duration<double>(std::chrono::steady_clock::now() - eta_t0).count();
-	String s = "Elapsed " + HourMinSec(now);
+	String s = "Elapsed time: " + HourMinSec(now);
 	double rate = 0;   // bytes per second over the last minute
 	if(eta_samples.GetCount() >= 2) {
 		const Tuple<double, int64>& a = eta_samples[0];
@@ -245,11 +245,11 @@ void TreeSyncWindow::ShowEta()
 		if(Date(end) != GetSysDate())
 			when << Format(" on %d-%02d-%02d", end.year, end.month, end.day);
 		// While the pre-scan still finds files the total grows: at least this long.
-		s << "    Total " << (prescan_done ? "~" : "at least ~") << HourMinSec(now + left)
-		  << "    Done about " << when;
+		s << "    Total elapsed time: " << (prescan_done ? "~" : "at least ~") << HourMinSec(now + left)
+		  << "    Estimated completion time: " << when;
 	}
 	else if(eta_total > eta_done)
-		s << "    Total: estimating...";
+		s << "    Total elapsed time: estimating...";
 	eta = s + "  ";
 }
 
