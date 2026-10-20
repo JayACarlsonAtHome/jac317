@@ -182,6 +182,7 @@ The switches are modelled on robocopy. TreeSync adds `--merge`, which copies cha
 | `--numeric-ids` | Copy owners by number instead of name; switches `--preserve-owner` on (owners are one choice: off, by name or by number, an Owners row in the GUI) | |
 | `--bwlimit=N` | Bandwidth limit in KiB/s (0 = none): network traffic, or writes for a local copy; at most one second of burst | `/IPG:n` |
 | `--low-priority` | Run at low CPU and disk priority (`nice 19`, `ionice -c2 -n7`) so other work comes first | |
+| `--split-files` | A copy thread with no file left to start copies chunks of a big file another thread is copying, each checked and recorded as usual; the owner still hashes the whole source in order. Local sources only (default on; `--no-split-files` keeps one thread per file) | |
 | `--network-wait=N` | Seconds to wait for a lost remote side to come back before stopping (default 1800; 0 = stop at once) | |
 | `--compress` | Compress SSH traffic with zlib; the other end decompresses on its own. Helps text on slow links, not media | |
 | `--fresh` | Start over instead of resuming an unfinished run | |

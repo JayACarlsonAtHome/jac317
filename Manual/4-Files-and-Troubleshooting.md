@@ -88,8 +88,10 @@
 
 **A run is slow**
 : Make sure the GUI runs a **release** build (`./verify.sh` leaves them in `out/`).
-  Many small files: more threads (`--threads=8`) can help. Over SFTP the network is
-  usually the limit; `--compress` helps text, not media.
+  Many small files: more threads (`--threads=8`) can help. Over SFTP one stream is
+  often slow while several together are not (each waits for its writes and its
+  checks); with *Split big files across idle threads* on (normal) every thread works
+  on the last big files, for a local source. `--compress` helps text, not media.
 
 **"no Wayland session found" in TreeSyncBuild**
 : The GUI was started without `WAYLAND_DISPLAY`, usually through `sudo`. Start it as

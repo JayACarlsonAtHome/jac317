@@ -50,6 +50,7 @@ struct SyncFlags {
 	bool   numeric_ids = false;      // ...by number instead
 	bool   safe_delete = true;       // move deleted and replaced files to <target>.old
 	bool   low_priority = false;     // nice 19, ionice best-effort 7
+	bool   split_files = true;       // idle copy threads help with a big file's chunks
 	bool   include_same = false;
 	bool   skip_older = false;
 	bool   skip_newer = false;
@@ -113,7 +114,7 @@ extern const char *HELP_INCLUDE_FILES;
 extern const char *HELP_INCLUDE_DIRS;
 extern const char *HELP_OWNERS;           // the Owners choice: off, by name, by number
 
-constexpr int BOOL_OPTION_COUNT = 17;
+constexpr int BOOL_OPTION_COUNT = 18;
 constexpr int INT_OPTION_COUNT = 8;
 extern const BoolOption BOOL_OPTIONS[];
 extern const IntOption  INT_OPTIONS[];

@@ -92,6 +92,8 @@ see the table; saved on every change).
 - **The progress boxes** and the list of files in progress appear while a run is
     going. Each file in progress shows a bar, **Copied** (the bytes copied so far;
     **Read** in a Scan only run), its **Rate**, its **Size** and its **Time** so far.
+    When idle threads help with a big file (*Split big files across idle threads*),
+    its row counts what all of them copied, and the log says *splitting NAME*.
     The upper right of the menu bar shows how long it has run, how long the whole run
     will probably take, and when it should be done.
 - **The log** shows what happened; **View > Show log file** (Ctrl+L) opens the full
@@ -140,7 +142,9 @@ with **Host**, **Port**, **User** and **Key file** (see 3.10).
 - **Switches**: click any option to see what it does in the help box. The important
     ones: *Safe delete* (on; keep it on), *Hard links*, *Follow links*, *Skip older /
     newer / changed*, *Keep extra*, *Wipe target first*, *Check there is room before
-    copying* (on; see 3.5), *Low priority*.
+    copying* (on; see 3.5), *Low priority*, *Split big files across idle threads* (on:
+    a thread with no file left to start copies chunks of a big file another thread is
+    on, so the last big file of a run is not left to one slow stream).
 - **Numbers**: threads (default 4), retries, chunk size, bandwidth limit, how long to
     wait for a lost network, time tolerance.
 - **Include / exclude**: file and folder names with `*` and `?`, separated by `;`.

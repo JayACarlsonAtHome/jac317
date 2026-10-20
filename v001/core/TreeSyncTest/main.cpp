@@ -640,6 +640,7 @@ static void TestEngineResume(const String& root)
 	// chunk is read back (verifying), before it is recorded; the second run would then
 	// rightly start the file over.
 	SyncSetup s = Setup(src, dst, db);
+	s.flags.split_files = false;   // stopped by the big file's bar: one thread's chunks, in order
 	int64 chunk = (int64)s.flags.chunk_mib << 20;
 	std::atomic<bool> stop = false;
 	SyncResult r1;
@@ -687,6 +688,7 @@ static void TestEngineResume(const String& root)
 		String src2 = root + "/rsrc2", dst2 = root + "/rdst2", db2 = root + "/resume2.db";
 		Put(src2 + "/b big.bin", Big(5 * 1024 * 1024 + 100, 9));
 		SyncSetup s2 = Setup(src2, dst2, db2);
+		s2.flags.split_files = false;
 		std::atomic<bool> stop2 = false;
 		SyncResult q1;
 		Sync(s2, q1, nullptr, &stop2, [&](const CopyProgress& p) {
@@ -718,6 +720,86 @@ static void TestEngineResume(const String& root)
 	s.fresh = true;
 	Sync(s, r3);
 	EXPECT(!r3.resumed && r3.run != r1.run, "--fresh starts a new run");
+}
+
+// --split-files: threads with no file of their own copy chunks of a big file another
+// thread is copying. Both engines; a file with holes; a stop and resume part-way.
+static void TestSplit(const String& root)
+{
+	String src = root + "/sf-src", db = root + "/split.db", check = root + "/check.db";
+	const int64 MIB = 1 << 20, size = 40 * MIB + 7;   // 41 chunks of 1 MiB
+	Put(src + "/one big.bin", Big(size, 5));
+	String holes = src + "/holes.img";   // data, 6 MiB of zeros (a hole), data
+	{
+		String a = Big(3 * MIB, 6);
+		int fd = open(holes, O_CREAT | O_WRONLY | O_CLOEXEC, 0644);
+		bool made = fd >= 0 && ftruncate(fd, 12 * MIB) == 0 && pwrite(fd, ~a, a.GetCount(), 0) == a.GetCount() &&
+		            pwrite(fd, ~a, a.GetCount(), 9 * MIB) == a.GetCount();
+		if(fd >= 0)
+			close(fd);
+		EXPECT(made, "made a file with a 6 MiB hole");
+	}
+
+	auto said = [](const Vector<String>& lines, const char *what) {
+		for(const String& l : lines)
+			if(l.StartsWith(what))
+				return true;
+		return false;
+	};
+	for(int merge = 0; merge < 2; merge++) {
+		String dst = root + (merge ? "/sf-merge" : "/sf-dst");
+		SyncSetup s = Setup(src, dst, db);
+		s.flags.threads = 4;
+		if(merge)
+			s.flags.mode = SyncMode::Merge;   // the planned engine (Mirror streams)
+		SyncResult r;
+		Vector<String> lines;
+		Sync(s, r, &lines);
+		String engine = merge ? "merge" : "mirror";
+		EXPECT(r.failed == 0 && TreeHash(src, check) == TreeHash(dst, check),
+		       Format("split, %s: target equals source (%d failed)", engine, r.failed));
+		EXPECT(r.helped > 0 && said(lines, "splitting "),
+		       Format("split, %s: idle threads copied %d chunks of the big files", engine, r.helped));
+		EXPECT(r.bytes == size + 12 * MIB, Format("split, %s: every byte counted once (%lld)", engine, r.bytes));
+		struct stat st;
+		EXPECT(stat(dst + "/holes.img", &st) == 0 && st.st_blocks * 512 < 8 * MIB,
+		       Format("split, %s: the hole stays a hole", engine));
+	}
+
+	// Off: one thread per file, as before.
+	{
+		SyncSetup s = Setup(src, root + "/sf-off", db);
+		s.flags.threads = 4;
+		s.flags.split_files = false;
+		SyncResult r;
+		Sync(s, r);
+		EXPECT(r.helped == 0 && r.failed == 0 && TreeHash(src, check) == TreeHash(root + "/sf-off", check),
+		       Format("--no-split-files: no chunk copied by a helper (%d)", r.helped));
+	}
+
+	// Stopped part-way while helpers work, then resumed: the chunks recorded in order are
+	// kept, the rest copied again.
+	{
+		String dst = root + "/sf-resume";
+		SyncSetup s = Setup(src, dst, db);
+		s.flags.threads = 4;
+		std::atomic<bool> stop = false;
+		SyncResult r1;
+		Sync(s, r1, nullptr, &stop, [&](const CopyProgress& p) {
+			if(p.name == "one big.bin" && p.done >= 12 * MIB)
+				stop = true;
+		});
+		EXPECT(r1.stopped && FileExists(dst + "/one big.bin.treesync-part"), "split: stopped mid-file");
+		stop = false;
+		SyncResult r2;
+		Vector<String> lines;
+		Sync(s, r2, &lines, &stop);
+		EXPECT(r2.resumed && r2.failed == 0 && TreeHash(src, check) == TreeHash(dst, check),
+		       Format("split: resumed, target equals source (%d failed)", r2.failed));
+		EXPECT(said(lines, "resuming one big.bin at chunk") && r2.bytes < size + 12 * MIB,
+		       Format("split: the resume kept recorded chunks (copied %s)", FormatBytes(r2.bytes)));
+		EXPECT(!FileExists(dst + "/one big.bin.treesync-part"), "split: no .treesync-part left");
+	}
 }
 
 static void TestEngineMerge(const String& root)
@@ -1530,6 +1612,7 @@ CONSOLE_APP_MAIN
 	TestCheckedPaths(eroot);
 	TestEngineRefusals(eroot);
 	TestThreads(eroot);
+	TestSplit(eroot);
 	TestCliLikeGui(eroot);
 	TestStreaming(eroot);
 	TestChecks(eroot);

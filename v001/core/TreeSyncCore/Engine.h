@@ -550,6 +550,7 @@ struct SyncResult {
 	int64  room_need = -1, room_free = -1;
 	bool   no_room = false;   // refused: may not fit (nothing was copied)
 	bool   disk_full = false; // stopped: the target was nearly full
+	int    helped = 0;        // chunks a thread copied for another's file (--split-files)
 };
 
 // The reserve a run keeps free on a disk of total bytes: it stops (resumable) before

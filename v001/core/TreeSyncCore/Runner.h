@@ -11,7 +11,9 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #include <chrono>
+#include <condition_variable>
 #include <format>
+#include <functional>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -409,9 +411,245 @@ struct Runner {
 			.Text(1, ids[0]).Text(2, ids[1]).Text(3, rel).Text(4, hash).Run();
 	}
 
-	// Chunked copy, a pipeline per chunk: read and hash it, write it, read it back and
-	// check it. Every checked chunk of a file of more than one is recorded, so a restart
-	// continues from the next one. Works in 1 MiB slices (little memory per thread).
+	// Chunked copies ---------------------------------------------------------------
+	static constexpr int64 SLICE = 1 << 20;   // copies work in 1 MiB slices (little memory per thread)
+
+	// What every chunk of one file's copy needs to know.
+	struct ChunkFile {
+		int    seq = 0, side = 0;      // side: the side written
+		String rel, part;
+		int64  size = 0, chunk = 0, count = 0;
+		bool   sparse = false;         // a local target: all-zero slices stay holes
+		bool   count_read = false, count_write = false, count_back = false;   // for --bwlimit
+	};
+
+	// SHA-256 of [off, off + len) of a file, in slices. shown(pos, always): as it reads,
+	// or once (always) when the server hashes it and nothing comes back.
+	bool HashRange(TreeFile& f, int64 off, int64 len, bool count, Buffer<byte>& buf, String& hash, String& error,
+	               const std::function<void (int64, bool)>& shown)
+	{
+		if(f.HashesOnServer() && len >= TreeFile::SERVER_HASH_MIN) {
+			if(shown)
+				shown(off, true);
+			return f.HashRange(off, len, hash, error);
+		}
+		Sha256 sha;
+		for(int64 k = 0; k < len; k += SLICE) {
+			int64 n = min(SLICE, len - k);
+			if(!f.ReadAt(off + k, buf, n, error))
+				return false;
+			if(count)
+				report.Count(n);
+			sha.Put(buf, (int)n);
+			if(shown)
+				shown(off + k + n, false);
+		}
+		hash = sha.FinishString();
+		return true;
+	}
+
+	// One chunk: 1. read and hash it (into whole too, when given), 2. write it, slice by
+	// slice, 3. read it back and check it. A chunk of a file of several is flushed first
+	// and recorded once it checks. sent: its SHA-256 (a one-chunk file's is the file's).
+	// moved(pos, n, last): n more bytes went by, up to pos; last: the chunk's last slice.
+	// checking: shown while it is read back. written_end: sparse, where the last write
+	// ended. Returns false with error "stopped" on Stop.
+	bool CopyChunk(const ChunkFile& cf, TreeFile& in, TreeFile& out, int64 idx, Buffer<byte>& buf, Sha256 *whole,
+	               int64& written_end, String& sent, String& error,
+	               const std::function<void (int64, int64, bool)>& moved,
+	               const std::function<void (int64, bool)>& checking)
+	{
+		int64 off = idx * cf.chunk, len = min(cf.chunk, cf.size - off);
+		bool one = cf.count == 1;
+		Sha256 chunk_sha;
+		for(int64 k = 0; k < len; k += SLICE) {
+			int64 n = min(SLICE, len - k);
+			if(!in.ReadAt(off + k, buf, n, error))
+				return false;
+			if(cf.count_read)
+				report.Count(n);
+			if(!one)
+				chunk_sha.Put(buf, (int)n);
+			if(whole)
+				whole->Put(buf, (int)n);
+			if(!cf.sparse || !AllZero(buf, n)) {
+				if(!RoomFor(cf.side, n)) {
+					error = "stopped";
+					return false;
+				}
+				if(!out.WriteAt(off + k, buf, n, error))
+					return false;
+				Wrote(cf.side, n);
+				written_end = off + k + n;
+				if(cf.count_write)
+					report.Count(n);
+			}
+			{
+				// The run's bytes count as they are written (a hole as it is passed),
+				// not when the chunk is read back and recorded.
+				Lock l(mx);
+				result.bytes += n;
+			}
+			if(moved)
+				moved(off + k + n, n, k + n >= len);
+		}
+		if(report.Stopping()) {
+			error = "stopped";
+			return false;
+		}
+		// A chunk that ends in skipped zeros: the file reaches its end as a hole, so the
+		// read-back below finds zeros there, not the end of the file.
+		if(cf.sparse && written_end < off + len) {
+			if(!out.Truncate(off + len, error))
+				return false;
+			written_end = off + len;
+		}
+		// A recorded chunk must really be on disk. A one-chunk file needs no flush:
+		// if it is cut short it is copied again, and a later scan catches a copy
+		// lost in a crash after its rename.
+		if(!one)
+			out.Flush();
+		sent = one ? whole->FinishString() : chunk_sha.FinishString();
+		String back;
+		if(!HashRange(out, off, len, cf.count_back, buf, back, error, checking))
+			return false;
+		if(back != sent) {
+			error = Format("verify failed: chunk %d of %s reads back differently; kept as %s", idx + 1, cf.rel, cf.part);
+			return false;
+		}
+		if(!one) {   // a one-chunk file is copied again from the start after a stop: no record
+			Lock l(mx);
+			Sql("INSERT OR REPLACE INTO chunks VALUES (?, ?, ?, ?, ?, ?)")
+				.Int(1, run).Int(2, cf.seq).Int(3, idx).Int(4, off).Int(5, len).Text(6, sent).Run();
+		}
+		return true;
+	}
+
+	// --split-files ------------------------------------------------------------------
+	// The thread copying a file of several chunks (its owner) shares the chunks it has
+	// not started: a copy thread with no file of its own to start takes the next one and
+	// copies, checks and records it through its own connections, as the owner would. The
+	// owner still reads the whole source in order for the file's SHA-256, and a chunk a
+	// helper copied must have read the same for both: a source that changed in between
+	// fails the copy, as it would without helpers. Only for a local source: a remote one
+	// would cross the network twice.
+	struct SharedCopy {
+		enum { FREE, OWNER, HELPER, HELPED };
+		ChunkFile         cf;
+		int               dir = 0;          // the side read
+		Vector<int>       state;            // per chunk
+		Vector<String>    sent;             // per chunk a helper copied: its SHA-256 as the helper read it
+		int               active = 0;       // helpers at work on it
+		bool              closed = false;   // the owner is done handing out chunks
+		bool              helpable = true;  // false after a helper failed: the owner does the rest
+		bool              announced = false;
+		String            failed;           // a helper's chunk did not read back as sent
+		int64             copied = 0;       // bytes all its threads have written, for the file's bar
+		CopyProgress      p;
+		Clock::time_point t0, last_shown;
+	};
+	std::mutex              share_m;   // the shared files; Progress (mx) may be called under it, never the other way
+	std::condition_variable share_cv;
+	Vector<SharedCopy*>     shared;
+
+	// n more bytes of a shared file went by: its bar shows what all its threads did,
+	// never going back, and never at the end until the copy is in place.
+	void SharedMoved(SharedCopy& j, int64 n, bool force = false)
+	{
+		std::lock_guard<std::mutex> l(share_m);
+		j.copied += n;
+		if(!force && Since(j.last_shown) < 0.25)
+			return;
+		j.last_shown = Clock::now();
+		j.p.done = max(j.p.done, min(j.copied, j.p.size - 1));
+		j.p.seconds = Since(j.t0);
+		Progress(j.p);
+	}
+
+	// The owner, on the way out however it goes: no more chunks handed out, and no
+	// helper still using the file.
+	void Unshare(SharedCopy& j)
+	{
+		std::unique_lock<std::mutex> l(share_m);
+		j.closed = true;
+		share_cv.wait(l, [&] { return j.active == 0; });
+		int i = FindIndex(shared, &j);
+		if(i >= 0)
+			shared.Remove(i);
+	}
+
+	// A copy thread with no file to start: copies one chunk of a file another thread is
+	// copying. False when there is none to help with.
+	bool HelpOnce(Ctx& c)
+	{
+		SharedCopy *j = nullptr;
+		int idx = -1;
+		bool announce = false;
+		{
+			std::lock_guard<std::mutex> l(share_m);
+			for(SharedCopy *s : shared)
+				if(!s->closed && s->helpable && s->failed.IsEmpty() && (idx = FindIndex(s->state, (int)SharedCopy::FREE)) >= 0) {
+					j = s;
+					break;
+				}
+			if(!j)
+				return false;
+			j->state[idx] = SharedCopy::HELPER;
+			j->active++;
+			announce = !j->announced;
+			j->announced = true;
+		}
+		String rel = j->cf.rel;   // j may go once the chunk is handed back
+		if(announce)
+			Line("splitting " + rel + ": idle threads copy its chunks too");
+		String error, sent;
+		int64 moved = 0;
+		bool ok = false;
+		{
+			const ChunkFile& cf = j->cf;
+			One<TreeFile> in = c.fs[j->dir]->Open(cf.rel, false, error);
+			One<TreeFile> out = in ? c.fs[cf.side]->Open(cf.part, true, error) : One<TreeFile>();
+			if(in && out) {
+				Buffer<byte> buf((size_t)SLICE);
+				int64 written_end = cf.size;   // sparse: the owner made the file its full size
+				ok = CopyChunk(cf, *in, *out, idx, buf, nullptr, written_end, sent, error,
+				               [&](int64, int64 n, bool) { moved += n; SharedMoved(*j, n); }, nullptr);
+			}
+		}   // closed before the chunk is handed back: the owner may be waiting to finish the file
+		bool verify = error.StartsWith("verify failed");
+		bool lost = c.fs[0]->Lost() || c.fs[1]->Lost();
+		{
+			std::lock_guard<std::mutex> l(share_m);
+			if(ok) {
+				j->state[idx] = SharedCopy::HELPED;
+				j->sent[idx] = sent;
+			}
+			else {
+				j->state[idx] = SharedCopy::FREE;   // the owner, or another helper, copies it
+				j->copied -= moved;
+				if(verify)
+					j->failed = error;
+				else if(error != "stopped" && !lost)
+					j->helpable = false;
+			}
+			j->active--;
+		}
+		share_cv.notify_all();
+		if(ok) {
+			Lock l(mx);
+			result.helped++;
+		}
+		else if(error != "stopped" && !report.Stopping() && !verify) {
+			if(lost)
+				Recover(c);   // waited for here, not at the start of this thread's next file
+			else
+				Line("warning: stopped helping with " + rel + ": " + error);
+		}
+		return true;
+	}
+
+	// Chunked copy of a whole file, chunk by chunk (CopyChunk). Every checked chunk of a
+	// file of more than one is recorded, so a restart continues from the next one.
 	// src_hash and dst_hash are the whole-file SHA-256 of what was read and of what was
 	// read back, built up along the way: no separate full read is needed to verify the
 	// copy. in: the source, open. A local target is kept sparse: all-zero slices are
@@ -423,51 +661,35 @@ struct Runner {
 	               String& src_hash, String& dst_hash, int64& resumed, String& error)
 	{
 		resumed = 0;
-		int64 chunk = (int64)flags.chunk_mib << 20;
+		ChunkFile cf;
+		cf.seq = seq;
+		cf.side = side;
+		cf.rel = rel;
+		cf.part = part;
+		cf.size = size;
+		cf.chunk = (int64)flags.chunk_mib << 20;
+		cf.count = (size + cf.chunk - 1) / cf.chunk;
+		cf.sparse = to.IsLocal();
+		cf.count_read = remote_source;
+		cf.count_write = !to.IsLocal() || !remote_source;   // --bwlimit: network, or local writes
+		cf.count_back = !to.IsLocal();
 		out = to.Open(part, true, error);
 		if(!out)
 			return false;
-		const int64 SLICE = 1 << 20;
 		Buffer<byte> buf((size_t)SLICE);
-		bool count_read = remote_source;
-		bool sparse = to.IsLocal();
 		int64 written_end = 0;   // sparse: where the last write ended
-		bool count_write = !to.IsLocal() || !remote_source;   // --bwlimit: network, or local writes
-		bool count_back = !to.IsLocal();
 
 		Clock::time_point last_shown = Clock::now();
-		// SHA-256 of [off, off + len) of a file, in slices. show: the read-back of a chunk
-		// just written, so the file's bar moves while it is checked.
-		auto hash_range = [&](TreeFile& f, int64 off, int64 len, bool count, String& hash, bool show = false) -> bool {
-			if(f.HashesOnServer() && len >= TreeFile::SERVER_HASH_MIN) {   // the server hashes it, nothing comes back
-				if(show) {
-					p.verifying = true;
-					p.done = off;
-					p.seconds = Since(t0);
-					Progress(p);
-					p.verifying = false;
-				}
-				return f.HashRange(off, len, hash, error);
-			}
-			Sha256 sha;
-			for(int64 k = 0; k < len; k += SLICE) {
-				int64 n = min(SLICE, len - k);
-				if(!f.ReadAt(off + k, buf, n, error))
-					return false;
-				if(count)
-					report.Count(n);
-				sha.Put(buf, (int)n);
-				if(show && Since(last_shown) >= 0.25) {
-					p.verifying = true;
-					p.done = off + k + n;
-					p.seconds = Since(t0);
-					Progress(p);
-					p.verifying = false;
-					last_shown = Clock::now();
-				}
-			}
-			hash = sha.FinishString();
-			return true;
+		// The read-back of a chunk just written, so the file's bar moves while it is checked.
+		auto checking = [&](int64 pos, bool always) {
+			if(!always && Since(last_shown) < 0.25)
+				return;
+			p.verifying = true;
+			p.done = pos;
+			p.seconds = Since(t0);
+			Progress(p);
+			p.verifying = false;
+			last_shown = Clock::now();
 		};
 
 		// Chunks already done in an earlier, stopped attempt.
@@ -480,7 +702,7 @@ struct Runner {
 				done.Add(q.Text(1));
 			q.Reset();
 		}
-		int64 count = (size + chunk - 1) / chunk;
+		int64 count = cf.count;
 		int next = done.GetCount();
 		// Hashing is most of the work of a local copy, so each byte is hashed as few times
 		// as it can be: the source once for the file, once more for its chunk when the file
@@ -503,9 +725,9 @@ struct Runner {
 					error = "stopped";
 					return false;
 				}
-				int64 off = good * chunk, len = min(chunk, size - off);
+				int64 off = good * cf.chunk, len = min(cf.chunk, size - off);
 				String h, ignore = error;
-				bool ok = hash_range(*out, off, len, count_back, h, true) && h == done[good];
+				bool ok = HashRange(*out, off, len, cf.count_back, buf, h, error, checking) && h == done[good];
 				error = ignore;
 				if(!ok) {
 					Line(Format("chunk %d of %s does not read back as recorded: copying it again from there",
@@ -516,7 +738,7 @@ struct Runner {
 					int64 n = min(SLICE, len - k);
 					if(!in.ReadAt(off + k, buf, n, error))
 						return false;
-					if(count_read)
+					if(cf.count_read)
 						report.Count(n);
 					src_sha.Put(buf, (int)n);
 				}
@@ -525,105 +747,149 @@ struct Runner {
 				if(p.done < p.size)   // the end is shown once, when the copy is in place
 					Progress(p);
 			}
-			if(good < next) {
-				next = good;
-				Lock l(mx);
-				Stmt(db, "DELETE FROM chunks WHERE run = ? AND seq = ? AND idx >= ?")
-					.Int(1, run).Int(2, seq).Int(3, next).Run();
-			}
+			next = good;
 			Line(Format("resuming %s at chunk %d of %d", rel, next + 1, count));
-			resumed = min(next * chunk, size);
+			resumed = min(next * cf.chunk, size);
+		}
+		// Records past the ones kept go: a damaged chunk and those after it, and chunks
+		// helpers finished beyond the first gap (--split-files) are copied again.
+		if(count > 1) {
+			Lock l(mx);
+			Sql("DELETE FROM chunks WHERE run = ? AND seq = ? AND idx >= ?").Int(1, run).Int(2, seq).Int(3, next).Run();
 		}
 		// Locally, whatever lies past the checked chunks goes (a torn chunk, an older and
 		// longer attempt), so the slices left unwritten below are holes, not old bytes.
-		if(sparse) {
-			written_end = min(next * chunk, size);
+		if(cf.sparse) {
+			written_end = min(next * cf.chunk, size);
 			if(!out->Truncate(written_end, error))
 				return false;
 		}
 
+		// Idle threads may help (--split-files) with two chunks or more to go.
+		SharedCopy job;
+		bool split = flags.split_files && flags.threads > 1 && !remote_source && count - next > 1;
+		Vector<String> mine;   // per chunk a helper takes: its SHA-256 as read here
+		if(split) {
+			// Chunks may now be written in any order: locally the file gets its full size
+			// at once, holes where nothing is written yet.
+			if(cf.sparse && !out->Truncate(size, error))
+				return false;
+			if(cf.sparse)
+				written_end = size;
+			job.cf = cf;
+			job.dir = 1 - side;
+			job.state.SetCount((int)count, SharedCopy::FREE);
+			for(int i = 0; i < next; i++)
+				job.state[i] = SharedCopy::OWNER;
+			job.sent.SetCount((int)count);
+			mine.SetCount((int)count);
+			job.copied = resumed;
+			job.p = p;
+			job.p.done = resumed;
+			job.t0 = t0;
+			job.last_shown = Clock::now();
+			std::lock_guard<std::mutex> l(share_m);
+			shared.Add(&job);
+		}
+		struct Unsharing {
+			Runner& r;
+			SharedCopy *j;
+			~Unsharing() { if(j) r.Unshare(*j); }
+		} unsharing{ *this, split ? &job : nullptr };
+
+		std::function<void (int64, bool)> check_shown;
+		if(!split)   // with helpers the bar shows bytes written by all of them
+			check_shown = checking;
+		auto moved = [&](int64 pos, int64 n, bool last) {
+			if(split)
+				SharedMoved(job, n);
+			// Within a chunk too, about four times a second, so a thermometer moves
+			// smoothly even when one chunk takes many seconds. Only inside it: done at a
+			// chunk's end means that chunk is checked and recorded.
+			else if(!last && Since(last_shown) >= 0.25) {
+				p.done = pos;
+				p.seconds = Since(t0);
+				Progress(p);
+				last_shown = Clock::now();
+			}
+		};
 		for(int64 idx = next; idx < count; idx++) {
 			if(report.Stopping()) {
 				error = "stopped";
 				return false;
 			}
-			int64 off = idx * chunk, len = min(chunk, size - off);
-			// 1. read and hash, 2. write, slice by slice
-			Sha256 chunk_sha;
-			for(int64 k = 0; k < len; k += SLICE) {
-				int64 n = min(SLICE, len - k);
-				if(!in.ReadAt(off + k, buf, n, error))
-					return false;
-				if(count_read)
-					report.Count(n);
-				if(!one)
-					chunk_sha.Put(buf, (int)n);
-				src_sha.Put(buf, (int)n);
-				if(!sparse || !AllZero(buf, n)) {
-					if(!RoomFor(side, n)) {
+			int64 off = idx * cf.chunk, len = min(cf.chunk, size - off);
+			if(split) {
+				bool helped;
+				{
+					std::lock_guard<std::mutex> l(share_m);
+					helped = job.state[(int)idx] != SharedCopy::FREE;
+					if(!helped)
+						job.state[(int)idx] = SharedCopy::OWNER;
+				}
+				if(helped) {   // a helper copies it: read here only for the file's SHA-256
+					Sha256 sha;
+					for(int64 k = 0; k < len; k += SLICE) {
+						int64 n = min(SLICE, len - k);
+						if(!in.ReadAt(off + k, buf, n, error))
+							return false;
+						src_sha.Put(buf, (int)n);
+						sha.Put(buf, (int)n);
+					}
+					mine[(int)idx] = sha.FinishString();
+					continue;
+				}
+			}
+			String sent;
+			if(!CopyChunk(cf, in, *out, idx, buf, &src_sha, written_end, sent, error, moved, check_shown))
+				return false;
+			if(one)
+				whole = sent;
+			if(split)
+				SharedMoved(job, 0, true);
+			else {
+				p.done = off + len;
+				p.seconds = Since(t0);
+				if(p.done < p.size)
+					Progress(p);
+			}
+		}
+		if(split) {
+			// The helpers finish first. A chunk one of them handed back after this thread
+			// had passed it is copied here now; every chunk they copied must have read the
+			// same for them as here.
+			{
+				std::unique_lock<std::mutex> l(share_m);
+				job.closed = true;
+				share_cv.wait(l, [&] { return job.active == 0; });
+			}
+			if(job.failed.GetCount()) {
+				error = job.failed;
+				return false;
+			}
+			for(int64 idx = next; idx < count; idx++) {
+				int st = job.state[(int)idx];   // no helper is left: no lock needed
+				String sent;
+				if(st == SharedCopy::FREE) {
+					if(report.Stopping()) {
 						error = "stopped";
 						return false;
 					}
-					if(!out->WriteAt(off + k, buf, n, error))
+					if(!CopyChunk(cf, in, *out, idx, buf, nullptr, written_end, sent, error,
+					              [&](int64, int64 n, bool) { SharedMoved(job, n); }, nullptr))
 						return false;
-					Wrote(side, n);
-					written_end = off + k + n;
-					if(count_write)
-						report.Count(n);
 				}
-				{
-					// The run's bytes count as they are written (a hole as it is passed),
-					// not when the chunk is read back and recorded.
-					Lock l(mx);
-					result.bytes += n;
-				}
-				// Within a chunk too, about four times a second, so a thermometer
-				// moves smoothly even when one chunk takes many seconds. Only inside
-				// it: done at a chunk's end means that chunk is checked and recorded.
-				if(Since(last_shown) >= 0.25 && k + n < len) {
-					p.done = off + k + n;
-					p.seconds = Since(t0);
-					Progress(p);
-					last_shown = Clock::now();
-				}
-			}
-			if(report.Stopping()) {
-				error = "stopped";
-				return false;
-			}
-			// A chunk that ends in skipped zeros: the file reaches its end as a hole, so the
-			// read-back below finds zeros there, not the end of the file.
-			if(sparse && written_end < off + len) {
-				if(!out->Truncate(off + len, error))
+				else if(st == SharedCopy::HELPED)
+					sent = job.sent[(int)idx];
+				else
+					continue;
+				if(sent != mine[(int)idx]) {
+					error = "the source changed while it was being copied: " + rel;
 					return false;
-				written_end = off + len;
+				}
 			}
-			// A recorded chunk must really be on disk. A one-chunk file needs no flush:
-			// if it is cut short it is copied again, and a later scan catches a copy
-			// lost in a crash after its rename.
-			if(count > 1)
-				out->Flush();
-			// 3. read the chunk back and check it against what was read
-			String sent = one ? (whole = src_sha.FinishString()) : chunk_sha.FinishString(), back;
-			if(!hash_range(*out, off, len, count_back, back, true))
-				return false;
-			if(back != sent) {
-				error = Format("verify failed: chunk %d of %s reads back differently; kept as %s", idx + 1, rel, part);
-				return false;
-			}
-			{
-				// A one-chunk file is copied again from the start after a stop: no record.
-				Lock l(mx);
-				if(count > 1)
-					Sql("INSERT OR REPLACE INTO chunks VALUES (?, ?, ?, ?, ?, ?)")
-						.Int(1, run).Int(2, seq).Int(3, idx).Int(4, off).Int(5, len).Text(6, sent).Run();
-			}
-			p.done = off + len;
-			p.seconds = Since(t0);
-			if(p.done < p.size)
-				Progress(p);
 		}
-		if((!sparse || written_end < size) && !out->Truncate(size, error))   // sparse: a hole at the end
+		if((!cf.sparse || written_end < size) && !out->Truncate(size, error))   // sparse: a hole at the end
 			return false;
 		src_hash = one ? whole : src_sha.FinishString();
 		dst_hash = src_hash;   // every chunk read back as sent
@@ -1054,7 +1320,12 @@ struct Runner {
 	// File copies, on up to --threads threads. False when stopped.
 	bool CopyInParallel(const Vector<const Step*>& todo)
 	{
-		int n = clamp(flags.threads, 1, max(todo.GetCount(), 1));
+		// One thread per file at most, unless idle threads can help with a big one.
+		int64 chunk = (int64)flags.chunk_mib << 20;
+		bool help = false;
+		for(const Step *s : todo)
+			help = help || (flags.split_files && main.fs[s->a.dir]->IsLocal() && s->a.from.size > chunk);
+		int n = help ? max(flags.threads, 1) : clamp(flags.threads, 1, max(todo.GetCount(), 1));
 		Array<Ctx> extra;
 		for(int t = 1; t < n; t++) {
 			String error;
@@ -1068,12 +1339,24 @@ struct Runner {
 		if(extra.GetCount())
 			Line(Format("copying with %d threads", extra.GetCount() + 1));
 
-		std::atomic<int> next = 0;
+		std::atomic<int> next = 0, busy = 0;   // busy: threads with a file in hand
 		std::atomic<bool> halted = false;
 		auto work = [&](Ctx& c) {
-			for(int i; !halted && (i = next++) < todo.GetCount();)
+			for(;;) {
+				busy++;
+				int i = next++;
+				if(halted || i >= todo.GetCount()) {
+					busy--;
+					break;
+				}
 				if(!RunStep(c, *todo[i]))
 					halted = true;
+				busy--;
+			}
+			// No file left to start: help with the big ones still being copied.
+			while(help && !halted && !report.Stopping() && busy > 0)
+				if(!HelpOnce(c))
+					std::this_thread::sleep_for(std::chrono::milliseconds(50));
 		};
 		std::vector<std::thread> threads;
 		for(Ctx& c : extra)

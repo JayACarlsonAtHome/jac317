@@ -51,6 +51,7 @@ struct Streamer {
 	std::condition_variable qcv;
 	std::deque<Item>        queue;
 	bool                    scan_done = false;
+	int                     busy = 0;  // workers with an item in hand
 	Vector<Item>            links;     // hard links, after all copies (r.mx)
 
 	// settling -> post-scan (folders: r.mx)
@@ -669,20 +670,40 @@ struct Streamer {
 
 	void Work(Ctx& c)
 	{
+		// --split-files: a worker with nothing queued helps with a big file another one is
+		// copying, and stays until no worker has a file in hand.
+		bool help = flags.split_files && !dry && c.fs[0]->IsLocal();
 		for(;;) {
 			Item it;
 			{
 				std::unique_lock<std::mutex> l(qm);
-				qcv.wait(l, [&] { return !queue.empty() || scan_done || r.report.Stopping(); });
+				if(help)
+					while(queue.empty() && !Drained() && !r.report.Stopping()) {
+						l.unlock();
+						bool helped = r.HelpOnce(c);
+						l.lock();
+						if(!helped)
+							qcv.wait_for(l, std::chrono::milliseconds(50));
+					}
+				else
+					qcv.wait(l, [&] { return !queue.empty() || scan_done || r.report.Stopping(); });
 				if(r.report.Stopping() || queue.empty())
 					return;
 				it = pick(queue.front());
 				queue.pop_front();
+				busy++;
 			}
 			Process(c, it);
 			Finished(it.folder);
+			{
+				std::lock_guard<std::mutex> l(qm);
+				busy--;
+			}
+			qcv.notify_all();
 		}
 	}
+	// Under qm: the pre-scan is done and no worker has a file in hand.
+	bool Drained() const   { return scan_done && busy == 0; }
 
 	// Post-scan ------------------------------------------------------------------
 

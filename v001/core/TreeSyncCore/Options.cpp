@@ -59,6 +59,13 @@ const BoolOption BOOL_OPTIONS[] = {
 	{ "low-priority", &SyncFlags::low_priority, "", "Low CPU and disk priority (nice, ionice)",
 	  "Runs the sync at the lowest CPU and disk priority, so other programs and copies go first. The "
 	  "sync takes longer while the machine is busy. Does not change the remote machine's priority." },
+	{ "split-files", &SyncFlags::split_files, "", "Split big files across idle threads",
+	  "When a copy thread has no file left to start, it helps with a big file another thread is "
+	  "copying: it takes the next chunk (--chunk-mib) not started yet and copies and checks it over "
+	  "its own connection. Near the end of a run, when one big file is left, every thread works on "
+	  "it, so it goes several times faster over a network where one stream is slow. Each chunk is "
+	  "still read back and checked, and the whole file's SHA-256 is still worked out in order. Only "
+	  "when the source is local (a remote source would be read twice). On (normal)." },
 	{ "include-same", &SyncFlags::include_same, "/IS", "Include same files (rehash / recopy)",
 	  "Copies files even when they are already identical on both sides. Normally they are skipped. "
 	  "Useful to rewrite a target you suspect is damaged." },

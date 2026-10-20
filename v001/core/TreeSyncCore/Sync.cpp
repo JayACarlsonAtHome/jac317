@@ -121,6 +121,7 @@ bool RunSync(const SyncSetup& setup, SyncReport& report, SyncResult& result, Str
 	key_flags.threads = def.threads;
 	key_flags.bwlimit_kib = def.bwlimit_kib;
 	key_flags.low_priority = def.low_priority;
+	key_flags.split_files = def.split_files;
 	key_flags.retries = def.retries;
 	key_flags.retry_wait = def.retry_wait;
 	key_flags.precheck = def.precheck;   // "start anyway" continues the same run
