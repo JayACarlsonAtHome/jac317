@@ -126,6 +126,12 @@ static std::vector<Feature> Features()
 	return list;
 }
 
+// TS_FORMAT_CHECKED comes from TreeSyncCore.upp, in the same options as -Wformat=2
+// -Werror=format, so it is set exactly when those flags compiled this file.
+#ifndef TS_FORMAT_CHECKED
+#define TS_FORMAT_CHECKED 0
+#endif
+
 String ToolchainReport()
 {
 	String r;
@@ -137,6 +143,7 @@ String ToolchainReport()
 #endif
 	r << "Standard:  __cplusplus " << (int64)__cplusplus << "\n";
 	r << "Contracts: " << (TS_CONTRACTS_NATIVE ? "native C++26" : "runtime fallback (TS_PRE/TS_POST/TS_ASSERT)") << "\n";
+	r << "Formats:   " << (TS_FORMAT_CHECKED ? "checked (-Wformat=2 -Werror=format)" : "not checked") << "\n";
 	Vector<String> have, missing;
 	for(const Feature& f : Features())
 		if(f.value)
@@ -161,6 +168,7 @@ String ToolchainFacts()
 #endif
 	r << "standard\t" << (int64)__cplusplus << "\n";
 	r << "contracts\t" << (TS_CONTRACTS_NATIVE ? "native" : "fallback") << "\n";
+	r << "format checks\t" << (TS_FORMAT_CHECKED ? "on" : "off") << "\n";
 	for(const Feature& f : Features())
 		r << "feature:" << f.name << "\t" << (f.value ? AsString(f.value) : String("-")) << "\n";
 	return r;

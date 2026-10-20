@@ -51,15 +51,22 @@ same program; TreeSync is also a proving ground for GCC 15 and Clang 21 with C++
 | `--valgrind` | The tests under valgrind memcheck (slow) |
 | `--helgrind` | The tests under valgrind helgrind (very slow) |
 
+**Format checks.** Every package's `.upp` has `options "-Wformat=2 -Werror=format"`, so a
+printf-style call whose arguments do not match its format (for example a 64-bit value
+given to `%d`) stops the build instead of misreading memory at run time. The flags are
+package options, so they cover TreeSync's code and not U++'s own. The toolchain report
+(**This program was built with** in TreeSyncBuild, and `treesync-cli --toolchain`) says
+`Formats: checked` when they were applied.
+
 **Debug or release?** Debug builds check more and are easier to debug, but are much
 slower: on many small files about 4 times the CPU. Always run real syncs with a
 **release** build. `build.sh` remembers which type is in each `out/` folder and
 links the programs again when you switch, so a debug build never leaves a release
 program behind or the other way round.
 
-A test run ends with a line such as `passed: 290/290 checks`. A debug build skips one
+A test run ends with a line such as `passed: 348/348 checks`. A debug build skips one
 test (a 4.5 GiB sparse copy, too slow without optimization) and says so; a release
-test run has all of them (`passed: 303/303 checks`).
+test run has all of them (`passed: 355/355 checks`, 2026-10-19).
 
 ## 2.3 TreeSyncBuild
 

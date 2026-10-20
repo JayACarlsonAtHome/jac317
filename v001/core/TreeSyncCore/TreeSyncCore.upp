@@ -31,4 +31,4 @@ file
 	Check.cpp;
 
 options
-	"-Wformat=2 -Werror=format";
+	"-Wformat=2 -Werror=format -DTS_FORMAT_CHECKED=1";
