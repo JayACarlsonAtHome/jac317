@@ -82,16 +82,22 @@ TreeSync is built with [U++](https://www.ultimatepp.org/) (its build tool `umk` 
 its sources `uppsrc`). Bootstrap looks for one in this order:
 
 1. `$UPP_DIR` (if you set it)
-2. The shared copy on the GFS disk: `/run/media/jay/GFS/upp` (or `/media/jay/GFS`,
+2. `~/upp_basefix`: an install made by [upp_basefix](https://github.com/JayACarlsonAtHome/upp_basefix),
+   U++ pinned to a GitHub commit plus fixes (0 warnings with gcc and clang, sanitizer and
+   valgrind clean, the heap fix below included)
+3. The shared copy on the GFS disk: `/run/media/jay/GFS/upp` (or `/media/jay/GFS`,
    `/mnt/GFS`) with `upp-bin/rhel/umk` or `upp-bin/mint/umk`
-3. `~/u++`
+4. `~/u++`
 
-If none is found it offers to download the latest U++ release into `~/u++` and build
-its `umk` there. This needs no `sudo`. To put it somewhere else:
+Each is taken as a pair (its `umk` with its own `uppsrc`). If none is found it offers to
+install U++ through upp_basefix into `~/upp_basefix`: it clones upp_basefix, runs its
+bootstrap (the pinned U++ from GitHub, `umk` built from it, the fixes; it lists the system
+packages U++ needs and installs them only when you say yes, with `sudo`), then
+`upp_basefix.sh install`. To put it somewhere else:
 
 ```bash
-./bootstrap.sh --upp-dir /opt/u++
-export UPP_DIR=/opt/u++      # then build.sh finds it too (put this in ~/.bashrc)
+./bootstrap.sh --upp-dir /opt/upp_basefix
+export UPP_DIR=/opt/upp_basefix   # then build.sh finds it too (put this in ~/.bashrc)
 ```
 
 ### Step 4: build and test
@@ -127,7 +133,7 @@ The same lines are added to `Bootstrap-Results.txt` in TreeSync's logs folder.
 | `--yes` | Do not ask before installing (for scripts) |
 | `--compiler gcc` / `clang` / `both` | Build with one compiler (default both) |
 | `--no-build` | Stop after the checks and installs |
-| `--upp-dir DIR` | Where U++ goes if it has to be fetched (default `~/u++`) |
+| `--upp-dir DIR` | Where U++ goes if it has to be fetched (default `~/upp_basefix`) |
 | `--check` | Only check, one `@req` line per requirement (TreeSyncBuild uses this); exit 1 if a required one is missing |
 | `-h`, `--help` | Show the help |
 

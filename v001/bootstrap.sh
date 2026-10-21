@@ -8,15 +8,16 @@
 #   ./bootstrap.sh --yes            # do not ask before installing
 #   ./bootstrap.sh --compiler gcc   # build with one compiler (default: both)
 #   ./bootstrap.sh --no-build       # stop after the checks and installs
-#   ./bootstrap.sh --upp-dir DIR    # where U++ goes if it has to be fetched (default ~/u++)
+#   ./bootstrap.sh --upp-dir DIR    # where U++ goes if it has to be fetched (default ~/upp_basefix)
 #   ./bootstrap.sh --check          # only check, quietly, one "@req" line each (TreeSyncBuild's
 #                                   # "This machine" uses this); exit 1 if a required one is missing
 #
 #   1. Detects the Linux family (rhel, fedora, linuxmint).
 #   2. Checks each requirement in setup/recipes.conf; for the missing ones shows the
 #      install commands (most need sudo), asks, runs them and checks again.
-#   3. U++: uses the one already there (tools.sh find_upp); otherwise fetches the latest
-#      U++ release for POSIX into ~/u++ and builds its umk, no sudo needed.
+#   3. U++: uses the one already there (tools.sh find_upp); otherwise installs it through
+#      upp_basefix (github.com/JayACarlsonAtHome/upp_basefix: U++ pinned to a GitHub commit
+#      plus fixes) into ~/upp_basefix; its own bootstrap lists the system packages U++ needs.
 #   4. Builds and tests TreeSync with each compiler (build.sh --test), and puts
 #      TreeSyncBuild and TreeSyncInstall in the TreeSyncApp folder of your app list
 #      (setup/app-folder.sh).
@@ -30,7 +31,8 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 RECIPES="$HERE/setup/recipes.conf"
 . "$HERE/tools.sh"
 
-DRY=0; YES=0; BUILD=1; CHECK=0; COMPILERS="gcc clang"; UPP_TARGET="$HOME/u++"
+DRY=0; YES=0; BUILD=1; CHECK=0; COMPILERS="gcc clang"; UPP_TARGET="$HOME/upp_basefix"; UPP_BASEFIX_SRC="${UPP_BASEFIX_SRC:-$HOME/upp_basefix_src}"
+UPP_BASEFIX_REPO="${UPP_BASEFIX_REPO:-https://github.com/JayACarlsonAtHome/upp_basefix.git}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run)  DRY=1; shift ;;
@@ -168,38 +170,37 @@ if [ -n "${UMK:-}" ]; then
   record "$t0" "$(date +%s)" "U++ found" 0 "Good" "$UMK, $UPPSRC"
   upp_quiet_sqlite3mc "$UPPSRC"
 else
-  url=$(curl -s --max-time 30 https://api.github.com/repos/ultimatepp/ultimatepp/releases/latest |
-        sed -n 's/.*"browser_download_url": *"\([^"]*upp-posix-[0-9]*\.tar\.xz\)".*/\1/p' | head -1)
-  echo; echo "U++ (umk + uppsrc) not found. Plan, no sudo needed:"
-  echo "  download ${url:-<latest upp-posix release: none found, check the network>}"
-  echo "  unpack into $UPP_TARGET, then ./configure && make -f umkMakefile (builds umk)"
-  [ -n "$url" ] || { record "$t0" "$(date +%s)" "Fetch U++" 1 "Failed" "no release found"; summary "stopped: no U++"; exit 1; }
+  echo; echo "U++ (umk + uppsrc) not found. Plan, no sudo needed for U++ itself:"
+  echo "  git clone $UPP_BASEFIX_REPO $UPP_BASEFIX_SRC  (unless it is there)"
+  echo "  $UPP_BASEFIX_SRC/upp_basefix.sh bootstrap   (the pinned U++, its umk, the fixes; lists"
+  echo "      the system packages U++ needs, installs them only with --install, which asks for sudo)"
+  echo "  $UPP_BASEFIX_SRC/upp_basefix.sh install $UPP_TARGET"
   if [ "$DRY" = 1 ]; then
     echo "(dry run: not fetched)"; summary "dry run"; exit 0
   fi
-  if [ -e "$UPP_TARGET" ]; then
+  if [ -e "$UPP_TARGET" ] && [ ! -f "$UPP_TARGET/VERSION" ] && [ -n "$(ls -A "$UPP_TARGET" 2>/dev/null)" ]; then
     echo "$UPP_TARGET exists but holds no usable U++; move it away or use --upp-dir." >&2
-    record "$t0" "$(date +%s)" "Fetch U++" 1 "Failed" "$UPP_TARGET in the way"; summary "stopped: no U++"; exit 1
+    record "$t0" "$(date +%s)" "Install U++" 1 "Failed" "$UPP_TARGET in the way"; summary "stopped: no U++"; exit 1
   fi
   answer=n
-  if [ "$YES" = 1 ]; then answer=y; elif [ -t 0 ]; then printf 'Fetch and build U++ now? [y/N] '; read -r answer; fi
+  if [ "$YES" = 1 ]; then answer=y; elif [ -t 0 ]; then printf 'Install U++ through upp_basefix now? [y/N] '; read -r answer; fi
   [ "$answer" = y ] || [ "$answer" = Y ] || { summary "stopped: no U++"; exit 1; }
-  work=$(mktemp -d)
-  if curl -L --fail --max-time 600 -o "$work/upp.tar.xz" "$url" && tar -C "$work" -xJf "$work/upp.tar.xz" &&
-     mkdir -p "$(dirname "$UPP_TARGET")" && mv "$work/upp" "$UPP_TARGET" &&
-     ( cd "$UPP_TARGET" && ./configure && make -f umkMakefile -j"$(nproc)" ); then
-    rm -rf "$work"
-    export UPP_DIR="$UPP_TARGET"
-    read -r UMK UPPSRC <<< "$(find_upp)"
-    [ -n "${UPPSRC:-}" ] && upp_fix_heap "$UPPSRC"   # the release has the heap bug too
-    [ -n "${UPPSRC:-}" ] && upp_quiet_sqlite3mc "$UPPSRC"
+  ok=1
+  [ -x "$UPP_BASEFIX_SRC/upp_basefix.sh" ] || git clone -q "$UPP_BASEFIX_REPO" "$UPP_BASEFIX_SRC" || ok=0
+  if [ $ok = 1 ] && ! "$UPP_BASEFIX_SRC/upp_basefix.sh" bootstrap; then
+    answer=n
+    if [ "$YES" = 1 ]; then answer=y; elif [ -t 0 ]; then printf 'Install those packages now (sudo)? [y/N] '; read -r answer; fi
+    { [ "$answer" = y ] || [ "$answer" = Y ]; } && "$UPP_BASEFIX_SRC/upp_basefix.sh" bootstrap --install || ok=0
   fi
-  if [ -n "${UMK:-}" ]; then
-    record "$t0" "$(date +%s)" "Fetch and build U++" 0 "Good" "$(basename "$url") -> $UPP_TARGET"
-    [ "$UPP_TARGET" = "$HOME/u++" ] || echo "Note: build.sh looks in ~/u++; for $UPP_TARGET use: export UPP_DIR=$UPP_TARGET"
+  [ $ok = 1 ] && "$UPP_BASEFIX_SRC/upp_basefix.sh" install "$UPP_TARGET" || ok=0
+  export UPP_DIR="$UPP_TARGET"
+  read -r UMK UPPSRC <<< "$(find_upp)"
+  if [ $ok = 1 ] && [ -n "${UMK:-}" ]; then
+    record "$t0" "$(date +%s)" "Install U++" 0 "Good" "$(head -1 "$UPP_TARGET/VERSION") -> $UPP_TARGET"
+    [ "$UPP_TARGET" = "$HOME/upp_basefix" ] || echo "Note: build.sh looks in ~/upp_basefix; for $UPP_TARGET use: export UPP_DIR=$UPP_TARGET"
   else
-    record "$t0" "$(date +%s)" "Fetch and build U++" 1 "Failed" "$url"
-    summary "stopped: U++ did not build"; exit 1
+    record "$t0" "$(date +%s)" "Install U++" 1 "Failed" "upp_basefix"
+    summary "stopped: U++ was not installed"; exit 1
   fi
 fi
 

@@ -5,6 +5,11 @@ Found 2026-10-20 in a clean release build with gcc 15 (gcc-toolset-15). The file
 SQLite 3.51.2), which U++ 2026.1 bundles and compiles through `plugin/sqlite3/lib.c`.
 clang does not warn.
 
+**Gone since 2026-10-14:** U++ (build 18761 on, as in `~/upp_basefix`) no longer bundles
+SQLite: `plugin/sqlite3` links the system's (`sqlite-devel`), and TreeSync's `Db.cpp`
+includes `<sqlite3.h>`. `upp_quiet_sqlite3mc` finds no `lib.c` there and does nothing; it
+stays for older U++ trees.
+
 ## The four warnings
 
 1. `sha1_transform` reading 64 bytes from a region of size 1, 4 and 16 (three warnings,

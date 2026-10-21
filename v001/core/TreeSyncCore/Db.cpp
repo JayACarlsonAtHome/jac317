@@ -1,7 +1,8 @@
-// SQLite access: the bundled SQLite (plugin/sqlite3), raw C API, WAL mode.
+// SQLite access: the system SQLite plugin/sqlite3 links (U++ no longer bundles one), raw C
+// API, WAL mode.
 #include "TreeSyncCore.h"
 
-#include <plugin/sqlite3/lib/sqlite3mc_amalgamation.h>
+#include <sqlite3.h>
 
 static const char *SCHEMA = R"(
 PRAGMA journal_mode = WAL;

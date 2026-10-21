@@ -6,8 +6,9 @@
 #   find_upp      "UMK UPPSRC": umk and its uppsrc, as a pair from one U++ install
 #   find_std_cc   COMPILER: the std module source (bits/std.cc) of the libstdc++ it uses
 #
-# UPP_DIR (a U++ folder holding umk and uppsrc) is tried before the usual places;
-# with UPP_ONLY=1 it is the only place (to test a fresh install next to an old one).
+# UPP_DIR (a U++ folder holding umk and uppsrc) is tried before the usual places, then
+# ~/upp_basefix (upp_basefix.sh install: U++ pinned to a GitHub commit plus fixes); with
+# UPP_ONLY=1 UPP_DIR is the only place (to test a fresh install next to an old one).
 #
 #   owner_home           as root: the home of the user TreeSync belongs to
 #   give_back DIR        as root: DIR's files back to that user
@@ -61,12 +62,16 @@ find_upp() {
   for g in /run/media/jay/GFS /media/jay/GFS /mnt/GFS; do
     [ -d "$g/upp/uppsrc" ] && { GFS="$g"; break; }
   done
-  for u in ${UPP_DIR:+"$UPP_DIR/umk"} ${GFS:+"$GFS/upp-bin/rhel/umk"} "$HOME/u++/umk" ${home:+"$home/u++/umk"} \
-           ${GFS:+"$GFS/upp-bin/mint/umk"}; do
-    [ -x "$u" ] && runs_here "$u" || continue
-    for s in ${UPP_DIR:+"$UPP_DIR/uppsrc"} ${GFS:+"$GFS/upp/uppsrc"} "$HOME/u++/uppsrc" ${home:+"$home/u++/uppsrc"}; do
-      [ -d "$s/Core" ] && { echo "$u $s"; return; }
-    done
+  # umk and uppsrc as a pair from one install (a umk with another install's uppsrc can
+  # build against the wrong library), in preference order
+  local pair
+  for pair in ${UPP_DIR:+"$UPP_DIR/umk:$UPP_DIR/uppsrc"} \
+              "$HOME/upp_basefix/umk:$HOME/upp_basefix/uppsrc" ${home:+"$home/upp_basefix/umk:$home/upp_basefix/uppsrc"} \
+              ${GFS:+"$GFS/upp-bin/rhel/umk:$GFS/upp/uppsrc"} \
+              "$HOME/u++/umk:$HOME/u++/uppsrc" ${home:+"$home/u++/umk:$home/u++/uppsrc"} \
+              ${GFS:+"$GFS/upp-bin/mint/umk:$GFS/upp/uppsrc"}; do
+    u=${pair%%:*}; s=${pair#*:}
+    [ -x "$u" ] && runs_here "$u" && [ -d "$s/Core" ] && { echo "$u $s"; return; }
   done
 }
 
