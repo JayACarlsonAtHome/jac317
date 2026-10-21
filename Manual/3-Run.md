@@ -125,7 +125,10 @@ with everything checked. If nothing is checked, Run refuses to start.
 **Setup** (in the menu bar) has three tabs.
 
 **Source tree / Target tree**: the path, and for a remote machine the **Remote** box
-with **Host**, **Port**, **User** and **Key file** (see 3.10).
+with **Host**, **Port**, **User** and **Key file** (see 3.10). **Test** logs in with
+them and lists the path, and says what went wrong if it cannot. For a remote tree,
+**...** next to the path opens the remote machine's folders (from `/`): select the tree
+root and press OK.
 
 **Flags**:
 
@@ -314,7 +317,8 @@ ssh jay@server                   # once, to check and accept the host key
 
 TreeSync logs in with keys only, never passwords. In the GUI: **Setup >
 Target tree**, tick **Remote**, and fill in Host, Port, User (and Key file if not the
-usual one). On the command line: `--target-host=server --target-user=jay`.
+usual one); **Test** checks the login and the path, and **...** picks the path from the
+server's folders. On the command line: `--target-host=server --target-user=jay`.
 
 If the network drops, the run waits (default up to 30 minutes, *Wait for the
 network*), shows **NETWORK UNAVAILABLE**, and carries on when the machine is back.

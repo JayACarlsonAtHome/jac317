@@ -7,6 +7,7 @@
 // syncs; building is TreeSyncBuild's, installing TreeSyncInstall's.
 #include <TreeSyncUi/TreeSyncUi.h>
 
+#include <atomic>
 #include <mutex>
 #include <thread>
 #include <sys/types.h>
@@ -39,6 +40,9 @@ class PathPicker : public ParentCtrl {
 
 public:
 	Event<> WhenPath;   // path changed by mount choice, browse, or Enter
+	// "..." on a remote tree: pick a folder there (the path in, the chosen path out);
+	// unset, "..." is off for a remote tree
+	Gate<String&> WhenRemoteBrowse;
 
 	PathPicker();
 	void   LoadDisks();
@@ -48,6 +52,9 @@ public:
 
 	static constexpr int Height = 67;   // three rows, in Zy units
 };
+
+// PathPicker.cpp: a folder on a remote machine, picked in its tree over SFTP (from "/").
+bool PickRemoteFolder(TreeEndpoint e, const String& known_hosts, String& path);
 
 // Second screen: tree parameters and remote login for both sides, plus flags.
 class SetupDlg : public TopWindow {
@@ -59,8 +66,11 @@ class SetupDlg : public TopWindow {
 		EditInt    port;
 		EditString user;
 		EditString key_file;
+		Button     test;          // log in and list the path, with what is entered
+		String     known_hosts;   // the setup's, for browsing and testing a remote tree
 
 		EndpointPane();
+		void Test();
 		void Sync();
 		void Set(const TreeEndpoint& e);
 		TreeEndpoint Get() const;

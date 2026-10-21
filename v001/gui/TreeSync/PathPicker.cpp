@@ -78,8 +78,50 @@ void PathPicker::PickMount()
 	WhenPath();
 }
 
+// A remote machine's folders, listed over SFTP the way the main window's trees list
+// them (same login and known_hosts check): pick one. Starts at "/".
+bool PickRemoteFolder(TreeEndpoint e, const String& known_hosts, String& path)
+{
+	if(e.host.IsEmpty()) {
+		PromptOK("Enter the remote machine's host first.");
+		return false;
+	}
+	TopWindow dlg;
+	DirTree   tree;
+	Label     hint;
+	Button    ok, cancel;
+	dlg.Title("Remote folder: " + Nvl(e.user, GetUserName()) + "@" + e.host).Sizeable();
+	dlg.SetRect(0, 0, Zx(520), Zy(440));
+	dlg.Add(tree.HSizePosZ(8, 8).VSizePosZ(8, 44));
+	dlg.Add(hint.SetLabel("Open the folders, select the tree root, then OK.").LeftPosZ(8, 300).BottomPosZ(12, 19));
+	dlg.Add(ok.SetLabel("OK").RightPosZ(100, 84).BottomPosZ(8, 26));
+	dlg.Add(cancel.SetLabel("Cancel").RightPosZ(8, 84).BottomPosZ(8, 26));
+	ok.Ok() << dlg.Acceptor(IDOK);
+	cancel.Cancel() << dlg.Rejector(IDCANCEL);
+	e.path = "/";
+	tree.Load("Folders", e, false, known_hosts);
+	if(dlg.Execute() != IDOK)
+		return false;
+	String rel;
+	bool folder = false;
+	if(!tree.Selected(rel, folder))
+		return false;
+	if(!folder)   // a file: its folder
+		rel = GetFileFolder(rel);
+	path = "/" + rel;
+	return true;
+}
+
 void PathPicker::Browse()
 {
+	if(remote) {
+		String p = ~path;
+		if(WhenRemoteBrowse && WhenRemoteBrowse(p)) {
+			Set(p);
+			WhenPath();
+		}
+		return;
+	}
 	FileSel fs;
 	String start = ~path;
 	std::error_code ec;
@@ -154,5 +196,5 @@ void PathPicker::Remote(bool r)
 	remote = r;
 	disk.Enable(!r);
 	mount.Enable(!r);
-	browse.Enable(!r);
+	browse.Enable(!r || WhenRemoteBrowse);
 }
