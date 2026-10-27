@@ -1,7 +1,9 @@
 // TreeSync contracts shim, same model as jac313 Setup/contracts.hpp.
 // TS_PRE / TS_POST / TS_ASSERT have one call-site spelling and pick a mode:
-//   (A) NATIVE   : __cpp_contracts defined -> contract_assert(expr).
-//   (B) RUNTIME  : no native contracts (gcc 15, clang 21 today) -> check + abort.
+//   (A) NATIVE   : __cpp_contracts defined (gcc 16) -> contract_assert(expr); a
+//                  violation goes to our handle_contract_violation (Contracts.cpp).
+//   (B) RUNTIME  : no native contracts (gcc 15, clang 22 today) -> check + abort.
+// Both print the same "TreeSync contract ... violated" line (report below).
 //   (C) DISABLED : TS_CONTRACTS_ENABLED == 0 -> zero-cost no-ops.
 // Native pre()/post() belong on the function declarator, which a macro cannot
 // reach, so TS_PRE/TS_POST are point checks placed in the function body.
@@ -14,13 +16,19 @@
 
 namespace treesync::contracts {
 
-[[noreturn]] inline void
-violation(const char* kind, const char* expr,
-          const std::source_location loc = std::source_location::current())
+inline void
+report(const char* kind, const char* expr, const std::source_location& loc)
 {
 	std::fprintf(stderr, "TreeSync contract %s violated: (%s) at %s:%u in %s\n",
 	             kind, expr, loc.file_name(),
 	             static_cast<unsigned>(loc.line()), loc.function_name());
+}
+
+[[noreturn]] inline void
+violation(const char* kind, const char* expr,
+          const std::source_location loc = std::source_location::current())
+{
+	report(kind, expr, loc);
 	std::abort();
 }
 

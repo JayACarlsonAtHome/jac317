@@ -8,6 +8,7 @@ uses
 file
 	TreeSyncCore.h,
 	Contracts.h,
+	Contracts.cpp,
 	Options.cpp,
 	FsPath.cpp,
 	Disks.cpp,
