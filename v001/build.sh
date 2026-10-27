@@ -59,9 +59,16 @@ case "$COMPILER" in
 esac
 [ -n "$CXX" ] || { echo "no $COMPILER new enough (gcc 15+ / clang 21+); run ./bootstrap.sh" >&2; exit 1; }
 mkdir -p "$HERE/out/bm"
+# gcc 16+ has native contracts under -std=c++26 (Contracts.h then uses contract_assert),
+# but links the default violation handler (libstdc++exp) only with -fcontracts on the
+# link line; without it: undefined reference to handle_contract_violation. Not for
+# gcc 15: there -fcontracts means the old experimental contracts.
+LINK_EXTRA=""
+[ "$COMPILER" = gcc ] && [ "$(major_of "$CXX")" -ge 16 ] && LINK_EXTRA="-fcontracts"
 local_bm() {   # local_bm SOURCE.bm -> out/bm/SOURCE.bm with COMPILER = the one found
   local out="$HERE/out/bm/$(basename "$1")"
-  sed "s|^COMPILER = .*|COMPILER = \"$CXX\";|" "$1" > "$out"
+  sed -e "s|^COMPILER = .*|COMPILER = \"$CXX\";|" \
+      -e "s|^COMMON_LINK = \"\(.*\)\";|COMMON_LINK = \"\1 $LINK_EXTRA\";|" "$1" > "$out"
   echo "$out"
 }
 BM=$(local_bm "$SRC_BM")
@@ -92,7 +99,7 @@ sanitizer_bm() {   # sanitizer_bm NAME FLAGS -> out/bm/NAME.bm: this compiler's 
   local out="$HERE/out/bm/$1.bm"
   sed -e "s|^COMPILER = .*|COMPILER = \"$CXX\";|" \
       -e "s|^COMMON_OPTIONS = \"\(.*\)\";|COMMON_OPTIONS = \"\1 $2 -fno-omit-frame-pointer\";|" \
-      -e "s|^COMMON_LINK = \"\(.*\)\";|COMMON_LINK = \"\1 $2\";|" "$SRC_BM" > "$out"
+      -e "s|^COMMON_LINK = \"\(.*\)\";|COMMON_LINK = \"\1 $2 $LINK_EXTRA\";|" "$SRC_BM" > "$out"
   echo "$out"
 }
 if [ -n "$CHECK" ]; then
