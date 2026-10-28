@@ -39,8 +39,8 @@ Chrome or Chromium, and pdfunite).
 For someone who has done this before. Each step is explained in the parts above.
 
 ```bash
-# 1. Get the code (the branch in use is dev-work)
-git clone ssh://git@192.168.1.26:2222/jay/jac317.git
+# 1. Get the code (dev-work, the default branch)
+git clone https://github.com/JayACarlsonAtHome/jac317.git
 cd jac317/v001
 
 # 2. Check the machine, install what is missing (it asks first), build and test

@@ -202,7 +202,7 @@ BuildWindow::BuildWindow()
 
 	// Screen 1: options
 	s1p.body.Add(compiler_box.SetLabel("Compiler").HSizePosZ(8, 8).TopPosZ(8, 52));
-	compiler.Add("gcc", "gcc 15 (gcc-toolset-15)").Add("clang", "clang 21").Add("both", "both, one after the other");
+	compiler.Add("gcc", "GCC").Add("clang", "Clang").Add("both", "both, one after the other");
 	s1p.body.Add(compiler.HSizePosZ(20, 20).TopPosZ(28, 22));
 
 	s1p.body.Add(build_box.SetLabel("Build").HSizePosZ(8, 8).TopPosZ(66, 246));

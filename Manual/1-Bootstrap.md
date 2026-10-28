@@ -17,11 +17,13 @@ alone.
 ## 1.2 Get the code
 
 ```bash
-git clone ssh://git@192.168.1.26:2222/jay/jac317.git
-cd jac317
-git checkout dev-work      # the branch in use
-cd v001
+git clone https://github.com/JayACarlsonAtHome/jac317.git
+cd jac317/v001             # on dev-work, the default branch
 ```
+
+`dev-work` is where the work happens: it is tested on every push, but it is the newest
+code, not a release. With an SSH key on GitHub, `git@github.com:JayACarlsonAtHome/jac317.git`
+works too.
 
 Everything below runs from `jac317/v001`.
 
