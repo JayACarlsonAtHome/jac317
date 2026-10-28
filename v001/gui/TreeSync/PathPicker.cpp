@@ -176,13 +176,12 @@ String PathPicker::Get() const
 	return ~path;
 }
 
-// A remote tree has no local disks; only the path field stays editable.
 // A remote tree has no local disks: the boxes say so, and only the path field stays.
 void PathPicker::Remote(bool r)
 {
 	if(r && !remote) {
 		disk.ClearList();
-		disk.Add(Null, "Remote machine (host and user: Setup)");
+		disk.Add(Null, "Remote machine (the login is below)");
 		disk.SetIndex(0);
 		mount.ClearList();
 		mount.Add(Null, "(remote)");

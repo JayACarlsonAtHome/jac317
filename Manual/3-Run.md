@@ -36,11 +36,12 @@ see the table; saved on every change).
 
 ```
 +-------------------------------------------------------------------------------+
-| File  View  Sync                     Elapsed 0:12  Total ~0:16  Done 03:34    |
+| Options  View  Sync                  Elapsed 0:12  Total ~0:16  Done 03:34    |
 +--------------------------------------+----------------------------------------+
 | Disk  [ nvme0n1 ...          v]      | Disk  [ sdb ...                 v]     |
 | Mount [ /home/jay            v]      | Mount [ /run/media/jay/Backup   v]     |
 | Path  [ /home/jay/Photos ] [...]     | Path  [ .../Backup/Photos ] [...]      |
+| [ ] Remote machine                   | [ ] Remote machine                     |
 | [-] [x] Source: /home/jay/Photos     | [-] Target: .../Backup/Photos          |
 |     [+] [x] 2024                     |     [+] 2024                           |
 |     [+] [-] 2025                     |                                        |
@@ -60,8 +61,9 @@ see the table; saved on every change).
 
 - **Left: the source**, **right: the target**. Each side has a **Disk** and
     **Mount** list to jump to a drive, a **Path** box (type a path and press Enter, or
-    **...** to browse), and the tree below it. TreeSyncRoot lists every disk;
-    TreeSyncHome lists only your home (the title bar says which window this is).
+    **...** to browse), **Remote machine** for a tree on another machine (3.10), and
+    the tree below it. TreeSyncRoot lists every disk; TreeSyncHome lists only your home
+    (the title bar says which window this is).
 - **Trees**: click [+] to open a folder, or use the + and - keys. **View > Reload
     trees** reads them again, **View > Collapse all** closes them.
 - **Right-click** a file or folder in either tree to change it by hand. The window
@@ -120,17 +122,11 @@ are created on the target only where something checked goes, and **Mirror never
 deletes anything outside the checked paths**. Changing the source folder starts again
 with everything checked. If nothing is checked, Run refuses to start.
 
-## 3.4 Setup: mode and options
+## 3.4 Options: mode and switches
 
-**Setup** (in the menu bar) has three tabs.
-
-**Source tree / Target tree**: the path, and for a remote machine the **Remote** box
-with **Host**, **Port**, **User** and **Key file** (see 3.10). **Test** logs in with
-them and lists the path, and says what went wrong if it cannot. For a remote tree,
-**...** next to the path opens the remote machine's folders (from `/`): select the tree
-root and press OK.
-
-**Flags**:
+**Options** (in the menu bar) opens the sync's mode and switches. **OK** keeps the
+changes, **Cancel** throws them away. The trees and their remote logins are not here:
+they are on the main window (3.2, 3.10).
 
 - **Mode**:
     - **Copy**: new and changed files go from source to target; nothing on the target
@@ -315,10 +311,28 @@ ssh-copy-id jay@server           # passwordless login
 ssh jay@server                   # once, to check and accept the host key
 ```
 
-TreeSync logs in with keys only, never passwords. In the GUI: **Setup >
-Target tree**, tick **Remote**, and fill in Host, Port, User (and Key file if not the
-usual one); **Test** checks the login and the path, and **...** picks the path from the
-server's folders. On the command line: `--target-host=server --target-user=jay`.
+TreeSync logs in with keys only, never passwords. In the GUI, on the side that is
+remote (usually the target), tick **Remote machine** under Path. A login row opens:
+
+```
+[x] Remote machine
+Host [ server              ]  Port [22]  User [ jay  ]
+Key  [                     ]          [Test]  [Done]
+```
+
+Fill in Host, Port and User (and Key, if not the usual one), and the Path above it
+(**...** picks it from the server's folders, starting at `/`). **Test** logs in, lists
+the path and, when that works, uses the login and folds the row into one line:
+
+```
+[x] Remote machine   jay@server:22   (test passed: 12 entries)   [Show / Test]
+```
+
+If the test fails it says why and leaves the row open. **Done** uses the login without
+a test. **Show / Test** opens the row again, to see it, change it or test it again.
+Unticking **Remote machine** makes the tree local again at once. Until a login is used
+(Test or Done), the tree and the runs keep the one they had.
+On the command line: `--target-host=server --target-user=jay`.
 
 If the network drops, the run waits (default up to 30 minutes, *Wait for the
 network*), shows **NETWORK UNAVAILABLE**, and carries on when the machine is back.

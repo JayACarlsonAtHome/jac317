@@ -56,26 +56,9 @@ public:
 // PathPicker.cpp: a folder on a remote machine, picked in its tree over SFTP (from "/").
 bool PickRemoteFolder(TreeEndpoint e, const String& known_hosts, String& path);
 
-// Second screen: tree parameters and remote login for both sides, plus flags.
+// The Options dialog: mode and sync switches (the trees and their remote logins are on
+// the main window, TreePanel).
 class SetupDlg : public TopWindow {
-	struct EndpointPane : ParentCtrl {
-		Label      lbl_host, lbl_port, lbl_user, lbl_key, lbl_keys;
-		PathPicker path;
-		Option     remote;
-		EditString host;
-		EditInt    port;
-		EditString user;
-		EditString key_file;
-		Button     test;          // log in and list the path, with what is entered
-		String     known_hosts;   // the setup's, for browsing and testing a remote tree
-
-		EndpointPane();
-		void Test();
-		void Sync();
-		void Set(const TreeEndpoint& e);
-		TreeEndpoint Get() const;
-	};
-
 	struct FlagsPane : ParentCtrl {
 		Label        lbl_mode, lbl_owners, lbl_if, lbl_id, lbl_xf, lbl_xd, preview;
 		Switch       mode;
@@ -96,17 +79,15 @@ class SetupDlg : public TopWindow {
 		SyncFlags Get() const;
 	};
 
-	TabCtrl      tabs;
-	EndpointPane source, target;
 	FlagsPane    flags;
 	Button       ok, cancel;
 
 public:
 	bool Key(dword key, int count) override;   // F1: the manual's Run chapter
 	SetupDlg();
-	void      Set(const SyncSetup& s);
-	SyncSetup Get() const;
-	void      Screenshots(const String& dir);   // --screenshot: each tab as a PNG
+	void      Set(const SyncFlags& f);
+	SyncFlags Get() const;
+	void      Screenshots(const String& dir);   // --screenshot: the options as PNGs
 };
 
 // The command line shown in the GUI leaves out --dry-run / --no-dry-run: in the
@@ -182,9 +163,22 @@ public:
 	bool Key(dword key, int count) override;
 };
 
-// One side of the main window: path picker above its tree.
+// One side of the main window: path picker, the remote machine, then its tree.
+// Remote: tick it and the login row opens; fill it in, then Test (or Done) applies it and
+// folds the row into one summary line; "Show / Test" opens it again. Unticking applies
+// at once. Until applied, the tree and the runs keep the login they had.
 struct TreePanel : ParentCtrl {
 	PathPicker        picker;
+	Option            remote;
+	Label             remote_summary;   // folded: who and where
+	Button            remote_show;      // folded: open the login row again
+	Label             lbl_host, lbl_port, lbl_user, lbl_key;
+	EditString        host, user, key_file;
+	EditInt           port;
+	Button            test, done;
+	bool              open = false;     // the login row is shown
+	String            known_hosts;      // the setup's: for Test and for browsing a remote tree
+	Event<>           WhenLogin;        // the remote login was applied: GetLogin has the new one
 	DirTree           tree;
 	ProgressIndicator used;       // how full the tree's disk is
 	Label             free;
@@ -193,7 +187,16 @@ struct TreePanel : ParentCtrl {
 	// exact: just asked; else worked out during a run from what was written since.
 	void ShowFree(int64 free_bytes, int64 total, bool exact);
 	void NoFree(const String& why);
+	void SetLogin(const TreeEndpoint& e, const String& known_hosts);   // folded when complete
+	void GetLogin(TreeEndpoint& e) const;   // remote, host, port, user, key file (not the path)
 	TreePanel();
+
+private:
+	void Arrange();     // the rows for the remote state, and the tree below them
+	void Test();        // log in and list the path; a pass applies and folds the row
+	void Done();        // apply and fold, without a test
+	void Summary();
+	TreeEndpoint Entered() const;   // the path and the login as entered (maybe not applied)
 };
 
 class TreeSyncWindow : public TopWindow {
@@ -289,13 +292,14 @@ class TreeSyncWindow : public TopWindow {
 	void ShowAbout();
 	void ViewMenu(Bar& bar);
 	void SyncMenu(Bar& bar);
-	void EditSetup();
+	void EditOptions();
 	void LoadTrees();
 
 public:
 	void SetSetup(const SyncSetup& s);
 	void DemoProgress();   // --screenshot: the progress boxes with sample values
 	void DemoScanProgress();
+	void DemoRemote(bool open);   // --screenshot: a remote target, its login row folded or open
 	double BenchLog(int n);   // --bench-log: seconds to take in n lines of child output
 	void Close() override;
 

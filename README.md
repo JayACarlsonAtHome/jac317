@@ -88,7 +88,7 @@ Output goes to `v001/out/<compiler>/`: `treesync-root`, `treesync-home`, `treesy
 
 **Comparing compilers**: tick *Compare the compilers* (and *Clean build* for fair build times) and the Results screen shows gcc next to clang, rows that differ marked: build time, test results, program sizes, versions, the C++26 feature macros, benchmarks of TreeSync's own hot paths (SHA-256, progress lines, path sorting; `treesync-cli --bench`), and `import std;`, whether it works and how its compile time compares with `#include` on `v001/probe/import_std.cpp`. The facts come from `./compare.sh --compiler gcc|clang`. Both compilers here can `import std;`; see [`v001/docs/findings/import_std_gcc15_clang21.md`](v001/docs/findings/import_std_gcc15_clang21.md). Benchmarks of a Debug build measure unoptimized code; choose Release to compare what the optimizers make of it.
 
-`treesync-home --screenshot=DIR` (a developer aid; also `treesync-build` and `treesync-install`) draws the main window and each Setup tab into PNG files without showing anything, so the layout can be checked without a screen.
+`treesync-home --screenshot=DIR` (a developer aid; also `treesync-build` and `treesync-install`) draws the main window (also with a remote target, its login row folded and open) and the Options dialog into PNG files without showing anything, so the layout can be checked without a screen.
 
 The tests build a scratch tree under `$TMPDIR` with awkward names and a folder chain deeper than `PATH_MAX`. They also check option round trips (including shell quoting through a real `sh`), the home-only limit, and the progress-line layout. The scratch tree is removed afterwards.
 
@@ -117,7 +117,7 @@ The point of the GUI is to see what is going on. So the engine reports each step
 - **Right-click changes**: New folder, Rename, Delete (to the `.old` folder) and Delete for good, on either tree. They run like a sync (as root in TreeSyncRoot, over SFTP for a remote tree) and are logged. On the command line: `--edit=mkdir|rename|delete|delete-for-good --edit-side=source|target --edit-path=... [--edit-name=...]`.
 - **The check at the end**: after a run that copied files, the log and the GUI's popup show the numbers that prove the copies are the source. They give the bytes on both sides to the byte, and the SHA-256 of each copy (read back from the target) next to the source's. Then come the 10 biggest files in full, with size, both hashes, time to the nanosecond, mode and owner. A number that differs on purpose says why: a resumed run copies only what the stopped run had not, and runs of zeros are kept as holes, so `du` shows less than `ls -l`.
 - **Settings are kept**: the GUI saves its setup (trees, logins, mode, switches) to `~/.config/treesync/settings` on every change, written to a new file and renamed into place so a crash never leaves half a file, and loads it at the next start. The file holds the same options `treesync-cli` takes, one per line. Options given on the command line win and become the saved settings. `--dry-run` and `--fresh` are one-shot and not kept.
-- **Help**: in Setup > Flags, clicking an option shows a plain explanation of what it does underneath (hovering shows its command-line name).
+- **Help**: in Options, clicking an option shows a plain explanation of what it does underneath (hovering shows its command-line name).
 - **GUI**: Sync > Run (F9) syncs for real, after a confirmation that says what will change; Sync > Dry run (Shift+F9) only shows the list of changes. (The `--dry-run` switch is for `treesync-cli`; in the GUI the menu decides.) The GUI starts `treesync-cli` and shows its output in a log pane under the trees; Sync > Stop (Esc) stops it after the current file or chunk, and the trees reload when it ends. Warnings appear in a dialog and are also printed to the terminal.
 
 **Restarts**: every step is recorded in the SQLite database before the next one starts, so a stopped or crashed run continues where it left off: run the same command again. Big files are copied in chunks, each chunk recorded as it finishes, so a restart continues part-way through the file instead of from the start (for example "resuming big one.bin at chunk 7 of 19"). `--fresh` starts over instead. Inode numbers identify unchanged files, so they are not read again. Details are in [`v001/docs/engine.md`](v001/docs/engine.md).
@@ -145,7 +145,7 @@ treesync-root-gcc --source=/data --target=/mnt/backup --mirror --threads=8 --no-
 treesync-home-gcc --source="$HOME/my dir" --target=/backup --target-host=nas --target-user=jay --merge
 ```
 
-Defaults depend on the mode. `--copy` also turns on `--skip-older`, so a newer file on the target is never overwritten by an older one; `--mirror` makes an exact copy, so the source always wins; `--merge` decides by what changed since the last sync, so the time switches do not apply to it. In the GUI, Setup > Flags > Reset to defaults has one button per mode, and options a mode ignores are greyed out.
+Defaults depend on the mode. `--copy` also turns on `--skip-older`, so a newer file on the target is never overwritten by an older one; `--mirror` makes an exact copy, so the source always wins; `--merge` decides by what changed since the last sync, so the time switches do not apply to it. In the GUI, Options > Reset to defaults has one button per mode, and options a mode ignores are greyed out.
 
 The switches are modelled on robocopy. TreeSync adds `--merge`, which copies changes both ways and reports a conflict when the same file changed on both sides.
 
@@ -191,7 +191,7 @@ The switches are modelled on robocopy. TreeSync adds `--merge`, which copies cha
 | `--SIDE=PATH` | Tree root; SIDE is `source` or `target` | |
 | `--SIDE-host`, `-user`, `-port`, `-key` | Remote login for that side | |
 
-**Include and exclude** (the four boxes on the Flags tab): a blank list filters nothing, and every list that is filled in narrows what is synced. Patterns are file or folder names with `*` and `?`, separated by `;`. Exclude wins over include. With an include list, folders are made on the target only where something included goes (an included folder itself is always made), and Mirror deletes only what the lists would include: everything else on the target, also inside extra folders, is left alone.
+**Include and exclude** (the four boxes in Options): a blank list filters nothing, and every list that is filled in narrows what is synced. Patterns are file or folder names with `*` and `?`, separated by `;`. Exclude wins over include. With an include list, folders are made on the target only where something included goes (an included folder itself is always made), and Mirror deletes only what the lists would include: everything else on the target, also inside extra folders, is left alone.
 
 There is no password login: remote sides use SSH keys only, so passwordless SSH must be set up beforehand (`ssh-copy-id user@host`, then check that `ssh user@host` does not ask for a password).
 

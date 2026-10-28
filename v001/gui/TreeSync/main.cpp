@@ -1,5 +1,5 @@
 // The sync window shared by TreeSyncRoot and TreeSyncHome: source and target trees
-// side by side, each with a disk / mount / path picker, the setup screen, the runs.
+// side by side, each with a disk / mount / path picker and its remote login, the options, the runs.
 #include "TreeSync.h"
 
 #include <sys/statvfs.h>
@@ -31,10 +31,171 @@ static String AppSettingsPath()
 TreePanel::TreePanel()
 {
 	Add(picker.HSizePosZ(4, 4).TopPosZ(4, PathPicker::Height));
-	Add(tree.HSizePosZ(0, 0).VSizePosZ(PathPicker::Height + 8, 24));
+	const char *keys = "Keys only, no passwords: set up passwordless SSH first (ssh-copy-id user@host).";
+	Add(remote.SetLabel("Remote machine"));
+	remote.Tip("This tree is on another machine, reached over SSH (SFTP)");
+	Add(remote_summary);
+	Add(remote_show.SetLabel("Show / Test"));
+	remote_show.Tip("Open the remote login again: see it, change it, test it");
+	Add(lbl_host.SetLabel("Host"));
+	Add(host);
+	host.Tip(keys);
+	Add(lbl_port.SetLabel("Port"));
+	Add(port);
+	port.MinMax(1, 65535);
+	Add(lbl_user.SetLabel("User"));
+	Add(user);
+	user.Tip("Empty: " + GetUserName());
+	Add(lbl_key.SetLabel("Key"));
+	Add(key_file);
+	key_file.Tip("Optional. Empty: ssh-agent, then ~/.ssh/id_ed25519, id_ecdsa, id_rsa");
+	Add(test.SetLabel("Test"));
+	test.Tip(String("Log in with what is entered and list the path; when it works, the login is used "
+	                "and this row folds away. ") + keys);
+	Add(done.SetLabel("Done"));
+	done.Tip("Use this login without testing it, and fold this row away");
+	Add(tree);
 	Add(used.LeftPosZ(4, 120).BottomPosZ(5, 14));
 	Add(free.HSizePosZ(132, 4).BottomPosZ(2, 20));
 	used.Set(0, 1000);
+
+	remote << [this] {
+		open = remote;   // ticked: fill in the login; unticked: local again, at once
+		Arrange();
+		if(open)
+			host.SetFocus();
+		else
+			WhenLogin();
+	};
+	remote_show << [this] { open = true; Arrange(); };
+	test << [this] { Test(); };
+	done << [this] { Done(); };
+	picker.WhenRemoteBrowse = [this](String& p) { return PickRemoteFolder(Entered(), known_hosts, p); };
+	port <<= 22;
+	Arrange();
+}
+
+void TreePanel::Arrange()
+{
+	bool r = remote, rows = r && open, folded = r && !open;
+	int y = 4 + PathPicker::Height + 5;
+	remote.LeftPosZ(4, 130).TopPosZ(y, 19);
+	remote_summary.HSizePosZ(140, 104).TopPosZ(y, 19).Show(folded);
+	remote_show.RightPosZ(4, 96).TopPosZ(y, 19).Show(folded);
+	y += 24;
+	// Host ......... Port [  ] User [      ]
+	// Key  ................... [Test] [Done]
+	lbl_host.LeftPosZ(4, 40).TopPosZ(y, 19);
+	host.HSizePosZ(46, 232).TopPosZ(y, 19);
+	lbl_port.RightPosZ(190, 36).TopPosZ(y, 19);
+	port.RightPosZ(140, 48).TopPosZ(y, 19);
+	lbl_user.RightPosZ(104, 34).TopPosZ(y, 19);
+	user.RightPosZ(4, 98).TopPosZ(y, 19);
+	lbl_key.LeftPosZ(4, 40).TopPosZ(y + 24, 19);
+	key_file.HSizePosZ(46, 140).TopPosZ(y + 24, 19);
+	test.RightPosZ(72, 64).TopPosZ(y + 24, 19);
+	done.RightPosZ(4, 64).TopPosZ(y + 24, 19);
+	for(Ctrl *c : { (Ctrl *)&lbl_host, (Ctrl *)&host, (Ctrl *)&lbl_port, (Ctrl *)&port, (Ctrl *)&lbl_user,
+	                (Ctrl *)&user, (Ctrl *)&lbl_key, (Ctrl *)&key_file, (Ctrl *)&test, (Ctrl *)&done })
+		c->Show(rows);
+	if(rows)
+		y += 48;
+	tree.HSizePosZ(0, 0).VSizePosZ(y + 2, 24);
+	picker.Remote(r);
+}
+
+void TreePanel::Summary()
+{
+	String key = TrimBoth(~key_file);
+	remote_summary = Nvl(String(~user), GetUserName()) + "@" + String(~host) + ":" + AsString(Nvl((int)~port, 22)) +
+	                 (key.GetCount() ? "   key " + key : String());
+	remote_summary.Tip(remote_summary.GetText());
+}
+
+TreeEndpoint TreePanel::Entered() const
+{
+	TreeEndpoint e;
+	e.path = picker.Get();
+	GetLogin(e);
+	return e;
+}
+
+void TreePanel::GetLogin(TreeEndpoint& e) const
+{
+	e.remote = remote;
+	e.host = TrimBoth(~host);
+	e.port = Nvl((int)~port, 22);
+	e.user = TrimBoth(~user);
+	e.key_file = TrimBoth(~key_file);
+}
+
+void TreePanel::SetLogin(const TreeEndpoint& e, const String& known)
+{
+	known_hosts = known;
+	remote <<= e.remote;
+	host <<= e.host;
+	port <<= e.port;
+	user <<= e.user;
+	key_file <<= e.key_file;
+	open = e.remote && e.host.IsEmpty();   // a login not filled in yet stays open
+	Summary();
+	Arrange();
+}
+
+void TreePanel::Done()
+{
+	if(TrimBoth(~host).IsEmpty()) {
+		PromptOK("Enter the remote machine's host first, or untick [* Remote machine].");
+		return;
+	}
+	open = false;
+	Summary();
+	Arrange();
+	WhenLogin();
+}
+
+// The login a run will make (SftpFs, the same known_hosts check and key order), then a
+// listing of the path. In a thread, behind a progress box that waits for it. A pass
+// applies the login and folds the row; a failure says why and leaves it open.
+void TreePanel::Test()
+{
+	TreeEndpoint e = Entered();
+	if(IsNull(e.host)) {
+		PromptOK("Enter the remote machine's host first.");
+		return;
+	}
+	String where = Nvl(e.user, GetUserName()) + "@" + e.host + ":" + AsString(e.port);
+	bool   ok = false;
+	String error;
+	int    entries = -1;
+	std::atomic<bool> finished = false;
+	std::thread t([&] {
+		SftpFs fs(e, known_hosts, false);
+		ok = fs.Connect(error);
+		if(ok && !IsNull(e.path)) {
+			Vector<FolderEntry> list;
+			if(fs.List("", list, error))
+				entries = list.GetCount();
+			else
+				ok = false;
+		}
+		finished = true;
+	});
+	{
+		Progress pi("Testing " + where + "...");
+		while(!finished) {
+			pi.Step();
+			Sleep(20);
+		}
+	}
+	t.join();
+	if(!ok) {
+		Exclamation("[* " + DeQtf(where) + "]: the test failed.&&" + DeQtf(error));
+		return;
+	}
+	Done();
+	remote_summary = remote_summary.GetText() + (entries < 0 ? "   (logged in; no path yet)"
+	                 : "   (test passed: " + AsString(entries) + (entries == 1 ? " entry)" : " entries)"));
 }
 
 void TreePanel::ShowFree(int64 free_bytes, int64 total, bool exact)
@@ -118,6 +279,24 @@ TreeSyncWindow::TreeSyncWindow()
 		LoadTrees();
 		ShowStatus();
 	};
+	// A remote login applied on a panel (Test passed, Done, or Remote unticked).
+	for(int side = 0; side < 2; side++) {
+		TreePanel& panel = side == 0 ? source_panel : target_panel;
+		panel.WhenLogin = [this, side, &panel] {
+			TreeEndpoint& e = side == 0 ? setup.source : setup.target;
+			TreeEndpoint was = e;
+			panel.GetLogin(e);
+			if(side == 0 && (e.remote != was.remote || e.host != was.host))
+				setup.flags.include_paths.Clear();   // the checked paths are relative to the source
+			if(!e.remote && !run_as_root && !PathAllowed(e.path)) {   // runs as root: any path
+				RefusePath(e.path);
+				e.path.Clear();
+			}
+			TS_POST(e.port > 0);
+			LoadTrees();
+			ShowStatus();
+		};
+	}
 
 	LoadTrees();
 	status = (run_as_root ? String(IsRoot() ? "Ready" : "Ready: syncs run as root (pkexec)")
@@ -129,7 +308,7 @@ TreeSyncWindow::TreeSyncWindow()
 
 void TreeSyncWindow::MainMenu(Bar& bar)
 {
-	bar.Add("Setup", [this] { EditSetup(); });
+	bar.Add("Options", [this] { EditOptions(); });
 	bar.Sub("View", [this](Bar& bar) { ViewMenu(bar); });
 	bar.Sub("Sync", [this](Bar& bar) { SyncMenu(bar); });
 	bar.Sub("Help", [this](Bar& bar) {
@@ -198,11 +377,9 @@ void TreeSyncWindow::SyncMenu(Bar& bar)
 void TreeSyncWindow::LoadTrees()
 {
 	source_panel.picker.Set(setup.source.path);
-	source_panel.picker.Remote(setup.source.remote);
 	source_panel.tree.SetChecked(setup.flags.include_paths);
 	source_panel.tree.Load("Source", setup.source, setup.flags.follow_links, setup.known_hosts);
 	target_panel.picker.Set(setup.target.path);
-	target_panel.picker.Remote(setup.target.remote);
 	target_panel.tree.Load("Target", setup.target, setup.flags.follow_links, setup.known_hosts);
 	// Free space: a local tree's disk is asked here (its nearest existing folder); a
 	// remote one's comes with a run (the server is asked then), and stays until the
@@ -265,38 +442,41 @@ void TreeSyncWindow::ShowStatus()
 		Log("warning: settings not saved: " + error);
 }
 
-void TreeSyncWindow::EditSetup()
+// Options: the mode and switches. The trees and logins are on the main window.
+void TreeSyncWindow::EditOptions()
 {
 	SetupDlg dlg;
-	dlg.Set(setup);
+	dlg.Set(setup.flags);
 	if(dlg.Execute() != IDOK)
 		return;
-	SyncSetup s = dlg.Get();
-	// What the dialog does not edit stays as it was (it used to be lost here).
-	s.db = setup.db;
-	s.known_hosts = setup.known_hosts;
-	s.safe_delete_dir = setup.safe_delete_dir;
-	bool same_source = s.source.path == setup.source.path && s.source.host == setup.source.host &&
-	                   s.source.remote == setup.source.remote;
-	if(same_source)   // the checked paths are relative to the source
-		s.flags.include_paths = setup.flags.include_paths;
-	for(TreeEndpoint *e : { &s.source, &s.target })
-		if(!e->remote && !run_as_root && !PathAllowed(e->path)) {   // runs as root: any path
-			RefusePath(e->path);
-			e->path.Clear();
-		}
-	setup = s;
-	TS_POST(setup.source.port > 0 && setup.target.port > 0);
+	SyncFlags f = dlg.Get();
+	f.include_paths = setup.flags.include_paths;   // the source tree's checkboxes, not the dialog's
+	setup.flags = f;
 	TS_POST(setup.flags.threads >= 1);
-	LoadTrees();
+	LoadTrees();   // follow-links changes what the trees show
 	ShowStatus();
 }
 
 void TreeSyncWindow::SetSetup(const SyncSetup& s)
 {
 	setup = s;
+	source_panel.SetLogin(setup.source, setup.known_hosts);
+	target_panel.SetLogin(setup.target, setup.known_hosts);
 	LoadTrees();
 	ShowStatus();
+}
+
+// --screenshot: the target as a remote tree, folded and open (only the panel: nothing connects).
+void TreeSyncWindow::DemoRemote(bool open)
+{
+	TreeEndpoint e;
+	e.remote = true;
+	e.host = "backup.example";
+	e.path = "/srv/backup";
+	target_panel.SetLogin(e, setup.known_hosts);
+	target_panel.picker.Set(e.path);
+	if(open)
+		target_panel.remote_show.WhenAction();
 }
 
 // TreeSyncRoot (root_app) syncs as root, through pkexec: for administrators only.
@@ -346,8 +526,12 @@ void TreeSyncMain(bool root_app)
 			SaveScreenshot(w, AppendFileName(shots, "main-running.png"));
 			w.DemoScanProgress();
 			SaveScreenshot(w, AppendFileName(shots, "main-scan.png"));
+			w.DemoRemote(false);
+			SaveScreenshot(w, AppendFileName(shots, "main-remote.png"));
+			w.DemoRemote(true);
+			SaveScreenshot(w, AppendFileName(shots, "main-remote-open.png"));
 			SetupDlg dlg;
-			dlg.Set(setup);
+			dlg.Set(setup.flags);
 			dlg.Screenshots(shots);
 			if(setup.db.GetCount())
 				HistoryScreenshot(setup.db, AppendFileName(shots, "history.png"));

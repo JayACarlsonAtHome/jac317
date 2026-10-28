@@ -1,108 +1,6 @@
-// Setup screen: tree paths, remote login (keys only), and sync switches.
+// The Options dialog: mode and sync switches. The trees and their remote logins are
+// on the main window (TreePanel, main.cpp).
 #include "TreeSync.h"
-
-SetupDlg::EndpointPane::EndpointPane()
-{
-	Add(path.HSizePosZ(8, 8).TopPosZ(8, PathPicker::Height));
-	int y = 8 + PathPicker::Height + 8;
-	auto row = [&](Label& l, const char* text, Ctrl& c, int w) {
-		Add(l.SetLabel(text).LeftPosZ(8, 90).TopPosZ(y, 19));
-		Add(c.LeftPosZ(100, w).TopPosZ(y, 19));
-		y += 26;
-	};
-
-	Add(remote.SetLabel("Remote machine").LeftPosZ(100, 200).TopPosZ(y, 19));
-	y += 26;
-	row(lbl_host, "Host", host, 200);
-	row(lbl_port, "Port", port, 60);
-	row(lbl_user, "User", user, 200);
-	Add(test.SetLabel("Test").LeftPosZ(100 + 300 + 8, 70).TopPosZ(y, 19));
-	test.Tip("Log in with the host, port, user and key above, and list the path");
-	row(lbl_key, "Key file", key_file, 300);
-	key_file.Tip("Optional. Empty: ssh-agent, then ~/.ssh/id_ed25519, id_ecdsa, id_rsa");
-	Add(lbl_keys.SetLabel("Keys only, no passwords: set up passwordless SSH first "
-	                      "(ssh-copy-id user@host).").HSizePosZ(100, 8).TopPosZ(y, 19));
-
-	port.MinMax(1, 65535);
-	remote << [this] { Sync(); };
-	path.WhenRemoteBrowse = [this](String& p) { return PickRemoteFolder(Get(), known_hosts, p); };
-	test << [this] { Test(); };
-	Set(TreeEndpoint());
-}
-
-// The login a run will make (SftpFs, the same known_hosts check and key order), then a
-// listing of the path. In a thread, behind a progress box that waits for it.
-void SetupDlg::EndpointPane::Test()
-{
-	TreeEndpoint e = Get();
-	if(IsNull(e.host)) {
-		PromptOK("Enter the remote machine's host first.");
-		return;
-	}
-	String where = Nvl(e.user, GetUserName()) + "@" + e.host + ":" + AsString(e.port);
-	bool   ok = false;
-	String error;
-	int    entries = -1;
-	std::atomic<bool> done = false;
-	std::thread t([&] {
-		SftpFs fs(e, known_hosts, false);
-		ok = fs.Connect(error);
-		if(ok && !IsNull(e.path)) {
-			Vector<FolderEntry> list;
-			if(fs.List("", list, error))
-				entries = list.GetCount();
-			else
-				ok = false;
-		}
-		done = true;
-	});
-	{
-		Progress pi("Testing " + where + "...");
-		while(!done) {
-			pi.Step();
-			Sleep(20);
-		}
-	}
-	t.join();
-	if(!ok)
-		Exclamation("[* " + DeQtf(where) + "]: the test failed.&&" + DeQtf(error));
-	else if(entries < 0)
-		PromptOK("[* " + DeQtf(where) + "]: logged in. (No path yet: nothing listed.)");
-	else
-		PromptOK("[* " + DeQtf(where) + "]: logged in; " + DeQtf(e.path) + " holds " +
-		         AsString(entries) + (entries == 1 ? " entry." : " entries."));
-}
-
-void SetupDlg::EndpointPane::Sync()
-{
-	bool r = remote;
-	path.Remote(r);
-	for(Ctrl *c : { (Ctrl *)&host, (Ctrl *)&port, (Ctrl *)&user, (Ctrl *)&key_file, (Ctrl *)&test, (Ctrl *)&lbl_keys })
-		c->Enable(r);
-}
-
-void SetupDlg::EndpointPane::Set(const TreeEndpoint& e)
-{
-	path.Set(e.path);
-	remote <<= e.remote;
-	host <<= e.host;
-	port <<= e.port;
-	user <<= e.user;
-	key_file <<= e.key_file;
-	Sync();
-}
-
-TreeEndpoint SetupDlg::EndpointPane::Get() const
-{
-	TreeEndpoint e;
-	e.path = path.Get();
-	e.remote = remote;
-	e.host = ~host;
-	e.port = Nvl((int)~port, 22);
-	e.user = ~user;
-	e.key_file = ~key_file;
-	return e;
-}
 
 // Laid out from the measured width of each label in the dialog's font, so text
 // never runs into the next control; the dialog is sized to fit (SetupDlg).
@@ -297,15 +195,12 @@ SyncFlags SetupDlg::FlagsPane::Get() const
 
 SetupDlg::SetupDlg()
 {
-	Title("TreeSync - Setup");
-	// Big enough for the Flags tab as laid out (tab header and buttons around it).
-	SetRect(0, 0, max(Zx(520), flags.need.cx + Zx(16)), max(Zy(560), flags.need.cy + Zy(80)));
+	Title("TreeSync - Options");
+	// Big enough for the options as laid out (and the buttons below them).
+	SetRect(0, 0, max(Zx(520), flags.need.cx + Zx(8)), max(Zy(540), flags.need.cy + Zy(44)));
 	Sizeable();
 
-	tabs.Add(source.SizePos(), "Source tree");
-	tabs.Add(target.SizePos(), "Target tree");
-	tabs.Add(flags.SizePos(), "Flags");
-	Add(tabs.HSizePosZ(4, 4).VSizePosZ(4, 36));
+	Add(flags.HSizePosZ(0, 0).VSizePosZ(0, 36));
 
 	Add(ok.SetLabel("OK").RightPosZ(92, 80).BottomPosZ(8, 22));
 	Add(cancel.SetLabel("Cancel").RightPosZ(8, 80).BottomPosZ(8, 22));
@@ -317,40 +212,29 @@ SetupDlg::SetupDlg()
 
 void SetupDlg::Screenshots(const String& dir)
 {
-	const char *name[] = { "setup-source", "setup-target", "setup-flags" };
-	for(int i = 0; i < 3; i++) {
-		tabs.Set(i);
-		SaveScreenshot(*this, AppendFileName(dir, String(name[i]) + ".png"));
-	}
-	// The Flags tab again, with the help for symlinks showing.
+	SaveScreenshot(*this, AppendFileName(dir, "options.png"));
+	// Again, with the help for symlinks showing.
 	for(int i = 0; i < BOOL_OPTION_COUNT; i++)
 		if(BOOL_OPTIONS[i].field == &SyncFlags::follow_links)
 			flags.ShowHelp(BOOL_OPTIONS[i].text, BOOL_OPTIONS[i].help);
-	SaveScreenshot(*this, AppendFileName(dir, "setup-flags-help.png"));
+	SaveScreenshot(*this, AppendFileName(dir, "options-help.png"));
 }
 
-void SetupDlg::Set(const SyncSetup& s)
+void SetupDlg::Set(const SyncFlags& f)
 {
-	source.known_hosts = target.known_hosts = s.known_hosts;
-	source.Set(s.source);
-	target.Set(s.target);
-	flags.Set(s.flags);
+	flags.Set(f);
 }
 
 bool SetupDlg::Key(dword key, int count)
 {
 	if(key == K_F1) {
-		OpenManual("3-Run");   // 3.4: Setup, mode and options
+		OpenManual("3-Run");   // 3.4: Options: mode and switches
 		return true;
 	}
 	return TopWindow::Key(key, count);
 }
 
-SyncSetup SetupDlg::Get() const
+SyncFlags SetupDlg::Get() const
 {
-	SyncSetup s;
-	s.source = source.Get();
-	s.target = target.Get();
-	s.flags = flags.Get();
-	return s;
+	return flags.Get();
 }

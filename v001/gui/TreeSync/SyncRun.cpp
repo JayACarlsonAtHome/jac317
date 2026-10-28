@@ -559,6 +559,14 @@ void TreeSyncWindow::StartSync(bool dry_run, const String& extra)
 		return;
 	}
 	bool editing = extra == "--edit";   // a right-click change (Edit.cpp): confirmed already
+	// Remote ticked on a panel but its login not used yet (unticking is used at once): the
+	// setup still has a local tree, and the Path box may hold a path on the other machine.
+	for(int side = 0; side < 2; side++)
+		if((bool)(side == 0 ? source_panel : target_panel).remote != (side == 0 ? setup.source : setup.target).remote) {
+			Exclamation(String(side == 0 ? "The source" : "The target") + " is ticked [* Remote machine], but its login "
+			            "is not used yet: press [* Test] or [* Done] there (or untick it).");
+			return;
+		}
 	if(source_panel.tree.NothingChecked() && extra != "--clear-old" && !editing) {
 		Exclamation("Nothing is checked in the source tree: check what to sync (the top box checks everything).");
 		return;
