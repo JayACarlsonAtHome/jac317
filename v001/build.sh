@@ -3,7 +3,7 @@
 # TreeSync build. Builds with ONE selected compiler, like jac313's --compiler:
 #
 #   ./build.sh --compiler clang            # clang++ 21+, bm/CLANG26.bm (default)
-#   ./build.sh --compiler gcc              # gcc-toolset-15 g++, bm/GCC15.bm
+#   ./build.sh --compiler gcc              # g++ 15+ (RHEL: gcc-toolset-15), bm/GCC15.bm
 #   ./build.sh --compiler gcc --release    # optimized build
 #   ./build.sh --compiler gcc --test       # also build and run the core tests
 #   ./build.sh --compiler clang --tsan     # build and run the tests under ThreadSanitizer

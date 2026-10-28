@@ -72,6 +72,13 @@
 **build.sh: "U++ (umk + uppsrc) not found"**
 : Run `./bootstrap.sh`, or point to an existing U++ with `export UPP_DIR=/path/to/u++`.
 
+**gcc build fails to link: "undefined reference to `handle_contract_violation`"**
+: GCC 16 (Fedora 44) has native C++26 contracts and keeps their default violation
+  handler in `libstdc++exp`, which is linked only with `-fcontracts`. `build.sh` adds it
+  for GCC 16 and newer (not for GCC 15, where `-fcontracts` means something else).
+  An older checkout, or a build method of your own, does not: update TreeSync, or add
+  `-fcontracts` to the build method's link options.
+
 **Building as root fails: "U++ not found", or umk "error while loading shared libraries"**
 : Older scripts looked for U++ in root's home and then picked a U++ built for another
   distribution. Current ones use the U++ of the folder's owner (`~owner/u++`) and skip

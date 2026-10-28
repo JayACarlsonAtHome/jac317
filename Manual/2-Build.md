@@ -27,13 +27,14 @@ side: each sync program comes once per compiler, and you install one or both.
 | `treesync-test` | The core tests (built with `--test`) |
 
 Each compiler has its own folder: `out/gcc/` and `out/clang/`. The two builds are the
-same program; TreeSync is also a proving ground for GCC 15 and Clang 21 with C++26.
+same program; TreeSync is also a proving ground for GCC 15+ and Clang 21+ with C++26
+(RHEL: gcc-toolset-15; Fedora 44: GCC 16 and Clang 22).
 
 ## 2.2 build.sh
 
 ```bash
-./build.sh --compiler gcc                 # debug build with gcc 15
-./build.sh --compiler clang               # debug build with clang 21 (the default compiler)
+./build.sh --compiler gcc                 # debug build with gcc (15 or newer)
+./build.sh --compiler clang               # debug build with clang (21 or newer; the default compiler)
 ./build.sh --compiler gcc --release       # optimized build: use this for real syncs
 ./build.sh --compiler gcc --test          # build, then run the core tests
 ./build.sh --compiler gcc --release --test

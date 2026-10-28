@@ -49,7 +49,7 @@ cd v001
 ```
 
 Like jac313's bootstrap: it detects the Linux family (RHEL, Fedora, Mint/Ubuntu), checks each requirement listed in [`v001/setup/recipes.conf`](v001/setup/recipes.conf) (GCC 15+, Clang 21+, GTK 3 and the libraries U++ GUIs build with, make/git/curl, for tests bc and OpenSSH, and for the checked test runs the ASan + UBSan runtimes and valgrind), shows the install commands for what is missing and runs them after a yes (most need sudo). If there is no U++ it fetches the latest U++ release for POSIX into `~/u++` and builds its `umk`, without sudo. Then it builds and tests with each compiler and ends with start : stop : duration per step, also kept in `Bootstrap-Results.txt` in the logs folder. Safe to run again. New requirements or families are a line in `recipes.conf`, not code. `./bootstrap.sh --check` only checks (a fraction of a second); the GUI's options page runs it every time it opens and shows the result under *This machine*. If something required is missing, the page opens a terminal (GNOME Terminal, Console, Ptyxis, Konsole, Xfce, MATE or xterm, whichever is there) in `v001` with `./bootstrap.sh` typed at the prompt but not run: press Enter to run it, then *Check again*. The GUI itself never installs anything.
-- **Contracts**: preconditions and assertions are written with C++26 contracts where the compiler supports them (`__cpp_contracts`). Otherwise they fall back to runtime assertion checks through a small macro wrapper, so the code does not need to change once compilers catch up.
+- **Contracts**: preconditions and assertions are written with C++26 contracts where the compiler supports them (`__cpp_contracts`). Otherwise they fall back to runtime assertion checks through a small macro wrapper, so the code does not need to change once compilers catch up. GCC 16 is the first with native contracts: `build.sh` then also links with `-fcontracts` (GCC keeps its violation handler in `libstdc++exp`), and TreeSync replaces that handler, so a failed check prints the same `TreeSync contract ... violated` line with every compiler. GCC 15 and Clang 22 use the fallback.
 
 ### Layout
 
@@ -71,7 +71,7 @@ Like jac313, TreeSync builds with one selected compiler at a time:
 ```bash
 cd v001
 ./build.sh --compiler clang            # clang 21+, bm/CLANG26.bm (default)
-./build.sh --compiler gcc              # gcc-toolset-15, bm/GCC15.bm
+./build.sh --compiler gcc              # gcc 15+ (RHEL: gcc-toolset-15), bm/GCC15.bm
 ./build.sh --compiler gcc --release
 ./build.sh --compiler gcc --test       # build and run the core tests
 ./build.sh --compiler clang --tsan     # run the tests under ThreadSanitizer (data races)
