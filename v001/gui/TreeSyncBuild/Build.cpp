@@ -61,9 +61,46 @@ struct BuildStep : Moveable<BuildStep> {
 	}
 };
 
+// Screen 1's options are a fixed-size page; on a small screen (or a big font scale) the page
+// scrolls instead of pushing the bottom buttons off the window.
+struct ScrollPane : ParentCtrl {
+	ParentCtrl body;
+	ScrollBar  sb, hsb;
+	int        need = 0;    // the page's natural height in pixels
+	int        needW = 0;   // and width (the options sit at fixed x positions)
+
+	ScrollPane() {
+		AddFrame(sb.Vert().AutoHide());
+		AddFrame(hsb.Horz().AutoHide());
+		Add(body);
+		sb.WhenScroll = hsb.WhenScroll = [this] { Place(); };
+	}
+	void Place() {
+		Size sz = GetSize();
+		body.SetRect(-hsb.Get(), -sb.Get(), max(sz.cx, needW), max(sz.cy, need));
+	}
+	void Layout() override {
+		Size sz = GetSize();
+		sb.SetPage(sz.cy);
+		sb.SetTotal(max(sz.cy, need));
+		sb.SetLine(Zy(24));
+		hsb.SetPage(sz.cx);
+		hsb.SetTotal(max(sz.cx, needW));
+		hsb.SetLine(Zx(24));
+		Place();
+	}
+	void MouseWheel(Point, int zdelta, dword keyflags) override {
+		if(keyflags & K_SHIFT)
+			hsb.Wheel(zdelta);
+		else
+			sb.Wheel(zdelta);
+	}
+};
+
 class BuildWindow : public TopWindow {
 	enum { POLL = 1 };   // the output timer
 	ParentCtrl s1, s2, s3;
+	ScrollPane s1p;      // Screen 1's options + command lines; the bottom buttons stay outside it
 
 	// Screen 1
 	LabelBox  compiler_box, build_box, display_box, machine_box, toolchain_box;
@@ -146,7 +183,17 @@ BuildWindow::BuildWindow()
 {
 	Title("TreeSyncBuild");
 	Sizeable().Zoomable();
-	SetRect(0, 0, Zx(1000), Zy(790));
+	Size want = Zsz(1000, 790);
+	Size minsz = Zsz(640, 400);
+	Rect wa = GetMouseWorkArea();   // the monitor it is started on (two-screen desks)
+	if(wa.Width() <= 0 || wa.Height() <= 0)
+		wa = GetPrimaryWorkArea();
+	if(wa.Width() > 0 && wa.Height() > 0) {   // fit the monitor; Screen 1 scrolls the rest
+		want = min(want, wa.GetSize() - Size(Zx(16), Zy(48)));   // leave room for the title bar
+		minsz = min(minsz, want);
+	}
+	SetRect(0, 0, want.cx, want.cy);
+	SetMinSize(minsz);
 	AddFrame(menu);
 	menu.Set([](Bar& bar) { bar.Sub("Help", [](Bar& bar) { HelpMenu(bar, "2-Build"); }); });
 	Add(s1.SizePos());
@@ -154,57 +201,60 @@ BuildWindow::BuildWindow()
 	Add(s3.SizePos());
 
 	// Screen 1: options
-	s1.Add(compiler_box.SetLabel("Compiler").HSizePosZ(8, 8).TopPosZ(8, 52));
+	s1p.body.Add(compiler_box.SetLabel("Compiler").HSizePosZ(8, 8).TopPosZ(8, 52));
 	compiler.Add("gcc", "gcc 15 (gcc-toolset-15)").Add("clang", "clang 21").Add("both", "both, one after the other");
-	s1.Add(compiler.HSizePosZ(20, 20).TopPosZ(28, 22));
+	s1p.body.Add(compiler.HSizePosZ(20, 20).TopPosZ(28, 22));
 
-	s1.Add(build_box.SetLabel("Build").HSizePosZ(8, 8).TopPosZ(66, 246));
-	s1.Add(type_label.SetText("Type:").LeftPosZ(20, 60).TopPosZ(86, 22));
+	s1p.body.Add(build_box.SetLabel("Build").HSizePosZ(8, 8).TopPosZ(66, 246));
+	s1p.body.Add(type_label.SetText("Type:").LeftPosZ(20, 60).TopPosZ(86, 22));
 	type.Add("debug", "Debug").Add("release", "Release (optimized)");
-	s1.Add(type.LeftPosZ(80, 400).TopPosZ(86, 22));
+	s1p.body.Add(type.LeftPosZ(80, 400).TopPosZ(86, 22));
 	// One switch for testing: unticked, Build only builds. The checked runs below it
 	// keep their ticks but run only with it (greyed out without it).
 	tests.SetLabel("Run the tests (treesync-test) after building");
-	s1.Add(tests.LeftPosZ(20, 600).TopPosZ(112, 22));
+	s1p.body.Add(tests.LeftPosZ(20, 600).TopPosZ(112, 22));
 	tsan.SetLabel("Also under ThreadSanitizer (clang; finds data races between threads)");
-	s1.Add(tsan.LeftPosZ(44, 700).TopPosZ(136, 22));
+	s1p.body.Add(tsan.LeftPosZ(44, 700).TopPosZ(136, 22));
 	asan.SetLabel("Also under AddressSanitizer + UBSan (each compiler; memory errors, leaks, "
 	              "undefined behaviour such as int overflow)");
-	s1.Add(asan.LeftPosZ(44, 836).TopPosZ(160, 22));
+	s1p.body.Add(asan.LeftPosZ(44, 836).TopPosZ(160, 22));
 	valgrind.SetLabel("Also under valgrind memcheck (each compiler; reads of uninitialised memory; slow)");
-	s1.Add(valgrind.LeftPosZ(44, 836).TopPosZ(184, 22));
+	s1p.body.Add(valgrind.LeftPosZ(44, 836).TopPosZ(184, 22));
 	helgrind.SetLabel("Also under valgrind helgrind (once, gcc when both; data races, lock order; very slow)");
-	s1.Add(helgrind.LeftPosZ(44, 836).TopPosZ(208, 22));
+	s1p.body.Add(helgrind.LeftPosZ(44, 836).TopPosZ(208, 22));
 	clean.SetLabel("Clean build: compile everything, not only what changed (fair build times)");
-	s1.Add(clean.LeftPosZ(20, 700).TopPosZ(232, 22));
+	s1p.body.Add(clean.LeftPosZ(20, 700).TopPosZ(232, 22));
 	compare.SetLabel("Compare the compilers: versions, C++26 features, import std, speed, size");
-	s1.Add(compare.LeftPosZ(20, 700).TopPosZ(256, 22));
+	s1p.body.Add(compare.LeftPosZ(20, 700).TopPosZ(256, 22));
 	install_after.SetLabel("Open TreeSyncInstall after a good release build (to install it for root)");
-	s1.Add(install_after.LeftPosZ(20, 860).TopPosZ(280, 22));
+	s1p.body.Add(install_after.LeftPosZ(20, 860).TopPosZ(280, 22));
 
-	s1.Add(display_box.SetLabel("Display").HSizePosZ(8, 8).TopPosZ(318, 52));
+	s1p.body.Add(display_box.SetLabel("Display").HSizePosZ(8, 8).TopPosZ(318, 52));
 	display.Add("wayland", "Wayland (recommended)").Add("x11", "X Windows / X11 (not recommended)");
-	s1.Add(display.LeftPosZ(20, 520).TopPosZ(338, 22));
-	s1.Add(display_now.HSizePosZ(560, 16).TopPosZ(338, 22));
+	s1p.body.Add(display.LeftPosZ(20, 520).TopPosZ(338, 22));
+	s1p.body.Add(display_now.HSizePosZ(560, 16).TopPosZ(338, 22));
 	display.Tip("X11 lets any program read the keyboard and the screen of the others, and is no "
 	            "longer developed. Use it only on a desktop without Wayland.");
-	s1.Add(machine_box.SetLabel("This machine").HSizePosZ(8, 8).TopPosZ(376, 52));
-	s1.Add(req_status.HSizePosZ(20, 360).TopPosZ(396, 22));
-	s1.Add(check_again.SetLabel("Check again").RightPosZ(196, 110).TopPosZ(394, 26));
-	s1.Add(fix.SetLabel("Open terminal to fix...").RightPosZ(20, 170).TopPosZ(394, 26));
+	s1p.body.Add(machine_box.SetLabel("This machine").HSizePosZ(8, 8).TopPosZ(376, 52));
+	s1p.body.Add(req_status.HSizePosZ(20, 360).TopPosZ(396, 22));
+	s1p.body.Add(check_again.SetLabel("Check again").RightPosZ(196, 110).TopPosZ(394, 26));
+	s1p.body.Add(fix.SetLabel("Open terminal to fix...").RightPosZ(20, 170).TopPosZ(394, 26));
 	check_again << [this] { CheckRequirements(); };
 	fix << [this] { OpenFixTerminal(); };
 	fix.Tip("Opens a terminal with ./bootstrap.sh typed at the prompt; press Enter to run it. "
 	        "It asks before it installs anything.");
-	s1.Add(toolchain_box.SetLabel("This program was built with").HSizePosZ(8, 8).VSizePosZ(434, 204));
+	s1p.body.Add(toolchain_box.SetLabel("This program was built with").HSizePosZ(8, 8).VSizePosZ(434, 162));
 	toolchain.SetReadOnly();
 	toolchain.SetFont(Monospace());
 	toolchain <<= ToolchainReport();
-	s1.Add(toolchain.HSizePosZ(16, 16).VSizePosZ(454, 212));
+	s1p.body.Add(toolchain.HSizePosZ(16, 16).VSizePosZ(454, 170));
 
 	command.SetFont(Monospace());
-	s1.Add(command.HSizePosZ(8, 8).BottomPosZ(42, 156));   // up to 10 steps, one line each
-	// Bottom row: Build, Install, Run TreeSyncHome (gcc, clang), Close.
+	s1p.body.Add(command.HSizePosZ(8, 8).BottomPosZ(0, 156));   // up to 10 steps, one line each
+	s1p.need = Zy(434 + 100 + 162);   // the options, a toolchain box of ~4 lines, the command lines
+	s1p.needW = Zx(900);              // the longest option labels end near x 880
+	s1.Add(s1p.HSizePos().VSizePosZ(0, 42));
+	// Bottom row (outside the scrolling page): Build, Install, Run TreeSyncHome (gcc, clang), Close.
 	s1.Add(start.SetLabel("Build").LeftPosZ(8, 110).BottomPosZ(8, 28));
 	s1.Add(install1.SetLabel("Install...").LeftPosZ(124, 150).BottomPosZ(8, 28));
 	s1.Add(close1.SetLabel("Close").RightPosZ(8, 90).BottomPosZ(8, 28));
