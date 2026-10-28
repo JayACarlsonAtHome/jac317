@@ -450,8 +450,10 @@ String Usage()
 	  << "  --SIDE-port=PORT       SSH port (default 22)\n"
 	  << "  --SIDE-key=FILE        SSH key file\n"
 	  << "  Keys only, no passwords: set up passwordless SSH first. Tried in order:\n"
-	  << "  --SIDE-key, ssh-agent, then ~/.ssh/id_ed25519, id_ecdsa, id_rsa.\n"
-	  << "  The host key must already be in known_hosts (connect once with ssh).\n\n"
+	  << "  --SIDE-key, ssh-agent, the IdentityFile keys of ~/.ssh/config, then ~/.ssh/id_ed25519,\n"
+	  << "  id_ecdsa, id_rsa. The host key must already be in known_hosts (connect once with ssh).\n"
+	  << "  As root through pkexec or sudo, the known_hosts and keys of the user who started it\n"
+	  << "  are used too.\n\n"
 	  << "Mode (default --mirror):\n";
 	for(const auto& m : MODES)
 		u << Format("  --%-21s%s", m.name, m.text)
@@ -475,7 +477,8 @@ String Usage()
 	  << "Run:\n"
 	  << "  --fresh                Start over instead of resuming an unfinished run\n"
 	  << "  --db=PATH              Database file (default " << DefaultDbPath() << ")\n"
-	  << "  --known-hosts=FILE     SSH known_hosts file (default ~/.ssh/known_hosts)\n"
+	  << "  --known-hosts=FILE     SSH known_hosts file (default ~/.ssh/known_hosts; as root\n"
+	  << "                         through pkexec or sudo, also the starting user's)\n"
 	  << "  --safe-delete-dir=PATH Where --safe-delete moves files on the target side\n"
 	  << "                         (default <target>.old, or <target>/.treesync-old when the\n"
 	  << "                         target is the top folder of a disk; must be on the same disk)\n"

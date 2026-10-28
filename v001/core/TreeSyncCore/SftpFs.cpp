@@ -313,7 +313,7 @@ SftpFs::SftpFs(const TreeEndpoint& e, const String& known_hosts, bool compress)
 	impl->e = e;
 	impl->e.user = Nvl(e.user, GetUserName());
 	impl->compress = compress;
-	impl->known_hosts = Nvl(known_hosts, AppendFileName(GetHomeDirectory(), ".ssh/known_hosts"));
+	impl->known_hosts = known_hosts;   // empty: ~/.ssh/known_hosts (KnownHostsFiles)
 }
 
 SftpFs::~SftpFs() {}
@@ -372,9 +372,34 @@ static int ConnectTcp(const String& host, int port, String& error)
 	return fd;
 }
 
+// The ssh command for this login, for the directions in the messages below.
+static String SshCommand(const TreeEndpoint& e, const String& user)
+{
+	return "ssh " + (e.port == 22 ? String() : Format("-p %d ", e.port)) + user + "@" + e.host;
+}
+
+// Whose ~/.ssh a login uses: our own, and when root through pkexec or sudo, also the
+// administrator's who started it (InvokingUser). Without that, TreeSyncRoot and the
+// installed treesync-cli found neither a known_hosts nor a key (root has none).
+struct SshHomes {
+	Vector<String> homes;   // ours first
+	String         invoker; // that administrator; empty when none
+
+	SshHomes() {
+		homes.Add(GetHomeDirectory());
+		String home;
+		if(InvokingUser(invoker, home) && home != homes[0])
+			homes.Add(home);
+	}
+	// Who should run the commands in the directions: the administrator (their files
+	// are used too), or whoever runs this.
+	String Who() const { return Nvl(invoker, GetUserName()); }
+};
+
 // Checks the server's host key against known_hosts, like ssh does: an unknown or
-// changed key refuses the connection.
-static bool CheckHostKey(LIBSSH2_SESSION *s, const String& host, int port, const String& file, String& error)
+// changed key refuses the connection. A mismatch in any of the files refuses it.
+static bool CheckHostKey(LIBSSH2_SESSION *s, const TreeEndpoint& e, const String& user,
+                         const Vector<String>& files, bool given, String& error)
 {
 	size_t len = 0;
 	int type = 0;
@@ -382,27 +407,75 @@ static bool CheckHostKey(LIBSSH2_SESSION *s, const String& host, int port, const
 	const char *sha = libssh2_hostkey_hash(s, LIBSSH2_HOSTKEY_HASH_SHA256);
 	String fp = "SHA256:" + Base64Encode(String(sha ? sha : "", sha ? 32 : 0));
 	fp.TrimEnd("=");
-	LIBSSH2_KNOWNHOSTS *kh = libssh2_knownhost_init(s);
-	if(!key || !kh || libssh2_knownhost_readfile(kh, file, LIBSSH2_KNOWNHOST_FILE_OPENSSH) < 0) {
-		if(kh)
-			libssh2_knownhost_free(kh);
-		error = "cannot read known_hosts file " + file;
+	if(!key) {
+		error = "the server " + e.host + " sent no host key";
 		return false;
 	}
-	libssh2_knownhost *found = nullptr;
-	int r = libssh2_knownhost_checkp(kh, host, port, key, len,
-	                                 LIBSSH2_KNOWNHOST_TYPE_PLAIN | LIBSSH2_KNOWNHOST_KEYENC_RAW, &found);
-	libssh2_knownhost_free(kh);
-	if(r == LIBSSH2_KNOWNHOST_CHECK_MATCH)
+	Vector<String> read;
+	bool match = false;
+	for(const String& file : files) {
+		LIBSSH2_KNOWNHOSTS *kh = libssh2_knownhost_init(s);
+		if(!kh || !FileExists(file) || libssh2_knownhost_readfile(kh, file, LIBSSH2_KNOWNHOST_FILE_OPENSSH) < 0) {
+			if(kh)
+				libssh2_knownhost_free(kh);
+			continue;
+		}
+		read.Add(file);
+		libssh2_knownhost *found = nullptr;
+		int r = libssh2_knownhost_checkp(kh, e.host, e.port, key, len,
+		                                 LIBSSH2_KNOWNHOST_TYPE_PLAIN | LIBSSH2_KNOWNHOST_KEYENC_RAW, &found);
+		libssh2_knownhost_free(kh);
+		if(r == LIBSSH2_KNOWNHOST_CHECK_MISMATCH) {
+			error = "HOST KEY MISMATCH for " + e.host + ": the server's key (" + fp + ") is not the one in " +
+			        file + ". Someone may be intercepting the connection, or the server was "
+			        "reinstalled. Not connecting.";
+			return false;
+		}
+		match = match || r == LIBSSH2_KNOWNHOST_CHECK_MATCH;
+	}
+	if(match)
 		return true;
-	if(r == LIBSSH2_KNOWNHOST_CHECK_MISMATCH)
-		error = "HOST KEY MISMATCH for " + host + ": the server's key (" + fp + ") is not the one in " +
-		        file + ". Someone may be intercepting the connection, or the server was "
-		        "reinstalled. Not connecting.";
-	else
-		error = "unknown host key for " + host + " (" + fp + "). Connect once with ssh to check "
-		        "and accept it, then try again.";
+	SshHomes h;
+	error = (read.IsEmpty() ? "cannot read a known_hosts file (looked for " + Join(files, ", ") + ")"
+	                        : "unknown host key for " + e.host + ", not in " + Join(read, ", ")) +
+	        ". The server's key is " + fp + ".\n"
+	        "To check and accept it, run once, as " + h.Who() + ":\n"
+	        "  " + SshCommand(e, user) + "\n"
+	        "and answer yes if the fingerprint it shows is " + fp + ".";
+	if(given)
+		error << "\nOr leave Known hosts (--known-hosts) empty to use ~/.ssh/known_hosts.";
+	else if(h.invoker.GetCount())
+		error << "\n(TreeSync runs as root; it also reads " + h.invoker + "'s ~/.ssh/known_hosts.)";
 	return false;
+}
+
+// The key files ssh would use: IdentityFile lines of ~/.ssh/config (in every Host
+// block: a key that does not fit is simply refused), then the usual names. Only files
+// that exist, each once.
+static Vector<String> KeyFiles(const SshHomes& h)
+{
+	Index<String> keys;
+	for(const String& home : h.homes) {
+		for(const String& line : Split(LoadFile(AppendFileName(home, ".ssh/config")), '\n')) {
+			String l = TrimBoth(line);
+			int sep = l.FindFirstOf(" \t=");
+			if(sep < 0 || ToLower(l.Left(sep)) != "identityfile")
+				continue;
+			String k = TrimBoth(l.Mid(sep + 1));
+			k.TrimStart("=");
+			k = TrimBoth(k);
+			if(k.StartsWith("\"") && k.EndsWith("\"") && k.GetCount() >= 2)
+				k = k.Mid(1, k.GetCount() - 2);
+			if(k.StartsWith("~/"))
+				k = AppendFileName(home, k.Mid(2));
+			if(k.StartsWith("/") && k.Find('%') < 0 && FileExists(k))
+				keys.FindAdd(k);
+		}
+		for(const char *k : { ".ssh/id_ed25519", ".ssh/id_ecdsa", ".ssh/id_rsa" })
+			if(String key = AppendFileName(home, k); FileExists(key))
+				keys.FindAdd(key);
+	}
+	return keys.PickKeys();
 }
 
 // Tries every key the ssh-agent holds.
@@ -447,11 +520,18 @@ bool SftpFs::Connect(String& error)
 		error = m.Err("SSH handshake with " + e.host + " failed");
 		return false;
 	}
-	if(!CheckHostKey(m.session, e.host, e.port, m.known_hosts, error))
+	SshHomes homes;
+	Vector<String> kh_files;
+	if(m.known_hosts.GetCount())
+		kh_files.Add(m.known_hosts);
+	else
+		for(const String& home : homes.homes)
+			kh_files.Add(AppendFileName(home, ".ssh/known_hosts"));
+	if(!CheckHostKey(m.session, e, user, kh_files, m.known_hosts.GetCount(), error))
 		return false;
 
 	// Login with keys only, in the order ssh uses: the given key, ssh-agent, then the
-	// usual key files. No passwords: passwordless SSH must be set up beforehand.
+	// key files (KeyFiles). No passwords: passwordless SSH must be set up beforehand.
 	Vector<String> tried;
 	bool ok = false;
 	auto key_login = [&](const String& key) {
@@ -467,21 +547,25 @@ bool SftpFs::Connect(String& error)
 		ok = AgentLogin(m.session, user);
 	}
 	if(!ok && e.key_file.IsEmpty())
-		for(const char *k : { ".ssh/id_ed25519", ".ssh/id_ecdsa", ".ssh/id_rsa" }) {
-			String key = AppendFileName(GetHomeDirectory(), k);
-			if(FileExists(key) && (ok = key_login(key)))
+		for(const String& key : KeyFiles(homes))
+			if((ok = key_login(key)))
 				break;
-		}
 	if(!ok) {
-		String who = user + "@" + e.host;
-		error = Format("cannot log in to %s:%d (tried: %s).\n"
-		               "TreeSync needs passwordless SSH. Set up a key first:\n"
-		               "  ssh-keygen -t ed25519    (if you have no key yet)\n"
-		               "  ssh-copy-id %s\n"
-		               "and check that \"ssh %s\" logs in without asking for a password.",
-		               who, e.port, tried.GetCount() ? Join(tried, ", ") : String("no key or ssh-agent found"),
-		               e.port == 22 ? who : Format("-p %d %s", e.port, who),
-		               e.port == 22 ? who : Format("-p %d %s", e.port, who));
+		String ssh = SshCommand(e, user);
+		String copy_id = "ssh-copy-id " + ssh.Mid(4);
+		error = Format("cannot log in to %s@%s:%d (tried: %s).\n"
+		               "TreeSync needs passwordless SSH. Set up a key first; run these as %s:\n"
+		               "  ssh-keygen -t ed25519    (if you have no key yet; leave the passphrase empty,\n"
+		               "                            or keep the key in ssh-agent)\n"
+		               "  %s\n"
+		               "  %s    (must log in without asking for a password)\n"
+		               "A key with another name: give it as Key (--source-key / --target-key=FILE),\n"
+		               "or name it with IdentityFile in ~/.ssh/config.",
+		               user, e.host, e.port, tried.GetCount() ? Join(tried, ", ") : String("no key or ssh-agent found"),
+		               homes.Who(), copy_id, ssh);
+		if(homes.invoker.GetCount())
+			error << "\n(TreeSync runs as root; it also uses " + homes.invoker + "'s keys, without "
+			         "ssh-agent, so a key with a passphrase does not work here.)";
 		return false;
 	}
 

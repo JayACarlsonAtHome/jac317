@@ -4,6 +4,7 @@
 #include "TreeSyncCore.h"
 
 #include <grp.h>
+#include <pwd.h>
 #include <unistd.h>
 
 namespace fs = std::filesystem;
@@ -11,6 +12,22 @@ namespace fs = std::filesystem;
 bool IsRoot()
 {
 	return geteuid() == 0;
+}
+
+bool InvokingUser(String& name, String& home)
+{
+	if(!IsRoot())
+		return false;
+	passwd *pw = nullptr;
+	if(String uid = GetEnv("PKEXEC_UID"); uid.GetCount())
+		pw = getpwuid((uid_t)atoi(uid));
+	else if(String user = GetEnv("SUDO_USER"); user.GetCount())
+		pw = getpwnam(user);
+	if(!pw || pw->pw_uid == 0 || !pw->pw_dir || !*pw->pw_dir)
+		return false;
+	name = pw->pw_name;
+	home = pw->pw_dir;
+	return true;
 }
 
 bool IsAdminGroup(const String& group)

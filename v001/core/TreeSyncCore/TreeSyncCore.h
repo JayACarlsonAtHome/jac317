@@ -292,6 +292,11 @@ Vector<String> RunLogs(const String& db_path, int64 run);   // in order
 // Root.cpp. The messages are plain text, one paragraph per line; the GUI shows
 // them in a dialog and also prints them to the terminal.
 bool   IsRoot();
+// Running as root through pkexec or sudo: the administrator who started it (their
+// name and home folder). False when not root, or root logged in directly. SFTP logins
+// as root also use that user's known_hosts and SSH keys: they could run anything as
+// root anyway, so this gives nothing away.
+bool   InvokingUser(String& name, String& home);
 // An administrator: root, or a member of the group that may use sudo and polkit's
 // admin authentication (wheel on RHEL and Fedora; sudo or admin on Debian, Ubuntu,
 // Mint). The installed TreeSync syncs as root only for them; anyone else runs it as
