@@ -5,7 +5,7 @@
 before `main`. gcc Debug, clang Debug and clang Release all work.
 **Status:** U++ bug, present in 18549, 18619 and U++ master on GitHub (checked
 2026-10-17; still in 18761). One-word fix, verified below. upp_basefix carries it as
-patch 0001, so TreeSync built from `~/upp_basefix` has it; `tools.sh` `upp_fix_heap`
+patch 0001, so TreeSync built from `upp_basefix_install` has it; `tools.sh` `upp_fix_heap`
 still applies it to any other U++.
 
 ## Where

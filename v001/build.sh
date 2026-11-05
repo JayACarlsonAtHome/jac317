@@ -17,7 +17,7 @@
 # Packages: core/TreeSyncCore (engine, no GUI), core/TreeSyncCli (the engine in a
 # terminal), gui/TreeSync (the sync window), shown by gui/TreeSyncRoot (syncs as root)
 # and gui/TreeSyncHome (as you, inside your home), gui/TreeSyncBuild (builds and tests,
-# with bootstrap's checks), gui/TreeSyncInstall (installs for root), gui/TreeSyncUi
+# with bsir's checks), gui/TreeSyncInstall (installs for root), gui/TreeSyncUi
 # (what the GUIs share), core/TreeSyncTest (tests of the core).
 # Output: v001/out/<compiler>/treesync-root, treesync-home, treesync-cli, treesync-build,
 # treesync-install, treesync-test (gitignored).
@@ -57,7 +57,7 @@ case "$COMPILER" in
   gcc)   CXX=$(find_gcc);   SRC_BM="$HERE/bm/GCC15.bm" ;;
   *) echo "--compiler must be gcc or clang" >&2; exit 2 ;;
 esac
-[ -n "$CXX" ] || { echo "no $COMPILER new enough (gcc 15+ / clang 21+); run ./bootstrap.sh" >&2; exit 1; }
+[ -n "$CXX" ] || { echo "no $COMPILER new enough (gcc 15+ / clang 21+); run ./bsir.sh" >&2; exit 1; }
 mkdir -p "$HERE/out/bm"
 # gcc 16+ has native contracts under -std=c++26 (Contracts.h then uses contract_assert),
 # but links the default violation handler (libstdc++exp) only with -fcontracts on the
@@ -89,7 +89,7 @@ same_type() {   # same_type OUT
 }
 
 read -r UMK UPPSRC <<< "$(find_upp)"
-[ -n "${UMK:-}" ] && [ -n "${UPPSRC:-}" ] || { echo "U++ (umk + uppsrc) not found; run ./bootstrap.sh" >&2; exit 1; }
+[ -n "${UMK:-}" ] && [ -n "${UPPSRC:-}" ] || { echo "U++ (umk + uppsrc) not found; run ./bsir.sh" >&2; exit 1; }
 
 # The checked test runs, each in out/<compiler>-<check>/. U++'s own allocator replaces
 # operator new, which the sanitizers also intercept and which hides heap errors from
@@ -135,7 +135,7 @@ if [ -n "$CHECK" ]; then
     # taken in different orders, for gcc builds too (ThreadSanitizer is clang only here).
     # 20-100 times slower, one thread at a time: TREESYNC_VALGRIND tells the tests to
     # skip their checks of races between threads.
-    command -v valgrind > /dev/null || { echo "valgrind not found; run ./bootstrap.sh" >&2; exit 1; }
+    command -v valgrind > /dev/null || { echo "valgrind not found; run ./bsir.sh" >&2; exit 1; }
     echo "Building TreeSyncTest with $CXX for valgrind $CHECK"
     "$UMK" "$ASSEMBLY" TreeSyncTest "$BM" $MODE +USEMALLOC "$OUT/treesync-test"
     if [ "$CHECK" = valgrind ]; then

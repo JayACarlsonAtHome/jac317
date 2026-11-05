@@ -84,7 +84,7 @@ void HelpMenu(Bar& bar, const String& f1_chapter)
 	   .Help("The whole manual as one PDF");
 	bar.Separator();
 	bar.Add("1. Bootstrap", [] { OpenManual("1-Bootstrap"); })
-	   .Help("From a fresh machine to a first build: requirements, U++, bootstrap.sh");
+	   .Help("From a fresh machine to a first build: requirements, U++, bsir.sh");
 	bar.Add("2. Build", [] { OpenManual("2-Build"); }).Key(f1_chapter == "2-Build" ? K_F1 : 0)
 	   .Help("build.sh, the Build page, debug and release, tests, verify.sh and the pre-push hook");
 	bar.Add("3. Run", [] { OpenManual("3-Run"); }).Key(f1_chapter == "3-Run" ? K_F1 : 0)

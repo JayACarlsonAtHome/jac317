@@ -1,13 +1,13 @@
 # 2. Build
 
 All building goes through `v001/build.sh`; TreeSyncBuild, `verify.sh` and
-`bootstrap.sh` all call it. Run everything from `jac317/v001`.
+`bsir.sh` all call it. Run everything from `jac317/v001`.
 
 TreeSync is four programs, all in the **TreeSyncApp** folder of your app list:
 
 | Program | Job | Lives in | Runs as |
 |---|---|---|---|
-| **TreeSyncBuild** | build and test, with bootstrap's requirements check (2.3) | the source tree | you |
+| **TreeSyncBuild** | build and test, with bsir's requirements check (2.3) | the source tree | you |
 | **TreeSyncInstall** | install the release build for root, or remove it (2.6) | the source tree | you (asks for the password to install) |
 | **TreeSyncRoot-GCC**, **TreeSyncRoot-Clang** | sync as root, any folder (3.9) | `/usr/local/bin` | you; each sync as root |
 | **TreeSyncHome-GCC**, **TreeSyncHome-Clang** | sync as you, inside your home (3.1) | `/usr/local/bin` | you |
@@ -73,11 +73,11 @@ test run has all of them (`passed: 355/355 checks`, 2026-10-19).
 
 Building and testing have a program of their own, separate from the ones that sync.
 Start it as yourself: **TreeSyncBuild** in the TreeSyncApp folder of your app list
-(`bootstrap.sh` puts it there), or `v001/out/gcc/treesync-build`. It lives in the
+(`bsir.sh` puts it there), or `v001/out/gcc/treesync-build`. It lives in the
 source tree and is never installed; as root it refuses to start (root runs TreeSync,
-it does not build it). It also does bootstrap's part on a machine that has been set
-up: **This machine** runs `bootstrap.sh --check`, and **Open terminal to fix...** opens
-`bootstrap.sh` in a terminal.
+it does not build it). It also does bsir's part on a machine that has been set
+up: **This machine** runs `bsir.sh --check`, and **Open terminal to fix...** opens
+`bsir.sh` in a terminal.
 
 - **Compiler**: gcc, clang, or both one after the other.
 - **Type**: Debug or Release.
@@ -154,7 +154,7 @@ verify: debug, then release; every test; compilers: gcc clang
 ```
 
 **The pre-push hook.** `v001/setup/hooks/pre-push` runs `verify.sh` before every
-`git push`; a failure stops the push. `bootstrap.sh` sets it up; by hand:
+`git push`; a failure stops the push. `bsir.sh` sets it up; by hand:
 
 ```bash
 git config core.hooksPath v001/setup/hooks
@@ -224,7 +224,7 @@ tree. TreeSyncRoot syncs as root, for administrators; TreeSyncHome syncs as you,
 anyone (see [3.9](3-Run.md)).
 
 **The TreeSyncApp folder.** Every entry carries the category `X-TreeSyncApp`.
-`setup/app-folder.sh` (run by bootstrap and TreeSyncInstall, as you) writes the
+`setup/app-folder.sh` (run by bsir.sh and TreeSyncInstall, as you) writes the
 TreeSyncBuild and TreeSyncInstall entries in `~/.local/share/applications` and makes
 the folder: on GNOME an app folder in the app grid (`gsettings
 org.gnome.desktop.app-folders`), on other desktops a menu folder

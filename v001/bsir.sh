@@ -1,37 +1,39 @@
 #!/usr/bin/env bash
 #
-# TreeSync bootstrap: from a fresh machine to a built and tested TreeSync.
+# TreeSync BSIR (Bootstrap, Setup, Install & Run): from a fresh machine to a built and tested TreeSync.
 # Shell, because nothing can be compiled before there is a compiler.
 #
-#   ./bootstrap.sh                  # check, install what is missing (asks first), build, test
-#   ./bootstrap.sh --dry-run        # only say what it would do
-#   ./bootstrap.sh --yes            # do not ask before installing
-#   ./bootstrap.sh --compiler gcc   # build with one compiler (default: both)
-#   ./bootstrap.sh --no-build       # stop after the checks and installs
-#   ./bootstrap.sh --upp-dir DIR    # where U++ goes if it has to be fetched (default ~/upp_basefix)
-#   ./bootstrap.sh --check          # only check, quietly, one "@req" line each (TreeSyncBuild's
+#   ./bsir.sh                  # check, install what is missing (asks first), build, test
+#   ./bsir.sh --dry-run        # only say what it would do
+#   ./bsir.sh --yes            # do not ask before installing
+#   ./bsir.sh --compiler gcc   # build with one compiler (default: both)
+#   ./bsir.sh --no-build       # stop after the checks and installs
+#   ./bsir.sh --upp-dir DIR    # where U++ goes if it has to be fetched (default upp_basefix_install beside this repository)
+#   ./bsir.sh --check          # only check, quietly, one "@req" line each (TreeSyncBuild's
 #                                   # "This machine" uses this); exit 1 if a required one is missing
 #
-#   1. Detects the Linux family (rhel, fedora, linuxmint).
+#   1. Detects the Linux family (rhel, fedora, linuxmint), then runs the system update (dnf
+#      upgrade / apt upgrade) on every run, without asking; --dry-run and --check do not.
 #   2. Checks each requirement in setup/recipes.conf; for the missing ones shows the
 #      install commands (most need sudo), asks, runs them and checks again.
 #   3. U++: uses the one already there (tools.sh find_upp); otherwise installs it through
 #      upp_basefix (github.com/JayACarlsonAtHome/upp_basefix: U++ pinned to a GitHub commit
-#      plus fixes) into ~/upp_basefix; its own bootstrap lists the system packages U++ needs.
+#      plus fixes) beside this repository: upp_basefix (the clone), upp_basefix_work (the
+#      download) and upp_basefix_install; its own bootstrap lists the system packages U++ needs.
 #   4. Builds and tests TreeSync with each compiler (build.sh --test), and puts
 #      TreeSyncBuild and TreeSyncInstall in the TreeSyncApp folder of your app list
 #      (setup/app-folder.sh).
 #   5. Ends with start : stop : duration per step (the j5c Results.txt layout), also
-#      appended to Bootstrap-Results.txt in TreeSync's logs folder.
+#      appended to Bsir-Results.txt in TreeSync's logs folder.
 #
-# Safe to run again: whatever is already there is left alone.
+# Safe to run again: apart from the system update, whatever is already there is left alone.
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 RECIPES="$HERE/setup/recipes.conf"
 . "$HERE/tools.sh"
 
-DRY=0; YES=0; BUILD=1; CHECK=0; COMPILERS="gcc clang"; UPP_TARGET="$HOME/upp_basefix"; UPP_BASEFIX_SRC="${UPP_BASEFIX_SRC:-$HOME/upp_basefix_src}"
+DRY=0; YES=0; BUILD=1; CHECK=0; COMPILERS="gcc clang"; UPP_TARGET="$UPP_BASE/upp_basefix_install"; UPP_BASEFIX_SRC="${UPP_BASEFIX_SRC:-$UPP_BASE/upp_basefix}"
 UPP_BASEFIX_REPO="${UPP_BASEFIX_REPO:-https://github.com/JayACarlsonAtHome/upp_basefix.git}"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -42,7 +44,7 @@ while [ $# -gt 0 ]; do
     --compiler) case "${2:-}" in gcc|clang) COMPILERS="$2" ;; both) COMPILERS="gcc clang" ;;
                   *) echo "--compiler must be gcc, clang or both" >&2; exit 2 ;; esac; shift 2 ;;
     --upp-dir)  UPP_TARGET="${2:-}"; shift 2 ;;
-    -h|--help)  sed -n '3,27p' "$0"; exit 0 ;;
+    -h|--help)  sed -n '3,29p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -84,12 +86,12 @@ summary() {
   local table
   table="$header"$'\n\n'" Start    : Stop     : Duration         : Command / Comments"$'\n'
   table="$table HH:MM:SS : HH:MM:SS : YYY:DDD:HH:MM:SS :"$'\n'" $(printf '=%.0s' $(seq 1 127))"$'\n'
-  table="$table$RESULTS $(clock "$STARTED") : $(clock "$end") : $(duration $(( end - STARTED ))) : End of bootstrap: $1"
+  table="$table$RESULTS $(clock "$STARTED") : $(clock "$end") : $(duration $(( end - STARTED ))) : End of bsir: $1"
   echo; echo "$table"
   [ "$DRY" = 1 ] && return
   local logs="${XDG_DATA_HOME:-$HOME/.local/share}/treesync/logs"
   mkdir -p "$logs"
-  local file="$logs/Bootstrap-Results.txt" fresh=0
+  local file="$logs/Bsir-Results.txt" fresh=0
   [ -f "$file" ] || fresh=1   # before >> creates it
   { [ $fresh = 1 ] && printf '\n%s\n' "$(echo "$table" | sed -n '1,5p')"
     echo "$table" | sed -n '6,$p'; } >> "$file"
@@ -109,6 +111,21 @@ if [ -r /etc/os-release ]; then
 fi
 echo "Linux family: $family (${PRETTY_NAME:-unknown})"
 [ "$(uname -s)" = Linux ] || { echo "TreeSync is Linux only for now." >&2; exit 1; }
+
+# The system update runs on every run, with nothing to answer. It never stops the run.
+if [ "$DRY" = 1 ]; then
+  echo "(dry run: the system update is skipped)"
+else
+  echo; echo "=== system update ==="
+  t0=$(date +%s)
+  case "$family" in
+    fedora|rhel) sudo dnf -y upgrade --refresh ;;
+    linuxmint)   sudo apt-get update && sudo apt-get -y upgrade ;;
+    *)           echo "  (no update command for '$family'; skipped)" ;;
+  esac
+  if [ $? = 0 ]; then record "$t0" "$(date +%s)" "System update" 0 "Good" "$family"
+  else echo "  [FAIL] system update (see above); going on"; record "$t0" "$(date +%s)" "System update" 1 "Failed" "going on"; fi
+fi
 
 # --- 2. requirements -------------------------------------------------------------------
 field() { sed -n "s/^$1\.$2 *= *//p" "$RECIPES" | head -1; }
@@ -197,7 +214,7 @@ else
   read -r UMK UPPSRC <<< "$(find_upp)"
   if [ $ok = 1 ] && [ -n "${UMK:-}" ]; then
     record "$t0" "$(date +%s)" "Install U++" 0 "Good" "$(head -1 "$UPP_TARGET/VERSION") -> $UPP_TARGET"
-    [ "$UPP_TARGET" = "$HOME/upp_basefix" ] || echo "Note: build.sh looks in ~/upp_basefix; for $UPP_TARGET use: export UPP_DIR=$UPP_TARGET"
+    [ "$UPP_TARGET" = "$UPP_BASE/upp_basefix_install" ] || echo "Note: build.sh looks in $UPP_BASE/upp_basefix_install; for $UPP_TARGET use: export UPP_DIR=$UPP_TARGET"
   else
     record "$t0" "$(date +%s)" "Install U++" 1 "Failed" "upp_basefix"
     summary "stopped: U++ was not installed"; exit 1
@@ -220,9 +237,9 @@ mkdir -p "$HERE/out"   # for each build's output (a fresh checkout has no out/ y
 for c in $COMPILERS; do
   echo; echo "== build and test with $c"
   t0=$(date +%s)
-  "$HERE/build.sh" --compiler "$c" --test 2>&1 | tee "$HERE/out/bootstrap-$c.txt" 2>/dev/null || true
+  "$HERE/build.sh" --compiler "$c" --test 2>&1 | tee "$HERE/out/bsir-$c.txt" 2>/dev/null || true
   rc=${PIPESTATUS[0]}
-  checks=$(grep -E '^(passed|FAILED): .*checks' "$HERE/out/bootstrap-$c.txt" 2>/dev/null | tail -1)
+  checks=$(grep -E '^(passed|FAILED): .*checks' "$HERE/out/bsir-$c.txt" 2>/dev/null | tail -1)
   [ "$rc" = 0 ] && st=Good || { st=Failed; all=FAILED; }
   record "$t0" "$(date +%s)" "Build and test with $c" "$rc" "$st" "$checks"
 done

@@ -1,6 +1,6 @@
 // TreeSyncBuild: compiles TreeSync with the chosen compilers and, when "Run the tests"
 // is ticked, runs the tests and the checked runs under it, like jac313's Jac313Runner;
-// checks the machine's requirements (bootstrap.sh --check) and opens bootstrap.sh in a
+// checks the machine's requirements (bsir.sh --check) and opens bsir.sh in a
 // terminal to fix them; opens TreeSyncInstall to install the release build for root;
 // starts the TreeSyncHome it built. A presenter: v001/build.sh does the work; this window
 // builds its command lines, runs them one after another as child processes,
@@ -241,7 +241,7 @@ BuildWindow::BuildWindow()
 	s1p.body.Add(fix.SetLabel("Open terminal to fix...").RightPosZ(20, 170).TopPosZ(394, 26));
 	check_again << [this] { CheckRequirements(); };
 	fix << [this] { OpenFixTerminal(); };
-	fix.Tip("Opens a terminal with ./bootstrap.sh typed at the prompt; press Enter to run it. "
+	fix.Tip("Opens a terminal with ./bsir.sh typed at the prompt; press Enter to run it. "
 	        "It asks before it installs anything.");
 	s1p.body.Add(toolchain_box.SetLabel("This program was built with").HSizePosZ(8, 8).VSizePosZ(434, 162));
 	toolchain.SetReadOnly();
@@ -487,7 +487,7 @@ void BuildWindow::Save()
 	               "\ninstall_after=" + AsString((int)install_after) + "\ndisplay=" + AsString(~display) + "\n");
 }
 
-// What this machine has, from bootstrap.sh --check (a fraction of a second): each
+// What this machine has, from bsir.sh --check (a fraction of a second): each
 // requirement of setup/recipes.conf, and U++.
 void BuildWindow::CheckRequirements()
 {
@@ -505,7 +505,7 @@ void BuildWindow::CheckRequirements()
 	check_again.Disable();
 	Ctrl::ProcessEvents();
 	String out;
-	int code = Sys("bash " + ShellQuote(AppendFileName(GetFileFolder(script), "bootstrap.sh")) + " --check", out);
+	int code = Sys("bash " + ShellQuote(AppendFileName(GetFileFolder(script), "bsir.sh")) + " --check", out);
 	check_again.Enable();
 	Vector<String> missing, optional;
 	int count = 0;
@@ -519,7 +519,7 @@ void BuildWindow::CheckRequirements()
 	}
 	req_ok = code == 0 && count > 0;
 	if(count == 0)
-		req_status = "Could not check (bootstrap.sh --check gave nothing).";
+		req_status = "Could not check (bsir.sh --check gave nothing).";
 	else if(req_ok)
 		req_status = Format("All %d requirements present", count) +
 		             (optional.GetCount() ? " (optional, missing: " + Join(optional, "; ") + ")" : String());
@@ -531,14 +531,14 @@ void BuildWindow::CheckRequirements()
 	fix.Enable(!req_ok || optional.GetCount());
 }
 
-// A terminal with ./bootstrap.sh typed at the prompt, waiting for Enter.
+// A terminal with ./bsir.sh typed at the prompt, waiting for Enter.
 void BuildWindow::OpenFixTerminal()
 {
 	String opener = AppendFileName(GetFileFolder(BuildScript()), "setup/fix-in-terminal.sh");
 	String out;
 	if(Sys("bash " + ShellQuote(opener), out) != 0)
 		Exclamation("Could not open a terminal: " + DeQtf(TrimBoth(out)) + "&&Run this in one yourself:&[C " +
-		            DeQtf("cd " + GetFileFolder(BuildScript()) + " && ./bootstrap.sh") + "]");
+		            DeQtf("cd " + GetFileFolder(BuildScript()) + " && ./bsir.sh") + "]");
 }
 
 void BuildWindow::Start()

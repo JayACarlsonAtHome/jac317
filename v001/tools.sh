@@ -1,4 +1,4 @@
-# Finds the tools TreeSync builds with; sourced by build.sh, compare.sh and bootstrap.sh.
+# Finds the tools TreeSync builds with; sourced by build.sh, compare.sh and bsir.sh.
 # Each function prints what it found (or nothing) and never fails the caller.
 #
 #   find_gcc      a g++ that is gcc 15 or newer (gcc-toolset-15 on RHEL, g++-15, g++)
@@ -6,12 +6,13 @@
 #   find_upp      "UMK UPPSRC": umk and its uppsrc, as a pair from one U++ install
 #   find_std_cc   COMPILER: the std module source (bits/std.cc) of the libstdc++ it uses
 #
-# UPP_DIR (a U++ folder holding umk and uppsrc) is tried before the usual places, then
-# ~/upp_basefix (upp_basefix.sh install: U++ pinned to a GitHub commit plus fixes); with
-# UPP_ONLY=1 UPP_DIR is the only place (to test a fresh install next to an old one).
+# UPP_DIR (a U++ folder holding umk and uppsrc) is tried first, then upp_basefix_install
+# (upp_basefix.sh install: U++ pinned to a GitHub commit plus fixes) in UPP_BASE, the folder
+# this repository was cloned into.
 #
-#   owner_home           as root: the home of the user TreeSync belongs to
-#   give_back DIR        as root: DIR's files back to that user
+#   give_back DIR        as root: DIR's files back to the user TreeSync belongs to
+
+UPP_BASE="$(dirname "$(dirname "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)")")"
 
 major_of() {   # major version of a compiler, or 0
   "$1" -dumpversion 2>/dev/null | cut -d. -f1 | grep -E '^[0-9]+$' || echo 0
@@ -32,16 +33,12 @@ find_clang() {
 }
 
 # As root (sudo, pkexec or a root login) the user is the one this TreeSync folder belongs
-# to: their home holds the U++ they build with (root's does not), and what a root build
-# makes in out/ goes back to them, or their next build could not overwrite it.
+# to: what a root build makes in out/ goes back to them, or their next build could not
+# overwrite it.
 owner_uid() {
   [ "$(id -u)" = 0 ] || return 0
   local uid; uid=$(stat -c %u "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null)
   [ -n "$uid" ] && [ "$uid" != 0 ] && echo "$uid"
-}
-owner_home() {
-  local uid; uid=$(owner_uid)
-  [ -n "$uid" ] && getent passwd "$uid" | cut -d: -f6
 }
 give_back() {
   local uid; uid=$(owner_uid)
@@ -54,24 +51,9 @@ give_back() {
 runs_here() { "$1" > /dev/null 2>&1 < /dev/null; [ $? -ne 127 ]; }
 
 find_upp() {
-  local g u s home; home=$(owner_home)
-  if [ "${UPP_ONLY:-0}" = 1 ]; then
-    [ -x "${UPP_DIR:-}/umk" ] && [ -d "$UPP_DIR/uppsrc/Core" ] && echo "$UPP_DIR/umk $UPP_DIR/uppsrc"
-    return
-  fi
-  for g in /run/media/jay/GFS /media/jay/GFS /mnt/GFS; do
-    [ -d "$g/upp/uppsrc" ] && { GFS="$g"; break; }
-  done
-  # umk and uppsrc as a pair from one install (a umk with another install's uppsrc can
-  # build against the wrong library), in preference order
-  local pair
-  for pair in ${UPP_DIR:+"$UPP_DIR/umk:$UPP_DIR/uppsrc"} \
-              "$HOME/upp_basefix/umk:$HOME/upp_basefix/uppsrc" ${home:+"$home/upp_basefix/umk:$home/upp_basefix/uppsrc"} \
-              ${GFS:+"$GFS/upp-bin/rhel/umk:$GFS/upp/uppsrc"} \
-              "$HOME/u++/umk:$HOME/u++/uppsrc" ${home:+"$home/u++/umk:$home/u++/uppsrc"} \
-              ${GFS:+"$GFS/upp-bin/mint/umk:$GFS/upp/uppsrc"}; do
-    u=${pair%%:*}; s=${pair#*:}
-    [ -x "$u" ] && runs_here "$u" && [ -d "$s/Core" ] && { echo "$u $s"; return; }
+  local dir
+  for dir in ${UPP_DIR:+"$UPP_DIR"} "$UPP_BASE/upp_basefix_install"; do
+    [ -x "$dir/umk" ] && runs_here "$dir/umk" && [ -d "$dir/uppsrc/Core" ] && { echo "$dir/umk $dir/uppsrc"; return; }
   done
 }
 

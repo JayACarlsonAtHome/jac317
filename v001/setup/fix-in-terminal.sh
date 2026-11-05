@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Opens a terminal window in v001 with ./bootstrap.sh typed at the prompt, not run:
+# Opens a terminal window in v001 with ./bsir.sh typed at the prompt, not run:
 # the user reads it, may edit it, and presses Enter. Used by the GUI's options page
 # when requirements are missing (the GUI never installs anything itself).
 #
@@ -13,13 +13,13 @@ HERE="$(cd "$(dirname "$0")/.." && pwd)"
 if [ "${1:-}" = --prompt ]; then
   cd "$HERE" || exit 1
   echo "TreeSync: some requirements are missing (the options page lists them)."
-  echo "The bootstrap checks again, shows what it would install and asks before it"
-  echo "installs anything (most installs need your sudo password)."
+  echo "bsir.sh runs the system update, checks again, shows what it would install and"
+  echo "asks before it installs anything (these need your sudo password)."
   echo
   echo "Press Enter to run it, edit the command first, or Ctrl+C to leave it."
   echo
   # Typed but not run: readline puts it on the line, Enter runs it.
-  if read -e -i "./bootstrap.sh" -p "$(basename "$HERE")\$ " cmd; then
+  if read -e -i "./bsir.sh" -p "$(basename "$HERE")\$ " cmd; then
     [ -n "$cmd" ] && eval "$cmd"
     echo
     echo "Done. Back in TreeSync, press 'Check again' on the options page."
@@ -40,5 +40,5 @@ for t in ptyxis kgx gnome-terminal konsole xfce4-terminal mate-terminal x-termin
   setsid "${run[@]}" >/dev/null 2>&1 < /dev/null &
   exit 0
 done
-echo "no terminal program found; run this by hand: cd $HERE && ./bootstrap.sh" >&2
+echo "no terminal program found; run this by hand: cd $HERE && ./bsir.sh" >&2
 exit 1

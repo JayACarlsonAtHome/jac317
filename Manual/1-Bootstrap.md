@@ -1,15 +1,15 @@
 # 1. Bootstrap: from a fresh machine to a first build
 
-`v001/bootstrap.sh` takes a Linux machine from nothing to a built and tested
-TreeSync. It is safe to run again at any time: whatever is already there is left
-alone.
+`v001/bsir.sh` (Bootstrap, Setup, Install & Run) takes a Linux machine from nothing to a
+built and tested TreeSync. It is safe to run again at any time: it runs the system update
+every time, and otherwise leaves alone whatever is already there.
 
 ## 1.1 What you need
 
 - **Linux**: RHEL 9 and its rebuilds (Rocky, Alma), Fedora, or Linux Mint / Ubuntu /
   Debian. TreeSync is Linux only for now.
-- **A user that can use `sudo`**, for installing packages (bootstrap shows every
-  command and asks before it runs any).
+- **A user that can use `sudo`**, for the system update, which runs every time without
+  asking, and for installing packages (`bsir.sh` shows those commands and asks first).
 - **Network access**, to install packages and, if U++ is not on the machine yet, to
   download it.
 - About **2 GB of disk** for U++ and the build output.
@@ -27,28 +27,30 @@ works too.
 
 Everything below runs from `jac317/v001`.
 
-## 1.3 See what bootstrap would do (optional)
+## 1.3 See what bsir.sh would do (optional)
 
 ```bash
-./bootstrap.sh --dry-run
+./bsir.sh --dry-run
 ```
 
 This checks the machine and prints the plan: which requirements are present, the
 install command for each missing one, and whether U++ would be fetched. Nothing is
-installed or built.
+updated, installed or built.
 
-## 1.4 Run bootstrap
+## 1.4 Run bsir.sh
 
 ```bash
-./bootstrap.sh
+./bsir.sh
 ```
 
 It works in five steps.
 
-### Step 1: the Linux family
+### Step 1: the Linux family and the system update
 
 It reads `/etc/os-release` and picks the install recipes for `rhel`, `fedora` or
-`linuxmint` (Ubuntu and Debian count as `linuxmint`).
+`linuxmint` (Ubuntu and Debian count as `linuxmint`). It then runs the system update
+(`dnf upgrade` or `apt upgrade`) on every run, without asking. If the update fails, it
+says so and goes on.
 
 ### Step 2: the requirements
 
@@ -75,30 +77,30 @@ Run these now? [y/N]
 ```
 
 Answer `y` to run them (you will be asked for your `sudo` password), or `n` to stop
-and run them by hand. If a required one is still missing afterwards, bootstrap stops
+and run them by hand. If a required one is still missing afterwards, bsir.sh stops
 here.
 
 ### Step 3: U++
 
 TreeSync is built with [U++](https://www.ultimatepp.org/) (its build tool `umk` and
-its sources `uppsrc`). Bootstrap looks for one in this order:
+its sources `uppsrc`). `bsir.sh` looks for one in this order:
 
 1. `$UPP_DIR` (if you set it)
-2. `~/upp_basefix`: an install made by [upp_basefix](https://github.com/JayACarlsonAtHome/upp_basefix),
-   U++ pinned to a GitHub commit plus fixes (0 warnings with gcc and clang, sanitizer and
-   valgrind clean, the heap fix below included)
-3. The shared copy on the GFS disk: `/run/media/jay/GFS/upp` (or `/media/jay/GFS`,
-   `/mnt/GFS`) with `upp-bin/rhel/umk` or `upp-bin/mint/umk`
-4. `~/u++`
+2. `upp_basefix_install` beside this repository: an install made by
+   [upp_basefix](https://github.com/JayACarlsonAtHome/upp_basefix), U++ pinned to a GitHub
+   commit plus fixes (0 warnings with gcc and clang, sanitizer and valgrind clean, the heap
+   fix below included)
 
-Each is taken as a pair (its `umk` with its own `uppsrc`). If none is found it offers to
-install U++ through upp_basefix into `~/upp_basefix`: it clones upp_basefix, runs its
+Each is taken as a pair (its `umk` with its own `uppsrc`). If neither is found it offers to
+install U++ through upp_basefix. Everything goes in the folder this repository was cloned
+into, so a clone in `~/git` gets `~/git/upp_basefix` (the clone), `~/git/upp_basefix_work`
+(the download and the trees) and `~/git/upp_basefix_install`. It clones upp_basefix, runs its
 bootstrap (the pinned U++ from GitHub, `umk` built from it, the fixes; it lists the system
 packages U++ needs and installs them only when you say yes, with `sudo`), then
-`upp_basefix.sh install`. To put it somewhere else:
+`upp_basefix.sh install`. To put the install somewhere else:
 
 ```bash
-./bootstrap.sh --upp-dir /opt/upp_basefix
+./bsir.sh --upp-dir /opt/upp_basefix
 export UPP_DIR=/opt/upp_basefix   # then build.sh finds it too (put this in ~/.bashrc)
 ```
 
@@ -106,7 +108,7 @@ export UPP_DIR=/opt/upp_basefix   # then build.sh finds it too (put this in ~/.b
 
 For each compiler it runs `./build.sh --compiler <gcc|clang> --test`: a **debug**
 build of the three programs and the core tests. The output of each goes to
-`out/bootstrap-gcc.txt` and `out/bootstrap-clang.txt`.
+`out/bsir-gcc.txt` and `out/bsir-clang.txt`.
 
 It puts **TreeSyncBuild** and **TreeSyncInstall** in the **TreeSyncApp** folder of your
 app list (`setup/app-folder.sh`; see [2.6](2-Build.md)).
@@ -125,9 +127,9 @@ It ends with one line per step in the start : stop : duration layout:
  14:03:01 : 14:05:40 : 000:000:00:02:39 : Build and test with gcc... : Result = ....0 : Good : passed: 290/290 checks
 ```
 
-The same lines are added to `Bootstrap-Results.txt` in TreeSync's logs folder.
+The same lines are added to `Bsir-Results.txt` in TreeSync's logs folder.
 
-## 1.5 Bootstrap options
+## 1.5 `bsir.sh` options
 
 | Option | What it does |
 |---|---|
@@ -135,13 +137,13 @@ The same lines are added to `Bootstrap-Results.txt` in TreeSync's logs folder.
 | `--yes` | Do not ask before installing (for scripts) |
 | `--compiler gcc` / `clang` / `both` | Build with one compiler (default both) |
 | `--no-build` | Stop after the checks and installs |
-| `--upp-dir DIR` | Where U++ goes if it has to be fetched (default `~/upp_basefix`) |
+| `--upp-dir DIR` | Where U++ goes if it has to be fetched (default `upp_basefix_install` beside this repository) |
 | `--check` | Only check, one `@req` line per requirement (TreeSyncBuild uses this); exit 1 if a required one is missing |
 | `-h`, `--help` | Show the help |
 
-## 1.6 After bootstrap
+## 1.6 After bsir.sh
 
-Bootstrap leaves **debug** builds in `out/gcc/` and `out/clang/`. For everyday use
+`bsir.sh` leaves **debug** builds in `out/gcc/` and `out/clang/`. For everyday use
 build the faster **release** programs, and install them:
 
 1. **TreeSyncBuild** (TreeSyncApp folder): Type *Release*, **Build** (or

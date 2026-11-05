@@ -5,7 +5,7 @@ Found 2026-10-20 in a clean release build with gcc 15 (gcc-toolset-15). The file
 SQLite 3.51.2), which U++ 2026.1 bundles and compiles through `plugin/sqlite3/lib.c`.
 clang does not warn.
 
-**Gone since 2026-10-14:** U++ (build 18761 on, as in `~/upp_basefix`) no longer bundles
+**Gone since 2026-10-14:** U++ (build 18761 on, as in `upp_basefix_install`) no longer bundles
 SQLite: `plugin/sqlite3` links the system's (`sqlite-devel`), and TreeSync's `Db.cpp`
 includes `<sqlite3.h>`. `upp_quiet_sqlite3mc` finds no `lib.c` there and does nothing; it
 stays for older U++ trees.
@@ -23,7 +23,7 @@ stays for older U++ trees.
 
 ## What TreeSync does
 
-`tools.sh` `upp_quiet_sqlite3mc` (run by `bootstrap.sh`) puts
+`tools.sh` `upp_quiet_sqlite3mc` (run by `bsir.sh`) puts
 `#pragma GCC diagnostic ignored "-Wstringop-overread"` (gcc only) before the
 `#include` in `lib.c`, keeping the original as `lib.c.orig`. Only that file is affected;
 the amalgamation itself is not edited.

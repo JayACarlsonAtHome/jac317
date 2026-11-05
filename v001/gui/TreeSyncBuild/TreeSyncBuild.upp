@@ -1,4 +1,4 @@
-description "TreeSyncBuild: build and test TreeSync, with the bootstrap checks (not installed itself)\377";
+description "TreeSyncBuild: build and test TreeSync, with the bsir checks (not installed itself)\377";
 
 uses
 	TreeSyncUi;

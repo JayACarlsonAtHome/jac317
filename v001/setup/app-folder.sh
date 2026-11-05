@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # app-folder.sh: the TreeSyncApp folder in your app list, holding the programs:
 #
-#   TreeSyncBuild    build and test (with bootstrap's checks)   your entry, from this source tree
+#   TreeSyncBuild    build and test (with bsir's checks)   your entry, from this source tree
 #   TreeSyncInstall  install for root, or remove                your entry, from this source tree
 #   TreeSyncRoot-GCC, TreeSyncRoot-Clang   sync as root (administrators)   install.sh's entries,
 #   TreeSyncHome-GCC, TreeSyncHome-Clang   sync as you, inside your home   /usr/local (one or both)
@@ -11,7 +11,7 @@
 # folder (gsettings org.gnome.desktop.app-folders), on other desktops (Cinnamon, MATE,
 # Xfce, KDE) a menu folder (~/.config/menus/applications-merged). Every entry carries
 # the category X-TreeSyncApp, which is what both folders collect. Run as you, any time:
-# bootstrap.sh and TreeSyncInstall run it.
+# bsir.sh and TreeSyncInstall run it.
 #
 #   setup/app-folder.sh [--compiler gcc|clang]   whose build the entries start (default:
 #                                                gcc, else clang: the first one built)

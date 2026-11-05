@@ -3,7 +3,7 @@
 TreeSync syncs two directory trees and checks every copy by SHA-256. It is four
 programs, in the **TreeSyncApp** folder of your app list:
 
-- **TreeSyncBuild**: builds and tests it, with bootstrap's requirements check.
+- **TreeSyncBuild**: builds and tests it, with bsir's requirements check.
 - **TreeSyncInstall**: installs the GCC and / or Clang release build for root, or
   removes it.
 - **TreeSyncRoot-GCC**, **TreeSyncRoot-Clang**: sync as root, any folder (administrators).
@@ -44,7 +44,7 @@ git clone https://github.com/JayACarlsonAtHome/jac317.git
 cd jac317/v001
 
 # 2. Check the machine, install what is missing (it asks first), build and test
-./bootstrap.sh
+./bsir.sh
 
 # 3. Build the release programs (with all tests, both compilers)
 ./verify.sh

@@ -9,7 +9,7 @@
 | App entries, installed | `/usr/local/share/applications/treesync-root-gcc.desktop`, `treesync-home-gcc.desktop`, and the same with `-clang` |
 | polkit action | `/usr/share/polkit-1/actions/org.treesync.run-as-root.policy` |
 | Built programs | `v001/out/gcc/` and `v001/out/clang/`: `treesync-root`, `treesync-home`, `treesync-cli`, `treesync-build`, `treesync-install`, `treesync-test` |
-| Build and test output | `v001/out/` (`verify/` logs, `bootstrap-*.txt`); ignored by git |
+| Build and test output | `v001/out/` (`verify/` logs, `bsir-*.txt`); ignored by git |
 | GUI settings | `~/.config/treesync/settings` (TreeSyncRoot), `settings-home` (TreeSyncHome): one option per line, as on the command line |
 | TreeSyncBuild's choices (and the display) | `~/.config/treesync/build` |
 | TreeSyncBuild and TreeSyncInstall in your app list | `~/.local/share/applications/treesync-build.desktop`, `treesync-install.desktop` (by `setup/app-folder.sh`) |
@@ -40,7 +40,7 @@
 **TreeSyncRoot and TreeSyncHome are not in the app list, or not in the TreeSyncApp folder**
 : They are installed by TreeSyncInstall; until then only TreeSyncBuild and
   TreeSyncInstall are there. The folder is per user: run `v001/setup/app-folder.sh` as
-  yourself (TreeSyncInstall and bootstrap do). GNOME may need you to log out and in
+  yourself (TreeSyncInstall and bsir.sh do). GNOME may need you to log out and in
   once to show a new folder.
 
 **Root runs use an older TreeSync, or the log says the installed one "is not this build"**
@@ -64,13 +64,13 @@
 : Without root, a path that leaves your home (also through `..` or a symlink) is
   refused. Use root, or a path inside your home.
 
-**bootstrap stops: "Still missing: ..."**
+**bsir.sh stops: "Still missing: ..."**
 : A required package did not install. Run the install command it printed by hand and
   read its error (often a repository that is not enabled, for example CodeReady
-  Builder on RHEL for `gtk3-devel`), then run `./bootstrap.sh` again.
+  Builder on RHEL for `gtk3-devel`), then run `./bsir.sh` again.
 
 **build.sh: "U++ (umk + uppsrc) not found"**
-: Run `./bootstrap.sh`, or point to an existing U++ with `export UPP_DIR=/path/to/u++`.
+: Run `./bsir.sh`, or point to an existing U++ with `export UPP_DIR=/path/to/u++`.
 
 **gcc build fails to link: "undefined reference to `handle_contract_violation`"**
 : GCC 16 (Fedora 44) has native C++26 contracts and keeps their default violation
@@ -86,7 +86,7 @@
   `sudo chown -R $USER v001/out`.
 
 **A gcc release build crashes at start**
-: The U++ heap fix is missing (`uppfix`); `./bootstrap.sh` applies it.
+: The U++ heap fix is missing (`uppfix`); `./bsir.sh` applies it.
 
 **A test fails**
 : `./verify.sh` stops and prints the failing checks; the full output is in
