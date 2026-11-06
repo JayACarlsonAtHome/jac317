@@ -1031,7 +1031,15 @@ static void TestThreads(const String& root)
 		if(p.done >= p.size && ++finished >= 50)
 			stop = true;
 	});
-	EXPECT(r1.stopped && r1.done < r1.planned, Format("8 threads stopped part-way (%d of %d done)", r1.done, r1.planned));
+	// Count the files really copied, not done < planned: Mirror plans as its scan finds
+	// files, and when the scan is slow (valgrind runs one thread at a time) the copies
+	// catch up with it, so everything planned so far can be done at the stop.
+	int copied = 0;
+	for(int i = 0; i < 300; i++)
+		copied += FileExists(Format("%s/folder %d/sub %d/file %d.txt", dst, i % 7, i % 3, i));
+	EXPECT(r1.stopped && copied < 300,
+	       Format("8 threads stopped part-way (stopped %d, %d of 300 files copied, %d of %d planned done)",
+	              (int)r1.stopped, copied, r1.done, r1.planned));
 
 	// A different thread count (and bandwidth limit) still resumes the same run.
 	stop = false;
