@@ -524,6 +524,11 @@ struct Runner {
 			Lock l(mx);
 			Sql("INSERT OR REPLACE INTO chunks VALUES (?, ?, ?, ?, ?, ?)")
 				.Int(1, run).Int(2, cf.seq).Int(3, idx).Int(4, off).Int(5, len).Text(6, sent).Run();
+			// The record must last if the run is killed. Streaming keeps the hash caches'
+			// batch open on this same connection, so the record would wait for it: commit
+			// the batch now (one commit per chunk is cheap) and start the next.
+			if(db.InTransaction())
+				db.Exec("COMMIT; BEGIN");
 		}
 		return true;
 	}

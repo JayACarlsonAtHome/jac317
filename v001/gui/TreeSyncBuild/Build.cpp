@@ -52,6 +52,8 @@ struct BuildStep : Moveable<BuildStep> {
 	int64          started = 0, stopped = 0;
 	int            code = -1;     // exit code; -1 not run yet
 	String         checks;        // "passed: 214/214 checks" when the tests ran
+	String         output;        // everything it printed, while it runs ('' once it is done)
+	String         saved;         // where a failed step's output was kept; '' none
 
 	bool Checked() const {        // a test run under TSan, ASan, valgrind or helgrind, not a build
 		for(const char *a : { "--tsan", "--asan", "--valgrind", "--helgrind" })
@@ -644,16 +646,41 @@ void BuildWindow::Out(const String& text)
 		}
 		partial = partial.Mid(nl + 1);
 	}
+	// The window keeps only the last lines; the step keeps all of them, so a failure's
+	// output (the "FAIL " lines that name the check) can be saved in full (StepDone).
+	if(step >= 0 && step < steps.GetCount())
+		steps[step].output << text;
 	output.Insert(output.GetLength(), text.ToWString());
 	if(output.GetLineCount() > 6000)
 		output.Remove(0, output.GetPos(output.GetLineCount() - 4000));
 	output.SetCursor(output.GetLength());
 }
 
+// A failed step's whole output, kept in the logs folder: Build-Results.txt only has its
+// "FAILED: n/m checks" line, not the lines that say which check failed. The path, or ''
+// when it could not be written.
+static String SaveFailedOutput(const BuildStep& s)
+{
+	time_t t = (time_t)s.stopped;
+	struct tm tm;
+	localtime_r(&t, &tm);
+	String name;
+	for(int c : s.title)
+		name.Cat(IsAlNum(c) || c == ' ' || c == '+' || c == '.' || c == '_' ? c : '-');
+	String path = AppendFileName(AppendFileName(LogFolder(DefaultDbPath()), "Build-Failed"),
+	                             Format("%04d-%02d-%02d_%02d-%02d-%02d %s.log", tm.tm_year + 1900, tm.tm_mon + 1,
+	                                    tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec, name));
+	RealizePath(path);
+	return SaveFile(path, s.output) ? path : String();
+}
+
 void BuildWindow::StepDone()
 {
 	BuildStep& s = steps[step];
 	s.stopped = (int64)time(nullptr);
+	if(s.code != 0 && !stopping)
+		s.saved = SaveFailedOutput(s);
+	s.output.Clear();   // kept only while the step runs: a long run of steps does not pile up
 	String state = stopping ? "stopped" : s.code == 0 ? "good" : "FAILED";
 	steps_list.Set(step, 1, state);
 	steps_list.Set(step, 2, DurationClock(s.stopped - s.started).Mid(8));
@@ -682,7 +709,9 @@ void BuildWindow::Finish()
 		good = good && s.code == 0;
 		text << ResultsLine(s.started, s.stopped, s.title, s.code,
 		                    stopping && &s == &steps[min(step, steps.GetCount() - 1)] ? "Stopped"
-		                    : s.code == 0 ? "Good" : "Failed", s.checks) << "\n";
+		                    : s.code == 0 ? "Good" : "Failed",
+		                    s.saved.IsEmpty() ? s.checks
+		                    : s.checks.IsEmpty() ? s.saved : s.checks + "  output: " + s.saved) << "\n";
 	}
 	text << LogStamp(all_started, ended) << "End of build: " << (good ? "all good" : stopping ? "stopped" : "FAILED");
 	String here = GetFileName(GetExeFolder());   // gcc or clang: the build this program came from

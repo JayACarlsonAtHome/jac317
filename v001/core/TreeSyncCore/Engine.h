@@ -19,6 +19,7 @@ public:
 	bool    Open(const String& path, String& error);
 	void    Close();
 	bool    Exec(const char *sql);
+	bool    InTransaction() const;   // a BEGIN not committed yet
 	String  Error() const;
 	int64   LastId() const;
 	sqlite3 *Handle() const    { return db; }

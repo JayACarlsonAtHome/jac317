@@ -722,6 +722,17 @@ static void TestEngineResume(const String& root)
 	EXPECT(!r3.resumed && r3.run != r1.run, "--fresh starts a new run");
 }
 
+// Whether chunk idx of rel is recorded in the newest run of the database d. Read
+// through its own connection (the run's WAL writer never blocks it), so it sees only
+// committed records: what a killed run would leave.
+static bool ChunkRecorded(Db& d, const char *rel, int idx)
+{
+	Stmt q(d, "SELECT count(*) FROM chunks c JOIN actions a ON a.run = c.run AND a.seq = c.seq "
+	          "WHERE c.run = (SELECT max(id) FROM runs) AND a.rel = ? AND c.idx = ?");
+	q.Text(1, rel).Int(2, idx);
+	return q.Step() && q.Int(0) > 0;
+}
+
 // --split-files: threads with no file of their own copy chunks of a big file another
 // thread is copying. Both engines; a file with holes; a stop and resume part-way.
 static void TestSplit(const String& root)
@@ -778,30 +789,39 @@ static void TestSplit(const String& root)
 	}
 
 	// Stopped part-way while helpers work, then resumed: the chunks recorded in order are
-	// kept, the rest copied again.
-	{
-		String dst = root + "/sf-resume";
+	// kept, the rest copied again. Both engines.
+	for(int merge = 0; merge < 2; merge++) {
+		String dst = root + (merge ? "/sf-resume-merge" : "/sf-resume"), engine = merge ? "merge" : "mirror";
 		SyncSetup s = Setup(src, dst, db);
 		s.flags.threads = 4;
+		if(merge)
+			s.flags.mode = SyncMode::Merge;
 		std::atomic<bool> stop = false;
 		SyncResult r1;
-		// A shared file's bar moves at most every 0.25 s and after each chunk its owner
-		// copies, never at the end: on a fast run it can pass a later mark between two
-		// updates and finish unstopped. The owner's first chunk always shows.
+		Db d;
+		String derr;
+		EXPECT(d.Open(db, derr), "split: open the run's database: " + derr);
+		// A resume keeps only the chunks recorded in order from the first, and the bar
+		// counts the helpers' bytes too: it can pass any mark before chunk 0 is recorded
+		// (a slow owner thread). So the stop waits for that record, seen from a second
+		// connection: each chunk record is committed as it is made, so a killed run keeps
+		// it too. Each chunk is recorded before the progress call that follows it, so a
+		// later call sees it; the file has 41 chunks, so the stop still comes mid-file.
 		Sync(s, r1, nullptr, &stop, [&](const CopyProgress& p) {
-			if(p.name == "one big.bin" && p.done >= MIB)
+			if(p.name == "one big.bin" && !stop && ChunkRecorded(d, "one big.bin", 0))
 				stop = true;
 		});
-		EXPECT(r1.stopped && FileExists(dst + "/one big.bin.treesync-part"), "split: stopped mid-file");
+		EXPECT(r1.stopped && FileExists(dst + "/one big.bin.treesync-part"),
+		       Format("split, %s: stopped mid-file", engine));
 		stop = false;
 		SyncResult r2;
 		Vector<String> lines;
 		Sync(s, r2, &lines, &stop);
 		EXPECT(r2.resumed && r2.failed == 0 && TreeHash(src, check) == TreeHash(dst, check),
-		       Format("split: resumed, target equals source (%d failed)", r2.failed));
+		       Format("split, %s: resumed, target equals source (%d failed)", engine, r2.failed));
 		EXPECT(said(lines, "resuming one big.bin at chunk") && r2.bytes < size + 12 * MIB,
-		       Format("split: the resume kept recorded chunks (copied %s)", FormatBytes(r2.bytes)));
-		EXPECT(!FileExists(dst + "/one big.bin.treesync-part"), "split: no .treesync-part left");
+		       Format("split, %s: the resume kept recorded chunks (copied %s)", engine, FormatBytes(r2.bytes)));
+		EXPECT(!FileExists(dst + "/one big.bin.treesync-part"), Format("split, %s: no .treesync-part left", engine));
 	}
 }
 

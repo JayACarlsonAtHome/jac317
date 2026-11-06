@@ -144,6 +144,11 @@ bool Db::Exec(const char *sql)
 	return sqlite3_exec(db, sql, nullptr, nullptr, nullptr) == SQLITE_OK;
 }
 
+bool Db::InTransaction() const
+{
+	return db && !sqlite3_get_autocommit(db);
+}
+
 String Db::Error() const
 {
 	return db ? String(sqlite3_errmsg(db)) : String("no database");

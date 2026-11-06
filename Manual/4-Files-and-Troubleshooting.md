@@ -17,6 +17,7 @@
 | Database | `~/.local/share/treesync/treesync.db` (SQLite): runs, actions, hash cache, checks |
 | Run logs | `~/.local/share/treesync/logs/YYYY-MM-DD_HHMMSS.log` |
 | Results of every run | `~/.local/share/treesync/logs/Results.txt`, one line per run |
+| A failed TreeSyncBuild step's full output | `~/.local/share/treesync/logs/Build-Failed/YYYY-MM-DD_HH-MM-SS <step>.log`, named in `Build-Results.txt` |
 | AI exports | `~/.local/share/treesync/logs/ai/run-N-logs.AI.md`, `run-N-sql.AI.md` |
 | Root runs | the same under `/root/.local/share/treesync/` |
 | Safe-delete folder | `<target>.old` next to the target; `<target>/.treesync-old` inside it when the target is the top folder of a disk (or `--safe-delete-dir`) |
